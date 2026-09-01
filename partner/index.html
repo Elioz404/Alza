@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nordika — furniture supplier</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 13px/1.45 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #2f2a24;
+        background: #fbf9f5;
+      }
+      header {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 12px; border-bottom: 1px solid #e6dfd4; background: #fff;
+        position: sticky; top: 0; z-index: 2;
+      }
+      .logo { width: 18px; height: 18px; border-radius: 5px; background: linear-gradient(135deg, #3f7d6a, #7fb8a3); }
+      h1 { font-size: 13px; margin: 0; letter-spacing: -0.01em; }
+      .sub { font-size: 11px; color: #857b6d; margin-left: auto; }
+      .pill {
+        font-size: 10px; padding: 2px 7px; border-radius: 999px;
+        border: 1px solid #cfe3d9; background: #eef7f2; color: #2f6b56;
+      }
+      .pill.off { border-color: #e6dfd4; background: #f5f2ec; color: #8a8073; }
+      ul { list-style: none; margin: 0; padding: 8px; display: grid; gap: 6px; }
+      li { display: grid; grid-template-columns: 34px 1fr auto; gap: 9px; align-items: center;
+           padding: 7px 9px; border: 1px solid #e6dfd4; border-radius: 9px; background: #fff; }
+      .swatch { width: 34px; height: 34px; border-radius: 6px; border: 1px solid rgba(0,0,0,.09); }
+      .name { font-weight: 560; }
+      .dims { font-size: 11px; color: #857b6d; }
+      .price { font-variant-numeric: tabular-nums; font-weight: 600; }
+      .oos { color: #b4462f; font-size: 11px; }
+      footer { padding: 8px 12px; font-size: 11px; color: #857b6d; border-top: 1px solid #e6dfd4; }
+      code { background: #f1ede5; padding: 1px 4px; border-radius: 4px; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="logo"></span>
+      <h1>Nordika</h1>
+      <span class="sub"><span class="pill off" id="pill">tools off</span></span>
+    </header>
+    <ul id="list"></ul>
+    <footer>
+      Independent origin. Publishes <code>nordika_list_products</code> and
+      <code>nordika_get_product</code> as WebMCP tools, shared with the host page through
+      <code>exposedTo</code>.
+    </footer>
+    <script type="module" src="./supplier.js"></script>
+  </body>
+</html>

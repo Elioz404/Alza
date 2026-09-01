@@ -1,0 +1,33 @@
+{
+  "name": "alza",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Floor-plan studio for the WebMCP Challenge. Draw in 2D, walk it in 3D, and let an AI agent co-edit the same live page through WebMCP tools.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "partner": "vite --port 5200 --strictPort",
+    "deploy:studio": "wrangler pages deploy dist --project-name alza-dev --branch main",
+    "deploy:partner": "npx netlify deploy --prod --dir dist"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "three": "^0.178.0",
+    "zustand": "^5.0.6"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/three": "^0.178.0",
+    "@vitejs/plugin-react": "^4.6.0",
+    "playwright": "^1.62.1",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.0"
+  }
+}

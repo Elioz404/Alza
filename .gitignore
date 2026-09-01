@@ -1,0 +1,31 @@
+node_modules
+dist
+/tmp
+*.log
+.DS_Store
+tsconfig.tsbuildinfo
+PLAN.md
+
+# Local Netlify folder
+.netlify
+
+# ---- media -----------------------------------------------------------------
+# All media lives under shots/. Only the showcase is committed:
+#   shots/showcase/   README stills + preview loop   (tracked, ~8 MB)
+#   shots/devpost/    2700x1800 originals for the submission form  (generated)
+#   shots/video/      the rendered film              (181 MB)
+# Regenerate the gallery with `node shots.mjs`.
+shots/devpost/
+shots/full/
+shots/video/
+
+# Submission form drafts — not part of the repo
+DEVPOST.md
+DEVPOST-about.txt
+DEVPOST-testing.txt
+
+# ---- the film ----------------------------------------------------------------
+# The HyperFrames project — brief, storyboard, script, compositions, footage,
+# narration and renders. The finished film is published to YouTube and its stills
+# are in shots/showcase/, so none of the authoring tree is carried here.
+videos/
