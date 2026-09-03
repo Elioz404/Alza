@@ -1,12 +1,15 @@
 # Alza — Plans that rise to 3D
 
-A floor-plan studio built for the [WebMCP Challenge](https://webmcp.devpost.com/). You draw
-walls, rooms, doors, windows and furniture in a precise 2D editor, or load a photo of a plan
-and trace over it, and then raise the whole thing into a 3D model you can walk through.
+A floor plan is coordinates, not buttons — which is why an agent cannot use one by
+pretending to be a mouse. So Alza does not make it try. It hands over the model itself: the
+full metric geometry, published as typed tools through **WebMCP**, on the same live page a
+person is drawing on.
 
-The twist is that an AI agent can join the same live page through **WebMCP**. It reads the
-full metric model, edits the geometry with the same tools the human uses, checks its own
-work against a constraint engine, and drives the 3D camera to give tours.
+You draw walls, rooms, doors, windows and furniture in a precise 2D editor, or load a photo
+of a plan and trace over it. Your agent works that same model with the same tools — it
+checks its own work against a constraint engine, buys furniture from a second origin, and
+raises the result into a 3D model you can walk through. Built for the
+[WebMCP Challenge](https://webmcp.devpost.com/).
 
 Everything runs client side. No backend, no accounts, plans stay on your machine.
 
@@ -133,8 +136,9 @@ A few design notes:
   tools, so actions, validation and undo history are identical for both.
 - Every tool call, human or agent, is logged to an on-page activity feed with source
   badges. The spec asks that tools run visibly on the page; this is that.
-- `readOnlyHint` / `destructiveHint` / `untrustedContentHint` annotations help the agent
-  plan, and every tool carries a `title` next to its `name`.
+- `readOnlyHint` / `untrustedContentHint` annotations help the agent plan, and every tool
+  carries a `title` next to its `name`. MCP's `destructiveHint` rides along too — WebMCP
+  does not define it yet, so it is enforced page-side (see the spec notes below).
 - Tools are registered with `registerTool(descriptor, { signal, exposedTo })` and retired
   by **aborting that signal**, which is the spec's unregistration path and what makes the
   runtime emit `toolchange`.
@@ -222,6 +226,55 @@ serve-local.mjs  serves dist/ on two origins with the production headers, for lo
 
 Stack: Vite 7 · React 19 · TypeScript (strict) · zustand · Three.js (ACES tone mapping,
 PCF soft shadows) · SVG 2D · vitest · Playwright. Deploys as a fully static site.
+
+## What building this taught me about the spec
+
+Four of the explainer's [open questions](https://github.com/webmachinelearning/webmcp#open-questions)
+turned up as real problems while building. What I did about each, in case it is useful.
+
+**User prompting and elicitation ([#165](https://github.com/webmachinelearning/webmcp/issues/165), [#50](https://github.com/webmachinelearning/webmcp/issues/50)).** Needed on day one: a tool that clears
+someone's plan cannot just run because a model called it. The answer here lives entirely in the
+page — the approval gate above. It works, but every site has to build its own, and the
+confirmation UI is only as trustworthy as the page drawing it, which is the argument for the
+browser mediating it instead.
+
+Related, and worth flagging: `destructiveHint` is in
+[MCP's `ToolAnnotations`](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
+but not in [WebMCP's](https://webmachinelearning.github.io/webmcp/), which defines only
+`readOnlyHint` and `untrustedContentHint`. Alza keeps it in its own descriptors and enforces it
+page-side in `mcp/registry.ts`, so nothing depends on the browser propagating it. But if the
+browser is ever going to mediate confirmation, it needs some way to know which tools are
+destructive.
+
+**Multimodal input and output ([#41](https://github.com/webmachinelearning/webmcp/issues/41), [#86](https://github.com/webmachinelearning/webmcp/issues/86), [#81](https://github.com/webmachinelearning/webmcp/issues/81)).** The gap I felt hardest. Tracing
+needs the agent to *see* a drawing, and a tool result is text — so a page holding an image
+cannot hand it over. Worse, the page's copy is not the agent's copy: the uploader re-encodes to
+≤1600 px. So `get_underlay` returns no pixels at all. It tells the agent the image has to
+arrive through both channels — uploaded on the page so the app knows the scale, pasted into the
+conversation so the model can read it — and it returns a mapping that only works in fractions
+(`u = x_px / image_width`, then `world_x = rect.x + u * rect.w`). Fractions survive a resize;
+pixel coordinates do not.
+
+**Skills integration ([#161](https://github.com/webmachinelearning/webmcp/issues/161)).** I wrote one before I knew the issue existed. Tracing a plan is
+a procedure, not a tool call: establish scale, read the drawing, lay the walls, cut the openings,
+check the result, annotate whatever was ambiguous. It ships as `TRACING_PROTOCOL`, embedded in
+the tool descriptions because that is the only place a page can put it today. It spends
+description budget on every tool that references it, and there is no way to say "this is a
+procedure" rather than "this is a tool".
+
+**Testing.** `navigator.modelContextTesting` is the difference between guessing and knowing —
+the E2E battery drives real tool execution through it. It only exists in Chrome dev and canary
+builds, so 2 of the 56 checks skip on a stable build.
+
+**One thing that simply worked:** unregistering by aborting the registration signal.
+`extend_selected_wall` appears when a human selects a wall and disappears when they deselect it,
+and every runtime I tested tracked the change with no special handling on my side.
+
+**One runtime gap, not a spec gap:** cross-origin discovery. `exposedTo` plus
+`getTools({ fromOrigins })` is correct per the spec, but neither ChatGPT's in-app browser nor
+Codex resolves `fromOrigins` today — they register the page's own tools and stop there. The
+`postMessage` transport behind the same interface is why the Supplier panel still works in those
+clients; the activity feed says which transport actually ran.
 
 ## Develop
 

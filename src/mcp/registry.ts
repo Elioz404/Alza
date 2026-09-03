@@ -19,6 +19,13 @@ export interface ToolDef {
   inputSchema: Record<string, unknown>;
   annotations?: {
     readOnlyHint?: boolean;
+    /**
+     * MCP defines this hint; WebMCP's ToolAnnotations does not yet (it carries only
+     * readOnlyHint and untrustedContentHint). So it rides on our own descriptor and is
+     * enforced below in executeWrapped — the approval gate never depends on a browser
+     * propagating it. If browsers ever mediate confirmation themselves, they will need
+     * some equivalent signal for which tools are destructive.
+     */
     destructiveHint?: boolean;
     untrustedContentHint?: boolean;
   };
