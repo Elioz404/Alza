@@ -1,5 +1,5 @@
 /**
- * The 26 WebMCP tools (+ 1 dynamic, registered in bootstrap.ts).
+ * The 31 WebMCP tools (+ 1 dynamic, registered in bootstrap.ts).
  * Every tool calls THE SAME actions the UI buttons use — one store, human and agent co-edit.
  * Arguments accept human names ("bedroom", "sofa") as well as ids.
  */
