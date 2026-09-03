@@ -42,6 +42,7 @@ export const TOOLS: ToolDef[] = [
   // ------------------------------------------------------------------ reads
   {
     name: "get_model",
+    title: "Read the whole plan",
     description:
       "Read the full floor plan: walls (endpoints, thickness, height), openings (doors/windows with position along their wall), rooms (metric rects with labels), furniture, and plan name. All units are meters.",
     inputSchema: obj({}),
@@ -57,6 +58,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "get_issues",
+    title: "Check the plan for problems",
     description:
       "Run the constraint checker over the plan. Detects: too-short walls, loose ends, collinear overlaps, mid-span crossings, openings overflowing their wall or overlapping each other, walls ending inside an opening, floating/overlapping/doorless rooms, furniture crossing walls, blocking doors/windows, or colliding. Use it after editing to self-repair.",
     inputSchema: obj({}),
@@ -72,6 +74,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "get_item_catalog",
+    title: "Furniture catalogue",
     description: "List the furniture catalog: kind, label, footprint (width × depth in meters) and height.",
     inputSchema: obj({}),
     annotations: { readOnlyHint: true },
@@ -83,6 +86,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "get_editor_state",
+    title: "What the human is doing right now",
     description:
       "Read what the human is doing right now: 2D/3D view, camera mode, selected wall/item/room, current draw mode.",
     inputSchema: obj({}),
@@ -94,6 +98,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "measure",
+    title: "Measure a distance",
     description:
       "Measure a distance: between two points (x1,y1)-(x2,y2), or the length of a wall by id. Returns meters.",
     inputSchema: obj(
@@ -162,6 +167,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "calibrate_underlay",
+    title: "Set the drawing's true scale",
     description:
       "Scale the loaded blueprint image to real-world meters. Give two points on the image as fractions (u, v in 0..1; u = right, v = down) and the REAL distance between them in meters (e.g. a dimension printed on the plan). The underlay is resized preserving aspect, keeping the first point fixed. Call after the human uploads the plan, before tracing walls over it.",
     inputSchema: obj({ u1: num, v1: num, u2: num, v2: num, meters: num, opacity: num }, ["u1", "v1", "u2", "v2", "meters"]),
@@ -172,6 +178,7 @@ export const TOOLS: ToolDef[] = [
   // ------------------------------------------------------------------ walls
   {
     name: "add_wall",
+    title: "Add a wall",
     description:
       "Add a wall segment from (ax,ay) to (bx,by) in meters. Coordinates snap to a 5 cm grid. Default thickness 0.15 m (use 0.1 for interior), height 2.7 m.",
     inputSchema: obj(
@@ -183,6 +190,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "edit_wall",
+    title: "Edit a wall",
     description: "Move endpoints or change thickness/height of an existing wall (by id). Endpoints snap to 5 cm.",
     inputSchema: obj(
       { id: str, ax: num, ay: num, bx: num, by: num, thickness: num, height: num },
@@ -192,6 +200,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "remove_wall",
+    title: "Remove a wall",
     description: "Remove a wall by id. Its doors and windows are removed too.",
     inputSchema: obj({ id: str }, ["id"]),
     annotations: { destructiveHint: true },
@@ -202,6 +211,7 @@ export const TOOLS: ToolDef[] = [
   // ------------------------------------------------------------------ openings
   {
     name: "add_door",
+    title: "Add a door",
     description:
       "Add a door on a wall. t is the position of the door CENTER along the wall (0..1). Default width 0.9 m, height 2.1 m; a door wider than 1.2 m is built as a double door with two leaves. The vano is clamped so it always fits inside the wall; too-wide doors are rejected with the wall length. hinge picks the jamb the hinges sit on (\"a\" = the wall's A end, the default; \"b\" = the B end) and side picks which way the leaf swings, as seen walking the wall from A to B: \"right\" (default) or \"left\". Match these to the swing arc drawn on the plan.",
     inputSchema: obj(
@@ -223,6 +233,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "set_door_swing",
+    title: "Change how a door opens",
     description:
       "Change how an existing door opens: hinge (\"a\" | \"b\" — which jamb carries the hinges) and/or side (\"left\" | \"right\" — which way the leaf swings, walking the wall from its A endpoint to its B endpoint). Re-run build_3d to see it.",
     inputSchema: obj({ id: str, hinge: { type: "string", enum: ["a", "b"] }, side: { type: "string", enum: ["left", "right"] } }, ["id"]),
@@ -230,6 +241,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "add_window",
+    title: "Add a window",
     description:
       "Add a window on a wall. t is the position of the window CENTER along the wall (0..1). Default width 1.2 m, sill 0.9 m, height 1.2 m. The vano is clamped to fit.",
     inputSchema: obj({ wallId: str, t: num, width: num, sill: num, height: num }, ["wallId", "t"]),
@@ -238,12 +250,14 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "move_opening",
+    title: "Move a door or window",
     description: "Move a door or window along its wall to a new center position t (0..1). Clamped to fit.",
     inputSchema: obj({ id: str, t: num }, ["id", "t"]),
     execute: (i) => actions.moveOpening(i.id as string, i.t as number),
   },
   {
     name: "remove_opening",
+    title: "Remove a door or window",
     description: "Remove a door or window by id.",
     inputSchema: obj({ id: str }, ["id"]),
     annotations: { destructiveHint: true },
@@ -254,6 +268,7 @@ export const TOOLS: ToolDef[] = [
   // ------------------------------------------------------------------ rooms
   {
     name: "add_room",
+    title: "Add a room",
     description:
       "Add a room: a metric rectangle (x, y = top-left corner, w, h in meters) with a label and floor finish (oak | tile | carpet | concrete).",
     inputSchema: obj(
@@ -264,6 +279,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "update_room",
+    title: "Update a room",
     description: "Update a room by id or label (e.g. \"bedroom\"): move, resize, relabel, or change floor finish.",
     inputSchema: obj(
       { id: str, x: num, y: num, w: num, h: num, label: str, floor: str },
@@ -273,6 +289,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "remove_room",
+    title: "Remove a room",
     description: "Remove a room by id or label.",
     inputSchema: obj({ id: str }, ["id"]),
     annotations: { destructiveHint: true },
@@ -283,6 +300,7 @@ export const TOOLS: ToolDef[] = [
   // ------------------------------------------------------------------ furniture
   {
     name: "place_item",
+    title: "Place furniture",
     description:
       "Place furniture from the catalog at (x, y) = center in meters. rotation (degrees, counterclockwise) sets which way the piece FACES: 0 = faces +y (down/south on the plan), 90 = faces +x (right/east), 180 = faces -y (up/north), 270 = faces -x (left/west). The back of a sofa, bed headboard, wardrobe or counter is opposite the facing direction — so a sofa against the SOUTH wall needs rotation 180, and one against the WEST wall needs rotation 90. To sit a piece flush against a wall, offset its center by depth/2 from the wall FACE (centerline ± thickness/2), not from the centerline. Use get_item_catalog for footprints; get_issues reports crossings and blocked doors.",
     inputSchema: obj({ kind: str, x: num, y: num, rotation: num }, ["kind", "x", "y"]),
@@ -340,12 +358,14 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "move_item",
+    title: "Move or rotate furniture",
     description: "Move or rotate a furniture item by id or kind (e.g. \"sofa\"). Same rotation convention as place_item: 0 faces +y, 90 faces +x, 180 faces -y, 270 faces -x.",
     inputSchema: obj({ id: str, x: num, y: num, rotation: num }, ["id"]),
     execute: (i) => actions.moveItem(i.id as string, i.x as number | undefined, i.y as number | undefined, i.rotation as number | undefined),
   },
   {
     name: "remove_item",
+    title: "Remove furniture",
     description: "Remove a furniture item by id or kind.",
     inputSchema: obj({ id: str }, ["id"]),
     annotations: { destructiveHint: true },
@@ -356,12 +376,14 @@ export const TOOLS: ToolDef[] = [
   // ------------------------------------------------------------------ model / view
   {
     name: "set_plan_name",
+    title: "Rename the plan",
     description: "Rename the plan.",
     inputSchema: obj({ name: str }, ["name"]),
     execute: (i) => actions.setPlanName(i.name as string),
   },
   {
     name: "clear_model",
+    title: "Erase the whole plan",
     description: "Clear the whole plan (walls, openings, rooms, furniture, notes). Use when the user asks to start over.",
     inputSchema: obj({}),
     annotations: { destructiveHint: true },
@@ -370,6 +392,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "build_3d",
+    title: "Raise the plan into 3D",
     description:
       "Raise the plan into 3D: extrudes walls with real openings, resolves corner joints, builds furniture, and switches the human's view to the 3D scene. Call after drawing so the user sees the result.",
     inputSchema: obj({}),
@@ -377,6 +400,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "set_camera",
+    title: "Move the 3D camera",
     description:
       "Move the 3D camera: \"orbit\" (default 3/4 view), \"top\" (plan view from above), \"walk\" (first-person at 1.6 m — the user walks with WASD). Implies switching to 3D.",
     inputSchema: obj({ mode: { type: "string", enum: ["orbit", "top", "walk"] } }, ["mode"]),
@@ -385,6 +409,7 @@ export const TOOLS: ToolDef[] = [
 
   {
     name: "set_doors",
+    title: "Open or shut the doors in 3D",
     description:
       "Swing the door leaves in the 3D scene open or shut (build_3d must have run). state: \"open\", \"closed\" or \"toggle\". Pass an opening id to act on one door, or omit it to act on every door in the plan. The human can do the same by clicking a leaf in the 3D view.",
     inputSchema: obj({ state: { type: "string", enum: ["open", "closed", "toggle"] }, id: str }, ["state"]),
@@ -454,6 +479,7 @@ export const TOOLS: ToolDef[] = [
   // ------------------------------------------------------------------ collaboration
   {
     name: "leave_note",
+    title: "Leave a note on the plan",
     description:
       "Leave a note on the plan for the human (or read theirs): design rationale, questions, measurements to verify. Notes are visible in the Notes panel.",
     inputSchema: obj({ text: str }, ["text"]),
@@ -461,6 +487,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "get_notes",
+    title: "Read the notes on the plan",
     description: "Read all notes left on the plan by the human and by agents.",
     inputSchema: obj({}),
     annotations: { readOnlyHint: true },
@@ -474,6 +501,7 @@ export const TOOLS: ToolDef[] = [
 /** The dynamic tool — registered only while the human has a wall selected (see bootstrap.ts). */
 export const EXTEND_SELECTED_WALL: ToolDef = {
   name: "extend_selected_wall",
+  title: "Extend the wall the human selected",
   description:
     "DYNAMIC TOOL — available only while the human has a wall selected. Extends the wall the human is pointing at by `meters` (positive grows, negative shrinks) from its `end` (\"a\" = start, \"b\" = end).",
   inputSchema: obj({ meters: num, end: { type: "string", enum: ["a", "b"] } }, ["meters", "end"]),
