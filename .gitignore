@@ -14,7 +14,7 @@ PLAN.md
 #   shots/showcase/   README stills + preview loop   (tracked, ~8 MB)
 #   shots/devpost/    2700x1800 originals for the submission form  (generated)
 #   shots/video/      the rendered film              (181 MB)
-# Regenerate the gallery with `node shots.mjs`.
+# Regenerate the gallery with `npm run shots`.
 shots/devpost/
 shots/full/
 shots/video/

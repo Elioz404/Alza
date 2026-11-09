@@ -10,8 +10,8 @@
  * at 60 fps. The app is still driven by synthesised in-page events so there is no
  * CDP round-trip stalling the scene.
  *
- *   node record6.mjs            # all beats
- *   node record6.mjs hook rise  # just these
+ *   node scripts/record6.mjs            # all beats
+ *   node scripts/record6.mjs hook rise  # just these
  */
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
@@ -19,9 +19,10 @@ import { mkdirSync, existsSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WALLS, OPEN, ROOMS, FURN, DEFINE, DEFINED_ITEMS, NOTES } from "./trace.mjs";
+import { fromRoot } from "./paths.mjs";
 
 const BASE = process.env.BASE_URL ?? "https://alza-dev.pages.dev";
-const OUT = "videos/alza-webmcp/capture/footage6";
+const OUT = fromRoot("videos/alza-webmcp/capture/footage6");
 const FFMPEG = "C:/Users/elias/.local/bin/ffmpeg.exe";
 mkdirSync(OUT, { recursive: true });
 
@@ -66,7 +67,7 @@ function startCapture(name) {
 const stopCapture = (p) => new Promise((r) => {
   p.on("close", r);
   try { p.stdin.write(Buffer.from([113, 10])); } catch { p.kill(); }
-  setTimeout(() => { try { p.kill(); } catch {} }, 8000).unref();
+  setTimeout(() => { try { p.kill(); } catch { /* already exited after the graceful "q" */ } }, 8000).unref();
 });
 
 /** Pointer drag synthesised inside the page — one rAF loop, no CDP round-trips. */
@@ -279,7 +280,7 @@ await beat("brief", async (page) => {
   // Scene 2 — the one moment a human acts: the plan photo goes in
   await page.click(".sidebar-tabs button:has-text('Model')");
   await page.pause_(500);
-  await page.setInputFiles('input[type="file"]', 'plan-source.jpeg');
+  await page.setInputFiles('input[type="file"]', fromRoot("plan-source.jpeg"));
   await page.pause_(2400);
   // Scene 3 — the agent reads it back, then fixes the scale from one real dimension
   await page.run([["get_underlay", {}]]);

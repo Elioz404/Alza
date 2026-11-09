@@ -6,9 +6,10 @@
  */
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
+import { fromRoot } from "./paths.mjs";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:5199";
-const OUT = "shots/full";
+const OUT = fromRoot("shots/full");
 mkdirSync(OUT, { recursive: true });
 
 const results = [];
@@ -26,14 +27,6 @@ page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
 
 const S = async (name) => page.screenshot({ path: `${OUT}/${name}.png` });
-const alza = (fn, arg) =>
-  page.evaluate(
-    ([f, a]) => {
-      const { store, actions } = window.__alza;
-      return Function("store", "actions", "arg", `return (${f})(store, actions, arg)`)(store, actions, a);
-    },
-    [fn.toString(), arg],
-  );
 const state = (expr) =>
   page.evaluate((e) => {
     const { store } = window.__alza;

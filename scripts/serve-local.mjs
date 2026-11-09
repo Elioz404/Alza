@@ -4,16 +4,21 @@
  * feature when the headers say so — Netlify/Cloudflare read those from dist/_headers,
  * which a plain static server ignores. So this sets them itself.
  *
- *   node serve-local.mjs        # studio :5173, partner :5200
+ *   npm run serve:local        # studio :5173, partner :5200   (or: node scripts/serve-local.mjs)
  */
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fromRoot } from "./paths.mjs";
 
-const ROOT = resolve(fileURLToPath(new URL("./dist/", import.meta.url)));
-const STUDIO = "http://localhost:5173";
-const PARTNER = "http://localhost:5200";
+const ROOT = fromRoot("dist");
+// Each origin's port is written once; the URLs the headers name and the ports the servers
+// bind are both derived from it, so the two cannot disagree.
+const STUDIO_PORT = 5173;
+const PARTNER_PORT = 5200;
+const localOrigin = (port) => `http://localhost:${port}`;
+const STUDIO = localOrigin(STUDIO_PORT);
+const PARTNER = localOrigin(PARTNER_PORT);
 const TYPES = {
   ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
   ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png",
@@ -38,8 +43,8 @@ const serve = (port) =>
       res.statusCode = 404;
       res.end("not found");
     }
-  }).listen(port, () => console.log(`  http://localhost:${port}`));
+  }).listen(port, () => console.log(`  ${localOrigin(port)}`));
 
-serve(5173);
-serve(5200);
+serve(STUDIO_PORT);
+serve(PARTNER_PORT);
 console.log("sirviendo dist/ en dos origenes; Ctrl+C para parar");

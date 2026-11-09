@@ -1,9 +1,17 @@
-import { defineConfig, loadEnv, type Plugin } from "vite";
+import { loadEnv, type Plugin } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Pinned: the README, scripts/e2e-full.mjs's default BASE and the partner script all assume
+ * 5199 for the studio and 5200 for the shop. Without this Vite picks 5173 and the documented
+ * commands quietly fail to connect.
+ */
+const STUDIO_DEV_PORT = 5199;
 
 /**
  * Emit a `_headers` file (read identically by Cloudflare Pages and Netlify) so the two
@@ -35,29 +43,32 @@ function crossOriginHeaders(partnerOrigin: string, studioOrigin: string): Plugin
   };
 }
 
+// vitest's defineConfig types the `test` block, so the config is checked as a whole
+// (tsconfig.node.json) instead of being cast past the compiler.
 export default defineConfig(({ mode }) => {
   // loadEnv, not process.env: Vite injects .env into import.meta.env for the
   // bundle but leaves process.env alone, so the header plugin saw nothing.
   const env = loadEnv(mode, __dirname, "");
   return {
-  plugins: [react(), crossOriginHeaders(env.VITE_SUPPLIER_ORIGIN ?? "", env.VITE_STUDIO_ORIGIN ?? "")],
-  base: "./",
-  // Pinned: the README, e2e-full.mjs's default BASE and the partner script all assume
-  // 5199 for the studio and 5200 for the shop. Without this Vite picks 5173 and the
-  // documented commands quietly fail to connect.
-  server: { port: 5199, strictPort: true },
-  build: {
-    // two entry points: the studio, and the partner catalogue that ships as its own origin
-    rollupOptions: {
-      input: {
-        main: resolve(__dirname, "index.html"),
-        partner: resolve(__dirname, "partner/index.html"),
+    plugins: [react(), crossOriginHeaders(env.VITE_SUPPLIER_ORIGIN ?? "", env.VITE_STUDIO_ORIGIN ?? "")],
+    base: "./",
+    server: { port: STUDIO_DEV_PORT, strictPort: true },
+    build: {
+      // two entry points: the studio, and the partner catalogue that ships as its own origin
+      rollupOptions: {
+        input: {
+          main: resolve(__dirname, "index.html"),
+          partner: resolve(__dirname, "partner/index.html"),
+        },
       },
     },
-  },
-  test: {
-    environment: "node",
-    include: ["tests/**/*.test.ts"],
-  },
-  } as never;
+    test: {
+      // The store, registry and supplier read `window`, `document` and `location` as they
+      // load, so the suite runs in a DOM instead of stubbing those globals by hand. The DOM
+      // sits on the dev server's origin, so import-time reads see what `npm run dev` sees.
+      environment: "happy-dom",
+      environmentOptions: { happyDOM: { url: `http://localhost:${STUDIO_DEV_PORT}/` } },
+      include: ["tests/**/*.test.ts"],
+    },
+  };
 });

@@ -61,6 +61,11 @@ export interface AppState {
   catalogRev: number;
 }
 
+/** How many plan snapshots undo keeps; the oldest falls off beyond this. */
+export const UNDO_DEPTH = 50;
+/** How many entries the on-page activity feed keeps. */
+export const ACTIVITY_LIMIT = 200;
+
 let idCounter = 0;
 export const uid = (prefix: string): string =>
   `${prefix}_${Date.now().toString(36)}_${(idCounter++).toString(36)}`;
@@ -98,7 +103,7 @@ export const useAppStore = <T>(selector: (s: AppState) => T): T => useStore(stor
 
 export function logActivity(source: ActivityEntry["source"], tool: string, summary: string, ok = true) {
   const entry: ActivityEntry = { id: uid("act"), at: Date.now(), source, tool, summary, ok };
-  store.setState((s) => ({ activity: [...s.activity.slice(-199), entry] }));
+  store.setState((s) => ({ activity: [...s.activity.slice(-(ACTIVITY_LIMIT - 1)), entry] }));
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +111,7 @@ export function logActivity(source: ActivityEntry["source"], tool: string, summa
 // ---------------------------------------------------------------------------
 
 function pushUndo() {
-  store.setState((s) => ({ undoStack: [...s.undoStack.slice(-49), structuredClone(s.model)] }));
+  store.setState((s) => ({ undoStack: [...s.undoStack.slice(-(UNDO_DEPTH - 1)), structuredClone(s.model)] }));
 }
 
 function setModel(model: PlanModel) {

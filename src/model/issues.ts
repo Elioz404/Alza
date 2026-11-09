@@ -16,7 +16,6 @@ import {
   segLen,
   segPoint,
   segmentsCross,
-  wallAsRect,
   type ORect,
   type Pt,
 } from "./geometry";

@@ -131,7 +131,9 @@ async function viaPostMessage(tool: string, args: Record<string, unknown>): Prom
     target.postMessage({ __alzaSupplier: true, id, tool, args }, SUPPLIER_ORIGIN);
   } catch (err) {
     pending.delete(id);
-    throw new Error(`Could not reach ${SUPPLIER_ORIGIN}: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Could not reach ${SUPPLIER_ORIGIN}: ${err instanceof Error ? err.message : String(err)}`, {
+      cause: err,
+    });
   }
   const out = await reply;
   if (!out.ok) throw new Error(out.error ?? "Supplier call failed.");

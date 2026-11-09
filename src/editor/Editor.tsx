@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useAppStore, actions, logActivity } from "../model/store";
+import { store, useAppStore, actions, logActivity } from "../model/store";
 import type { Opening, Wall } from "../model/types";
 import { snap, segLen, segPoint } from "../model/geometry";
 import { openingSpan } from "../model/issues";
@@ -16,6 +16,9 @@ interface View {
   y: number;
   scale: number; // px per meter
 }
+
+/** Canvas size assumed until the SVG has been laid out and measured. */
+const UNMEASURED_CANVAS = { w: 1200, h: 800 } as const;
 
 const FLOOR_FILL: Record<string, string> = {
   oak: "#e8d5b5",
@@ -34,12 +37,24 @@ export function Editor() {
   const [roomStart, setRoomStart] = useState<{ x: number; y: number } | null>(null);
   const [panning, setPanning] = useState<{ px: number; py: number; vx: number; vy: number } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
-
-  // auto-fit the plan on first mount
+  // The viewBox and the grid need the canvas size in pixels. Reading it off the ref during
+  // render returned a stale (or, on first paint, missing) size and never re-rendered on
+  // resize; observing it keeps the size in state, where React can see it change.
+  const [canvas, setCanvas] = useState<{ w: number; h: number }>(UNMEASURED_CANVAS);
   useEffect(() => {
     const el = svgRef.current;
     if (!el) return;
-    const m = model;
+    const ro = new ResizeObserver(() => setCanvas({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Auto-fit the plan on first mount only — the model is read from the store rather than
+  // from the render, so later edits do not re-fit the view under the human's hands.
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const m = store.getState().model;
     const xs = m.walls.flatMap((w) => [w.ax, w.bx]);
     const ys = m.walls.flatMap((w) => [w.ay, w.by]);
     if (xs.length === 0) return;
@@ -61,7 +76,6 @@ export function Editor() {
       y: minY - (el.clientHeight / scale - planH) / 2,
       scale,
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toWorld = useCallback(
@@ -270,8 +284,8 @@ export function Editor() {
   const gridStep = view.scale > 120 ? 0.5 : 1;
   const gx0 = Math.floor(view.x / gridStep) * gridStep;
   const gy0 = Math.floor(view.y / gridStep) * gridStep;
-  const gx1 = view.x + (svgRef.current?.clientWidth ?? 1200) / view.scale;
-  const gy1 = view.y + (svgRef.current?.clientHeight ?? 800) / view.scale;
+  const gx1 = view.x + canvas.w / view.scale;
+  const gy1 = view.y + canvas.h / view.scale;
   const gridLines = [];
   for (let x = gx0; x <= gx1; x += gridStep) {
     gridLines.push(<line key={`gx${x.toFixed(2)}`} x1={x * S} y1={gy0 * S} x2={x * S} y2={gy1 * S} stroke={Math.abs(x % 1) < 0.01 ? "#e3ded4" : "#efece4"} strokeWidth={1} />);
@@ -284,7 +298,7 @@ export function Editor() {
     <svg
       ref={svgRef}
       className="editor-svg"
-      viewBox={`${view.x * S} ${view.y * S} ${(svgRef.current?.clientWidth ?? 1200)} ${(svgRef.current?.clientHeight ?? 800)}`}
+      viewBox={`${view.x * S} ${view.y * S} ${canvas.w} ${canvas.h}`}
       onWheel={onWheel}
       onPointerMove={onPointerMove}
       onPointerDown={onPointerDown}

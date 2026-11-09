@@ -5,16 +5,17 @@
  * The plan comes from trace.mjs, the same module the video records, so the gallery and the
  * film can never drift apart.
  *
- *   BASE_URL=http://localhost:5173 node shots.mjs
+ *   BASE_URL=http://localhost:5173 npm run shots     (or: node scripts/shots.mjs)
  */
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WALLS, OPEN, ROOMS, FURN, DEFINE, DEFINED_ITEMS, NOTES } from "./trace.mjs";
+import { fromRoot } from "./paths.mjs";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:5173";
-const OUT = "shots/devpost";   // 2700x1800 originals for the submission form
+const OUT = fromRoot("shots/devpost");   // 2700x1800 originals for the submission form
 mkdirSync(OUT, { recursive: true });
 
 const browser = await chromium.launch({ args: ["--enable-features=WebMCP", "--enable-unsafe-swiftshader"] });
@@ -51,7 +52,7 @@ console.log("capturing…");
 // plan-source.jpeg is 2048 px square, exterior box at px 333..1715 / 222..1764, so at a
 // 10.00 m exterior the whole image is 14.82 m wide.
 const SPAN = 10.0 / ((1715 - 333) / 2048);
-const dataUrl = `data:image/jpeg;base64,${readFileSync("plan-source.jpeg").toString("base64")}`;
+const dataUrl = `data:image/jpeg;base64,${readFileSync(fromRoot("plan-source.jpeg")).toString("base64")}`;
 await run([["build_3d", {}]]);
 await page.waitForTimeout(1100);
 await page.click("button:has-text('Back to 2D')");

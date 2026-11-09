@@ -25,7 +25,12 @@ export function Scene3D() {
   const camera = useAppStore((s) => s.editor.camera);
   const placingKind = useAppStore((s) => (s.editor.drawMode === "place" ? s.editor.placingKind : null));
   const cameraRef = useRef<string>(camera);
-  cameraRef.current = camera;
+  // Mirrored into a ref for the render loop, which outlives any single render. Written in an
+  // effect, not during render, and declared before the build effect so a rebuild in the same
+  // commit already sees the new mode.
+  useEffect(() => {
+    cameraRef.current = camera;
+  }, [camera]);
 
   // build / rebuild scene content when the model changes
   useEffect(() => {
@@ -418,7 +423,6 @@ export function Scene3D() {
         }
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model]);
 
   return (

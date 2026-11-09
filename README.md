@@ -32,7 +32,7 @@ storyboard, a script and HTML compositions. That authoring tree is not carried h
 finished film is on YouTube and its stills are in [`shots/showcase/`](shots/showcase/).
 
 What *is* here is the part you need to reproduce what the film shows:
-[`trace.mjs`](trace.mjs) holds the demo plan as data, and [`record6.mjs`](record6.mjs)
+[`scripts/trace.mjs`](scripts/trace.mjs) holds the demo plan as data, and [`scripts/record6.mjs`](scripts/record6.mjs)
 drives the real app through the eight beats while ffmpeg captures the screen at 60 fps.
 
 ## What it looks like
@@ -213,15 +213,18 @@ src/
             bootstrap.ts (runtime detection, dynamic tool lifecycle, toolchange)
   ui/       App · Sidebar (Model/Check/Catalog/Supplier/Notes/Tools) · ToolRunner
             ActivityFeed · ApprovalBar (human-in-the-loop gate) · SupplierPanel (cross-origin)
-tests/      geometry + issues suites (30 tests, incl. seed = 0 issues regression)
-e2e-full.mjs  Playwright: drives the real app in Chromium with --enable-features=WebMCP,
-            runs every tool, asserts zero console errors — 56 checks
-            (2 skip on Chrome builds without navigator.modelContextTesting)
-trace.mjs   the demo plan as data: walls, openings, rooms, furniture, and the kinds the
-            agent defines for itself. Shared by the video and the screenshot gallery.
-record6.mjs records the film's eight beats as real 60 fps screen capture (ffmpeg ddagrab)
-shots.mjs   rebuilds the screenshot gallery from trace.mjs
-serve-local.mjs  serves dist/ on two origins with the production headers, for local demos
+tests/      geometry, checker, store, approval gate and tool-surface suites
+            (incl. seed = 0 issues regression)
+scripts/
+  e2e-full.mjs  Playwright: drives the real app in Chromium with --enable-features=WebMCP,
+              runs every tool, asserts zero console errors — 56 checks
+              (2 skip on Chrome builds without navigator.modelContextTesting)
+  trace.mjs   the demo plan as data: walls, openings, rooms, furniture, and the kinds the
+              agent defines for itself. Shared by the video and the screenshot gallery.
+  record6.mjs records the film's eight beats as real 60 fps screen capture (ffmpeg ddagrab)
+  shots.mjs   rebuilds the screenshot gallery from trace.mjs
+  serve-local.mjs  serves dist/ on two origins with the production headers, for local demos
+  paths.mjs   resolves dist/, shots/ and plan-source.jpeg from the repo root, not the cwd
 ```
 
 Stack: Vite 7 · React 19 · TypeScript (strict) · zustand · Three.js (ACES tone mapping,
@@ -282,9 +285,13 @@ clients; the activity feed says which transport actually ran.
 npm install
 npm run dev        # the studio            → http://localhost:5199
 npm run partner    # the partner origin    → http://localhost:5200   (second terminal)
-npm test           # 30 unit tests
+npm run typecheck  # tsc -b over the app, the tests and vite.config.ts
+npm run lint       # ESLint (typescript-eslint + react-hooks)
+npm test           # unit tests (vitest, happy-dom)
 npm run build      # production build — two entry points: the studio and partner/
-node e2e-full.mjs  # 56-check Playwright battery (run both servers first)
+npm run e2e        # 56-check Playwright battery (run both servers first)
+npm run serve:local  # serve dist/ on two origins with the production headers
+npm run shots      # rebuild the screenshot gallery (against serve:local)
 ```
 
 The partner catalogue is a separate origin on purpose; that is the whole point of the
