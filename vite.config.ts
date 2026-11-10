@@ -1,4 +1,4 @@
-import { loadEnv, type Plugin } from "vite";
+import { loadEnv, type Plugin, type Rollup } from "vite";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { STUDIO_DEV_ORIGIN, STUDIO_DEV_PORT, resolveOrigins } from "./config/origins.js";
 import { HEADERS_FILE, headerRules, renderHeadersFile } from "./config/headers.js";
 import { TEST_HOOK_ENV, assertTestHookOrigins, readFlag } from "./config/flags.js";
-import { SITES, SITE_PAGES, outputDirFor } from "./config/sites.js";
+import { SITES, SITE_PAGES, outputDirFor, type Site } from "./config/sites.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -20,6 +20,27 @@ function filesUnder(dir: string): string[] {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => relative(dir, join(entry.parentPath, entry.name)).split(sep).join("/"));
+}
+
+/**
+ * Every output file a site's entry chunk can load: its static and dynamic imports, followed
+ * transitively, plus the CSS and assets Vite records against each of those chunks.
+ */
+function reachableFrom(bundle: Rollup.OutputBundle, site: Site): Set<string> {
+  const entry = Object.values(bundle).find((o) => o.type === "chunk" && o.isEntry && o.name === site);
+  const seen = new Set<string>();
+  const queue = entry ? [entry.fileName] : [];
+  while (queue.length > 0) {
+    const name = queue.pop()!;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const output = bundle[name];
+    if (output?.type !== "chunk") continue;
+    queue.push(...output.imports, ...output.dynamicImports);
+    for (const file of output.viteMetadata?.importedCss ?? []) seen.add(file);
+    for (const file of output.viteMetadata?.importedAssets ?? []) seen.add(file);
+  }
+  return seen;
 }
 
 /**
@@ -44,18 +65,27 @@ function perSiteOutput(origins: { studio: string; supplier: string }): Plugin {
     generateBundle: {
       order: "post",
       handler(_options, bundle) {
+        // Each site ships only what its own entry point can reach — static and dynamic imports,
+        // and the CSS and assets Vite attached to those chunks — so the partner host never
+        // carries the studio's bundle (or three.js) and vice versa.
+        const reachable = new Map<Site, Set<string>>(SITES.map((site) => [site, reachableFrom(bundle, site)]));
         const pages = new Map<string, string | Uint8Array>();
-        const shared = new Map<string, string | Uint8Array>();
-        const file = (name: string, source: string | Uint8Array) => {
+        const assets = new Map<string, string | Uint8Array>();
+        const publicFiles = new Map<string, string | Uint8Array>();
+        const guard = (name: string) => {
           if (name === HEADERS_FILE) this.error(`${name} is written by the build; remove it from the sources.`);
-          if (name.endsWith(".html")) pages.set(name, source);
-          else shared.set(name, source);
         };
         for (const [name, output] of Object.entries(bundle)) {
-          file(name, output.type === "chunk" ? output.code : output.source);
+          guard(name);
+          (name.endsWith(".html") ? pages : assets).set(name, output.type === "chunk" ? output.code : output.source);
           delete bundle[name];
         }
-        for (const name of filesUnder(publicDir)) file(name, readFileSync(join(publicDir, name)));
+        for (const name of filesUnder(publicDir)) {
+          guard(name);
+          publicFiles.set(name, readFileSync(join(publicDir, name)));
+        }
+        const orphans = [...assets.keys()].filter((name) => !SITES.some((site) => reachable.get(site)!.has(name)));
+        if (orphans.length > 0) this.error(`${orphans.join(", ")} are reachable from no site's entry point.`);
 
         const owned = new Set(SITES.map((site) => pageFile(SITE_PAGES[site])));
         const strays = [...pages.keys()].filter((name) => !owned.has(name));
@@ -67,7 +97,9 @@ function perSiteOutput(origins: { studio: string; supplier: string }): Plugin {
           const source = pages.get(page);
           if (source === undefined) this.error(`the build produced no ${page} for the ${site} site.`);
           emit(page, source);
-          for (const [name, data] of shared) emit(name, data);
+          const own = reachable.get(site)!;
+          for (const [name, data] of assets) if (own.has(name)) emit(name, data);
+          for (const [name, data] of publicFiles) emit(name, data);
           emit(HEADERS_FILE, renderHeadersFile(headerRules(origins, site)));
         }
       },
