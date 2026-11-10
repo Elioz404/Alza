@@ -20,8 +20,8 @@ import {
   type Pt,
 } from "./geometry";
 import { catalogByKind } from "./catalog";
+import { ROOM_SIZE, WALL_MIN_LENGTH } from "./limits";
 
-const MIN_WALL_LEN = 0.2; // 20 cm
 const ENDPOINT_SNAP = 0.08; // endpoints closer than this count as connected
 const DOOR_CLEAR = 0.1; // furniture must keep this margin in front of openings
 
@@ -57,11 +57,11 @@ export function checkModel(model: PlanModel): Issue[] {
   // ---- Walls ---------------------------------------------------------------
   for (const w of walls) {
     const len = segLen(w.ax, w.ay, w.bx, w.by);
-    if (len < MIN_WALL_LEN) {
+    if (len < WALL_MIN_LENGTH) {
       issues.push({
         severity: "error",
         code: "wall_too_short",
-        message: `Wall ${w.id} is only ${(len * 100).toFixed(0)} cm long (min ${MIN_WALL_LEN * 100} cm).`,
+        message: `Wall ${w.id} is only ${(len * 100).toFixed(0)} cm long (min ${(WALL_MIN_LENGTH * 100).toFixed(0)} cm).`,
         refs: [w.id],
       });
     }
@@ -188,11 +188,11 @@ export function checkModel(model: PlanModel): Issue[] {
 
   // ---- Rooms -----------------------------------------------------------------
   for (const r of rooms) {
-    if (r.w < 0.5 || r.h < 0.5) {
+    if (r.w < ROOM_SIZE.min || r.h < ROOM_SIZE.min) {
       issues.push({
         severity: "error",
         code: "room_too_small",
-        message: `Room "${r.label}" is smaller than 0.5 × 0.5 m.`,
+        message: `Room "${r.label}" is smaller than ${ROOM_SIZE.min} × ${ROOM_SIZE.min} m.`,
         refs: [r.id],
       });
     }

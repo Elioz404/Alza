@@ -5,7 +5,7 @@
  * The plan comes from trace.mjs, the same module the video records, so the gallery and the
  * film can never drift apart.
  *
- *   BASE_URL=http://localhost:5173 npm run shots     (or: node scripts/shots.mjs)
+ *   npm run shots     (or: node scripts/shots.mjs; BASE_URL=… to aim it elsewhere)
  */
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
@@ -13,8 +13,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WALLS, OPEN, ROOMS, FURN, DEFINE, DEFINED_ITEMS, NOTES } from "./trace.mjs";
 import { fromRoot } from "./paths.mjs";
+import { STUDIO_DEV_ORIGIN } from "../config/origins.js";
 
-const BASE = process.env.BASE_URL ?? "http://localhost:5173";
+const BASE = process.env.BASE_URL ?? STUDIO_DEV_ORIGIN;
 const OUT = fromRoot("shots/devpost");   // 2700x1800 originals for the submission form
 mkdirSync(OUT, { recursive: true });
 

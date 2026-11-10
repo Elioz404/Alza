@@ -285,6 +285,7 @@ clients; the activity feed says which transport actually ran.
 npm install
 npm run dev        # the studio            → http://localhost:5199
 npm run partner    # the partner origin    → http://localhost:5200   (second terminal)
+                   # both ports live in config/origins.js
 npm run typecheck  # tsc -b over the app, the tests and vite.config.ts
 npm run lint       # ESLint (typescript-eslint + react-hooks)
 npm test           # unit tests (vitest, happy-dom)
@@ -296,8 +297,16 @@ npm run shots      # rebuild the screenshot gallery (against serve:local)
 
 The partner catalogue is a separate origin on purpose; that is the whole point of the
 cross-origin tool exchange. A different port is a different origin, so `localhost:5200` is
-all you need locally. In production, deploy `dist/partner/` to its own host or subdomain
-and pass it with `?supplier=https://…`. Without it, everything else in the app still works.
+all you need locally. In production, deploy the same `dist/` to a second host and name both
+origins in `.env.production` (`VITE_STUDIO_ORIGIN`, `VITE_SUPPLIER_ORIGIN`): bare `https://`
+origins, no path. `npm run build` fails if either is missing or malformed, rather than
+shipping headers that name nobody. `?supplier=https://…` still overrides the partner for
+debugging. Without a reachable partner, everything else in the app still works.
+
+Every tool's arguments are a zod schema built from the ranges in `src/model/limits.ts`; the
+published `inputSchema` is derived from it, and each call is validated against it before
+the approval gate. Invalid input comes back as `ok: false` with the list of problems, and
+nothing changes.
 
 ## License
 

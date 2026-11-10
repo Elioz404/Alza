@@ -1,6 +1,6 @@
 /** Precision geometry helpers — snapping, segment math, oriented-rectangle SAT. */
 
-export const SNAP = 0.05; // 5 cm
+import { SNAP } from "./limits";
 
 export const snap = (v: number, step = SNAP): number => Math.round(v / step) * step;
 

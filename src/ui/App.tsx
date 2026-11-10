@@ -8,6 +8,7 @@ import { ActivityFeed } from "./ActivityFeed";
 import { ApprovalBar } from "./ApprovalBar";
 import { SupplierBridge } from "./SupplierBridge";
 import { bus, EVENTS } from "../three/exportBus";
+import { CAMERA_MODES } from "../model/limits";
 
 export function App() {
   const view = useAppStore((s) => s.editor.view);
@@ -48,7 +49,7 @@ export function App() {
             </>
           ) : (
             <>
-              {(["orbit", "top", "walk"] as const).map((m) => (
+              {CAMERA_MODES.map((m) => (
                 <button key={m} className={camera === m ? "active" : ""} onClick={() => actions.setCamera(m)}>
                   {m === "orbit" ? "Orbit" : m === "top" ? "Top" : "Walk"}
                 </button>

@@ -20,8 +20,55 @@ import type {
 import { emptyModel } from "./types";
 import { clampOpeningT, checkModel } from "./issues";
 import { segLen, snap } from "./geometry";
-import { catalogByKind, registerCatalogEntry, type CatalogEntry } from "./catalog";
-import { defineCustomKind, FURNITURE_BUILDERS, type PartSpec } from "../three/furniture";
+import { catalogByKind, customKindCount, isBuiltInKind, isSupplierKind, registerCatalogEntry, supplierKind } from "./catalog";
+import { defineCustomKind, FURNITURE_BUILDERS } from "../three/furniture";
+import { describeIssues, partList, type PartInput } from "./schemas";
+import {
+  CALIBRATION_METERS,
+  CAMERA_MODES,
+  COORD,
+  DEFAULT_FLOOR,
+  DEFAULT_ITEM_COLOR,
+  DOOR_DEFAULTS,
+  DOOR_SWING_DEFAULTS,
+  FLOOR_FINISHES,
+  FURNITURE_DIM,
+  HEX_COLOR,
+  HINGES,
+  IMAGE_FRACTION,
+  ITEM_CATEGORIES,
+  MAX_CUSTOM_KINDS,
+  MAX_NOTES,
+  MAX_PARTS,
+  MAX_PENDING_APPROVALS,
+  NOTE_AUTHORS,
+  OPACITY,
+  OPENING_HEIGHT,
+  OPENING_SILL,
+  OPENING_T,
+  OPENING_WIDTH,
+  ROOM_SIZE,
+  ROTATION,
+  SUPPLIER,
+  SWING_SIDES,
+  TEXT,
+  UNDERLAY,
+  UNDERLAY_PIXELS,
+  UNDERLAY_SIZE,
+  WALL_DEFAULTS,
+  WALL_HEIGHT,
+  WALL_MIN_LENGTH,
+  WALL_THICKNESS,
+  WINDOW_DEFAULTS,
+  firstError,
+  rangeError,
+  type CameraMode,
+  type Hinge,
+  type ItemCategory,
+  type NoteAuthor,
+  type Range,
+  type SwingSide,
+} from "./limits";
 
 export interface ActionResult {
   ok: boolean;
@@ -29,8 +76,11 @@ export interface ActionResult {
   [key: string]: unknown;
 }
 
-export type CameraMode = "orbit" | "top" | "walk";
+export type { CameraMode };
 export type ViewMode = "2d" | "3d";
+
+/** How a parked destructive call ended. "queue_full" means it was never parked at all. */
+export type ApprovalOutcome = "approved" | "rejected" | "queue_full";
 
 export interface EditorState {
   view: ViewMode;
@@ -126,7 +176,73 @@ const bumpCatalog = () => store.setState((s) => ({ catalogRev: s.catalogRev + 1 
 const ok = (summary: string, extra: Record<string, unknown> = {}): ActionResult => ({ ok: true, summary, ...extra });
 const fail = (summary: string, extra: Record<string, unknown> = {}): ActionResult => ({ ok: false, summary, ...extra });
 
-function findWall(idOrHint: string): Wall | undefined {
+// ---------------------------------------------------------------------------
+// Invariants. The tool schemas already refuse bad agent input, but the UI (and anything
+// else holding `actions`) calls these directly, so each action checks its own arguments
+// against limits.ts before it touches the model. A failure here never mutates anything.
+// ---------------------------------------------------------------------------
+
+/** A range to check, as [name, value, range]; an undefined value (an omitted option) is skipped. */
+type RangeCheck = [name: string, value: unknown, range: Range];
+
+const numbersError = (...checks: RangeCheck[]): string | null =>
+  firstError(...checks.filter(([, v]) => v !== undefined).map(([n, v, r]) => rangeError(n, v, r)));
+
+/** Text that must be a string of at most `max` characters (and not blank, unless allowed). */
+function textError(name: string, value: unknown, max: number, allowEmpty = false): string | null {
+  if (typeof value !== "string") return `${name} must be a string.`;
+  if (!allowEmpty && value.trim() === "") return `${name} must not be empty.`;
+  if (value.length > max) return `${name} is ${value.length} characters long (max ${max}).`;
+  return null;
+}
+
+const colorError = (name: string, value: unknown): string | null =>
+  typeof value === "string" && HEX_COLOR.test(value) ? null : `${name} must be a #rrggbb hex colour.`;
+
+/** True when `value` is one of `allowed`; narrows it to that union. */
+const isOneOf = <T extends string>(value: unknown, allowed: readonly T[]): value is T => allowed.includes(value as T);
+
+const notOneOf = (name: string, allowed: readonly string[]): string => `${name} must be one of ${allowed.join(" | ")}.`;
+
+/** A value that must be one of `allowed`. */
+const memberError = (name: string, value: unknown, allowed: readonly string[]): string | null =>
+  isOneOf(value, allowed) ? null : notOneOf(name, allowed);
+
+/** An optional value that, when given, must be one of `allowed`. */
+const oneOfError = (name: string, value: unknown, allowed: readonly string[]): string | null =>
+  value === undefined ? null : memberError(name, value, allowed);
+
+const isCategory = (c: unknown): c is ItemCategory => isOneOf(c, ITEM_CATEGORIES);
+
+/**
+ * Everything an underlay must satisfy to be held by the model. setUnderlay and
+ * calibrateUnderlay both judge their result with this, so calibration can never produce an
+ * underlay that setUnderlay (and so the opacity slider, which goes through it) would refuse.
+ */
+function underlayError(u: Underlay): string | null {
+  const { dataUrl } = u;
+  return firstError(
+    typeof dataUrl === "string" && dataUrl.startsWith("data:image/") ? null : "dataUrl must be a data:image/… URL.",
+    typeof dataUrl === "string" && dataUrl.length > UNDERLAY.maxDataUrlChars
+      ? `The underlay image is too large to keep (${dataUrl.length} characters, max ${UNDERLAY.maxDataUrlChars}).`
+      : null,
+    numbersError(
+      ["opacity", u.opacity, OPACITY],
+      ["x", u.x, COORD], ["y", u.y, COORD],
+      ["w", u.w, UNDERLAY_SIZE], ["h", u.h, UNDERLAY_SIZE],
+      ["pw", u.pw, UNDERLAY_PIXELS], ["ph", u.ph, UNDERLAY_PIXELS],
+    ),
+  );
+}
+
+/** Patchable fields, listed once: a patch is built from these keys and nothing else. */
+const WALL_PATCH_KEYS = ["ax", "ay", "bx", "by", "thickness", "height"] as const;
+const ROOM_PATCH_KEYS = ["x", "y", "w", "h", "label", "floor"] as const;
+export type WallPatch = Partial<Pick<Wall, (typeof WALL_PATCH_KEYS)[number]>>;
+export type RoomPatch = Partial<Pick<Room, (typeof ROOM_PATCH_KEYS)[number]>>;
+
+/** A wall by exact id, or else by a fragment of one. Every tool that addresses a wall resolves it here. */
+export function findWall(idOrHint: string): Wall | undefined {
   const { walls } = store.getState().model;
   return walls.find((w) => w.id === idOrHint) ?? walls.find((w) => w.id.includes(idOrHint));
 }
@@ -152,26 +268,51 @@ function findItem(idOrKind: string): Item | undefined {
 
 export const actions = {
   // ---- structure ----
-  addWall(ax: number, ay: number, bx: number, by: number, thickness = 0.15, height = 2.7): ActionResult {
+  addWall(
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+    thickness: number = WALL_DEFAULTS.thickness,
+    height: number = WALL_DEFAULTS.height,
+  ): ActionResult {
+    const bad = numbersError(
+      ["ax", ax, COORD], ["ay", ay, COORD], ["bx", bx, COORD], ["by", by, COORD],
+      ["thickness", thickness, WALL_THICKNESS], ["height", height, WALL_HEIGHT],
+    );
+    if (bad) return fail(bad);
     ax = snap(ax); ay = snap(ay); bx = snap(bx); by = snap(by);
     const len = segLen(ax, ay, bx, by);
-    if (len < 0.2) return fail(`Wall too short (${(len * 100).toFixed(0)} cm, min 20 cm).`);
+    if (len < WALL_MIN_LENGTH) {
+      return fail(`Wall too short (${(len * 100).toFixed(0)} cm, min ${(WALL_MIN_LENGTH * 100).toFixed(0)} cm).`);
+    }
     const wall: Wall = { id: uid("wall"), ax, ay, bx, by, thickness, height };
     pushUndo();
     setModel({ ...store.getState().model, walls: [...store.getState().model.walls, wall] });
     return ok(`Wall added (${len.toFixed(2)} m).`, { id: wall.id, length: len });
   },
 
-  editWall(id: string, patch: Partial<Pick<Wall, "ax" | "ay" | "bx" | "by" | "thickness" | "height">>): ActionResult {
+  editWall(id: string, patch: WallPatch): ActionResult {
+    const bad = firstError(
+      textError("id", id, TEXT.ref),
+      numbersError(
+        ["ax", patch.ax, COORD], ["ay", patch.ay, COORD], ["bx", patch.bx, COORD], ["by", patch.by, COORD],
+        ["thickness", patch.thickness, WALL_THICKNESS], ["height", patch.height, WALL_HEIGHT],
+      ),
+    );
+    if (bad) return fail(bad);
     const wall = findWall(id);
     if (!wall) return fail(`Wall "${id}" not found.`);
+    // Built key by key from the allowed list, so nothing else in `patch` (an id, say) can land.
     const next: Wall = { ...wall };
-    for (const k of ["ax", "ay", "bx", "by"] as const) {
-      if (patch[k] !== undefined) next[k] = snap(patch[k]!);
+    for (const k of WALL_PATCH_KEYS) {
+      const v = patch[k];
+      if (v === undefined) continue;
+      next[k] = k === "thickness" || k === "height" ? v : snap(v);
     }
-    if (patch.thickness !== undefined) next.thickness = patch.thickness;
-    if (patch.height !== undefined) next.height = patch.height;
-    if (segLen(next.ax, next.ay, next.bx, next.by) < 0.2) return fail("Edit rejected: wall would be shorter than 20 cm.");
+    if (segLen(next.ax, next.ay, next.bx, next.by) < WALL_MIN_LENGTH) {
+      return fail(`Edit rejected: wall would be shorter than ${(WALL_MIN_LENGTH * 100).toFixed(0)} cm.`);
+    }
     pushUndo();
     setModel({
       ...store.getState().model,
@@ -181,6 +322,8 @@ export const actions = {
   },
 
   removeWall(id: string): ActionResult {
+    const bad = textError("id", id, TEXT.ref);
+    if (bad) return fail(bad);
     const wall = findWall(id);
     if (!wall) return fail(`Wall "${id}" not found.`);
     pushUndo();
@@ -201,13 +344,22 @@ export const actions = {
     width?: number,
     sill?: number,
     height?: number,
-    swing?: { hinge?: "a" | "b"; side?: "left" | "right" },
+    swing?: { hinge?: Hinge; side?: SwingSide },
   ): ActionResult {
+    if (kind !== "door" && kind !== "window") return fail(`Unknown opening kind "${String(kind)}". Use door | window.`);
+    const defaults = kind === "door" ? DOOR_DEFAULTS : WINDOW_DEFAULTS;
+    const w = width ?? defaults.width;
+    const s = sill ?? defaults.sill;
+    const h = height ?? defaults.height;
+    const bad = firstError(
+      textError("wallId", wallId, TEXT.ref),
+      numbersError(["t", t, OPENING_T], ["width", w, OPENING_WIDTH], ["sill", s, OPENING_SILL], ["height", h, OPENING_HEIGHT]),
+      oneOfError("hinge", swing?.hinge, HINGES),
+      oneOfError("side", swing?.side, SWING_SIDES),
+    );
+    if (bad) return fail(bad);
     const wall = findWall(wallId);
     if (!wall) return fail(`Wall "${wallId}" not found.`);
-    const w = width ?? (kind === "door" ? 0.9 : 1.2);
-    const s = sill ?? (kind === "door" ? 0 : 0.9);
-    const h = height ?? (kind === "door" ? 2.1 : 1.2);
     const clamped = clampOpeningT(wall, w, t);
     if (clamped === null) {
       const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
@@ -216,8 +368,8 @@ export const actions = {
     if (s + h > wall.height) return fail(`${kind} (sill ${s} + height ${h}) exceeds wall height ${wall.height} m.`);
     const opening: Opening = { id: uid(kind), kind, wallId: wall.id, t: clamped, width: w, sill: s, height: h };
     if (kind === "door") {
-      opening.hinge = swing?.hinge ?? "a";
-      opening.side = swing?.side ?? "right";
+      opening.hinge = swing?.hinge ?? DOOR_SWING_DEFAULTS.hinge;
+      opening.side = swing?.side ?? DOOR_SWING_DEFAULTS.side;
     }
     pushUndo();
     setModel({ ...store.getState().model, openings: [...store.getState().model.openings, opening] });
@@ -229,12 +381,18 @@ export const actions = {
   },
 
   /** Flip which jamb a door hinges on and/or which way it swings. */
-  setDoorSwing(id: string, hinge?: "a" | "b", side?: "left" | "right"): ActionResult {
+  setDoorSwing(id: string, hinge?: Hinge, side?: SwingSide): ActionResult {
+    const bad = firstError(textError("id", id, TEXT.ref), oneOfError("hinge", hinge, HINGES), oneOfError("side", side, SWING_SIDES));
+    if (bad) return fail(bad);
     const { openings } = store.getState().model;
     const o = openings.find((x) => x.id === id) ?? openings.find((x) => x.id.includes(id));
     if (!o) return fail(`Opening "${id}" not found.`);
     if (o.kind !== "door") return fail(`${o.id} is a window — only doors swing.`);
-    const next = { ...o, hinge: hinge ?? o.hinge ?? "a", side: side ?? o.side ?? "right" };
+    const next = {
+      ...o,
+      hinge: hinge ?? o.hinge ?? DOOR_SWING_DEFAULTS.hinge,
+      side: side ?? o.side ?? DOOR_SWING_DEFAULTS.side,
+    };
     pushUndo();
     setModel({
       ...store.getState().model,
@@ -244,6 +402,8 @@ export const actions = {
   },
 
   moveOpening(id: string, t: number): ActionResult {
+    const bad = firstError(textError("id", id, TEXT.ref), numbersError(["t", t, OPENING_T]));
+    if (bad) return fail(bad);
     const { openings } = store.getState().model;
     const o = openings.find((x) => x.id === id) ?? openings.find((x) => x.id.includes(id));
     if (!o) return fail(`Opening "${id}" not found.`);
@@ -259,6 +419,8 @@ export const actions = {
   },
 
   removeOpening(id: string): ActionResult {
+    const bad = textError("id", id, TEXT.ref);
+    if (bad) return fail(bad);
     const { openings } = store.getState().model;
     const o = openings.find((x) => x.id === id) ?? openings.find((x) => x.id.includes(id));
     if (!o) return fail(`Opening "${id}" not found.`);
@@ -268,20 +430,39 @@ export const actions = {
   },
 
   // ---- rooms ----
-  addRoom(x: number, y: number, w: number, h: number, label: string, floor = "oak"): ActionResult {
+  addRoom(x: number, y: number, w: number, h: number, label: string, floor: string = DEFAULT_FLOOR): ActionResult {
+    // The size is judged as given, the same rule the add_room schema and updateRoom apply;
+    // snapping cannot then take it under the minimum (see ROOM_SIZE).
+    const bad = firstError(
+      numbersError(["x", x, COORD], ["y", y, COORD], ["w", w, ROOM_SIZE], ["h", h, ROOM_SIZE]),
+      textError("label", label, TEXT.label),
+    );
+    if (bad) return fail(bad);
+    if (!isOneOf(floor, FLOOR_FINISHES)) return fail(notOneOf("floor", FLOOR_FINISHES));
     x = snap(x); y = snap(y); w = snap(w); h = snap(h);
-    if (w < 0.5 || h < 0.5) return fail("Room must be at least 0.5 × 0.5 m.");
     const room: Room = { id: uid("room"), x, y, w, h, label, floor };
     pushUndo();
     setModel({ ...store.getState().model, rooms: [...store.getState().model.rooms, room] });
     return ok(`Room "${label}" added (${w.toFixed(2)} × ${h.toFixed(2)} m).`, { id: room.id });
   },
 
-  updateRoom(idOrLabel: string, patch: Partial<Pick<Room, "x" | "y" | "w" | "h" | "label" | "floor">>): ActionResult {
+  updateRoom(idOrLabel: string, patch: RoomPatch): ActionResult {
+    const bad = firstError(
+      textError("id", idOrLabel, TEXT.ref),
+      numbersError(["x", patch.x, COORD], ["y", patch.y, COORD], ["w", patch.w, ROOM_SIZE], ["h", patch.h, ROOM_SIZE]),
+      patch.label === undefined ? null : textError("label", patch.label, TEXT.label),
+      oneOfError("floor", patch.floor, FLOOR_FINISHES),
+    );
+    if (bad) return fail(bad);
     const room = findRoom(idOrLabel);
     if (!room) return fail(`Room "${idOrLabel}" not found.`);
-    const next: Room = { ...room, ...patch };
-    if (next.w < 0.5 || next.h < 0.5) return fail("Room must be at least 0.5 × 0.5 m.");
+    // Only the patchable fields are copied. Spreading the whole patch let the lookup key in
+    // it replace the room's real id: update_room { id: "bedroom" } renamed the id to "bedroom".
+    const next: Room = { ...room };
+    for (const k of ROOM_PATCH_KEYS) {
+      const v = patch[k];
+      if (v !== undefined) (next as Record<(typeof ROOM_PATCH_KEYS)[number], unknown>)[k] = v;
+    }
     pushUndo();
     setModel({
       ...store.getState().model,
@@ -291,6 +472,8 @@ export const actions = {
   },
 
   removeRoom(idOrLabel: string): ActionResult {
+    const bad = textError("id", idOrLabel, TEXT.ref);
+    if (bad) return fail(bad);
     const room = findRoom(idOrLabel);
     if (!room) return fail(`Room "${idOrLabel}" not found.`);
     pushUndo();
@@ -300,6 +483,11 @@ export const actions = {
 
   // ---- furniture ----
   placeItem(kind: string, x: number, y: number, rotation = 0): ActionResult {
+    const bad = firstError(
+      textError("kind", kind, TEXT.kind),
+      numbersError(["x", x, COORD], ["y", y, COORD], ["rotation", rotation, ROTATION]),
+    );
+    if (bad) return fail(bad);
     const cat = catalogByKind(kind);
     if (!cat) return fail(`Unknown furniture kind "${kind}". Use get_item_catalog.`);
     const item: Item = { id: uid("item"), kind: cat.kind, x: snap(x), y: snap(y), rotation };
@@ -309,6 +497,11 @@ export const actions = {
   },
 
   moveItem(idOrKind: string, x?: number, y?: number, rotation?: number): ActionResult {
+    const bad = firstError(
+      textError("id", idOrKind, TEXT.ref),
+      numbersError(["x", x, COORD], ["y", y, COORD], ["rotation", rotation, ROTATION]),
+    );
+    if (bad) return fail(bad);
     const item = findItem(idOrKind);
     if (!item) return fail(`Item "${idOrKind}" not found.`);
     const next: Item = {
@@ -326,6 +519,8 @@ export const actions = {
   },
 
   removeItem(idOrKind: string): ActionResult {
+    const bad = textError("id", idOrKind, TEXT.ref);
+    if (bad) return fail(bad);
     const item = findItem(idOrKind);
     if (!item) return fail(`Item "${idOrKind}" not found.`);
     pushUndo();
@@ -335,6 +530,9 @@ export const actions = {
 
   // ---- model / view ----
   setPlanName(name: string): ActionResult {
+    // empty is allowed: it is what the name field holds mid-edit
+    const bad = textError("name", name, TEXT.planName, true);
+    if (bad) return fail(bad);
     pushUndo();
     setModel({ ...store.getState().model, name });
     return ok(`Plan renamed to "${name}".`);
@@ -355,7 +553,7 @@ export const actions = {
   },
 
   setCamera(mode: CameraMode): ActionResult {
-    if (!["orbit", "top", "walk"].includes(mode)) return fail(`Unknown camera "${mode}". Use orbit | top | walk.`);
+    if (!isOneOf(mode, CAMERA_MODES)) return fail(`Unknown camera "${String(mode)}". Use ${CAMERA_MODES.join(" | ")}.`);
     store.setState((s) => ({ editor: { ...s.editor, view: "3d", camera: mode } }));
     return ok(`Camera set to ${mode}.`);
   },
@@ -365,35 +563,52 @@ export const actions = {
   },
 
   // ---- collaboration ----
-  leaveNote(author: "human" | "agent", text: string): ActionResult {
+  leaveNote(author: NoteAuthor, text: string): ActionResult {
+    const bad = firstError(memberError("author", author, NOTE_AUTHORS), textError("text", text, TEXT.note));
+    if (bad) return fail(bad);
+    if (store.getState().notes.length >= MAX_NOTES) {
+      return fail(`The plan already holds ${MAX_NOTES} notes, the most it keeps — ask the human to clear some first.`);
+    }
     const note: Note = { id: uid("note"), author, text, at: Date.now() };
     store.setState((s) => ({ notes: [...s.notes, note] }));
     return ok(`Note saved (${author}): "${text.slice(0, 60)}${text.length > 60 ? "…" : ""}"`, { id: note.id });
   },
 
   // ---- underlay ----
-  setUnderlay(underlay: Underlay | null) {
+  setUnderlay(underlay: Underlay | null): ActionResult {
+    if (underlay !== null) {
+      const bad = underlayError(underlay);
+      if (bad) return fail(bad);
+    }
     setModel({ ...store.getState().model, underlay });
+    return ok(underlay ? "Underlay set." : "Underlay removed.");
   },
 
   calibrateUnderlay(u1: number, v1: number, u2: number, v2: number, meters: number, opacity?: number): ActionResult {
+    const bad = numbersError(
+      ["u1", u1, IMAGE_FRACTION], ["v1", v1, IMAGE_FRACTION], ["u2", u2, IMAGE_FRACTION], ["v2", v2, IMAGE_FRACTION],
+      ["meters", meters, CALIBRATION_METERS], ["opacity", opacity, OPACITY],
+    );
+    if (bad) return fail(bad);
     const m = store.getState().model;
     const u = m.underlay;
     if (!u) return fail("No underlay loaded — ask the human to upload the plan image first (sidebar → Blueprint underlay).");
     // world distance between the two fractional image points at the CURRENT scale
     const frac = Math.hypot((u2 - u1) * u.w, (v2 - v1) * u.h);
     if (frac < 1e-6) return fail("The two calibration points coincide.");
-    if (!(meters > 0)) return fail("meters must be positive.");
     const scale = meters / frac;
     const newW = u.w * scale;
     const newH = u.h * scale;
     // keep image point 1 fixed in world space
     const p1x = u.x + u1 * u.w;
     const p1y = u.y + v1 * u.h;
-    setModel({
-      ...m,
-      underlay: { ...u, x: p1x - u1 * newW, y: p1y - v1 * newH, w: newW, h: newH, opacity: opacity ?? u.opacity },
-    });
+    const next: Underlay = { ...u, x: p1x - u1 * newW, y: p1y - v1 * newH, w: newW, h: newH, opacity: opacity ?? u.opacity };
+    // The result is judged like any other underlay. A scale that pushes the rect's corner off
+    // the plan is refused here, rather than stored and found later when every setUnderlay on
+    // it (the opacity slider's included) is refused.
+    const badNext = underlayError(next);
+    if (badNext) return fail(`Calibration rejected: the calibrated underlay would be invalid (${badNext})`);
+    setModel({ ...m, underlay: next });
     return ok(
       `Underlay calibrated: ${u.w.toFixed(2)} → ${newW.toFixed(2)} m wide (×${scale.toFixed(3)}). Image point (${u1}, ${v1}) stays at world (${p1x.toFixed(2)}, ${p1y.toFixed(2)}).`,
       { w: newW, h: newH, scale },
@@ -407,20 +622,23 @@ export const actions = {
   },
 
   /**
-   * Park a destructive agent call until the human approves it. Resolves true/false.
+   * Park a destructive agent call until the human decides. Resolves "approved" or "rejected" —
+   * or "queue_full" at once, without parking anything, when MAX_PENDING_APPROVALS requests are
+   * already waiting: an agent must not be able to bury the page in prompts.
    * Honours the AbortSignal WebMCP hands to execute(), so an agent that gives up
    * releases the request instead of leaving it hanging on the page.
    */
-  requestApproval(tool: string, request: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<boolean> {
+  requestApproval(tool: string, request: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ApprovalOutcome> {
+    if (store.getState().approvals.length >= MAX_PENDING_APPROVALS) return Promise.resolve("queue_full");
     const entry: PendingApproval = { id: uid("appr"), tool, request, args, at: Date.now() };
     store.setState((s) => ({ approvals: [...s.approvals, entry] }));
     logActivity("agent", tool, `Waiting for your approval: ${request}`, true);
-    return new Promise<boolean>((resolve) => {
+    return new Promise<ApprovalOutcome>((resolve) => {
       const settle = (granted: boolean) => {
         if (!approvalResolvers.has(entry.id)) return;
         approvalResolvers.delete(entry.id);
         store.setState((s) => ({ approvals: s.approvals.filter((a) => a.id !== entry.id) }));
-        resolve(granted);
+        resolve(granted ? "approved" : "rejected");
       };
       approvalResolvers.set(entry.id, settle);
       signal?.addEventListener("abort", () => settle(false), { once: true });
@@ -439,6 +657,7 @@ export const actions = {
   /**
    * Adopt a product from the partner origin into this plan's catalogue, keeping the
    * supplier's real dimensions so the constraint checker judges it like anything else.
+   * The supplier boundary has already validated it; the checks here hold for any caller.
    */
   importSupplierProduct(p: {
     sku: string;
@@ -449,13 +668,16 @@ export const actions = {
     h: number;
     color: string;
   }): ActionResult {
-    const kind = `nordika:${p.sku}`;
-    const known: CatalogEntry["category"][] = ["living", "bedroom", "kitchen", "bath", "office", "decor"];
-    const category = known.includes(p.category as CatalogEntry["category"])
-      ? (p.category as CatalogEntry["category"])
-      : p.category === "dining"
-        ? "kitchen"
-        : "decor";
+    const bad = firstError(
+      typeof p.sku === "string" && SUPPLIER.sku.test(p.sku) ? null : "sku is not a valid supplier sku.",
+      textError("name", p.name, TEXT.label),
+      textError("category", p.category, TEXT.category),
+      numbersError(["w", p.w, FURNITURE_DIM], ["d", p.d, FURNITURE_DIM], ["h", p.h, FURNITURE_DIM]),
+      colorError("color", p.color),
+    );
+    if (bad) return fail(`Supplier product rejected: ${bad}`);
+    const kind = supplierKind(p.sku);
+    const category = isCategory(p.category) ? p.category : p.category === "dining" ? "kitchen" : "decor";
     registerCatalogEntry({ kind, label: p.name, w: p.w, d: p.d, h: p.h, color: p.color, category });
     bumpCatalog();
     return ok(`${p.name} imported from the supplier (${p.w} × ${p.d} m).`, { kind });
@@ -474,18 +696,36 @@ export const actions = {
     h: number;
     color?: string;
     category?: string;
-    parts?: PartSpec[];
+    parts?: PartInput[];
   }): ActionResult {
+    const bad = firstError(
+      textError("kind", spec.kind, TEXT.kind),
+      textError("label", spec.label, TEXT.label),
+      numbersError(["w", spec.w, FURNITURE_DIM], ["d", spec.d, FURNITURE_DIM], ["h", spec.h, FURNITURE_DIM]),
+      spec.color === undefined ? null : colorError("color", spec.color),
+      spec.parts !== undefined && (!Array.isArray(spec.parts) || spec.parts.length > MAX_PARTS)
+        ? `parts must be a list of at most ${MAX_PARTS} primitives.`
+        : null,
+    );
+    if (bad) return fail(bad);
+    // each part is a mesh in every 3D build, so its numbers are held to the same ranges
+    const parts = spec.parts === undefined ? undefined : partList.safeParse(spec.parts);
+    if (parts && !parts.success) return fail(describeIssues(parts.error, { under: "parts" }).join("; "));
     const kind = spec.kind.trim().toLowerCase().replace(/[^a-z0-9_:-]+/g, "_");
     if (!kind) return fail("A kind id is required.");
-    if (FURNITURE_BUILDERS[kind]) return fail(`"${kind}" is a built-in kind — pick another id or use place_item.`);
-    if (!(spec.w > 0 && spec.d > 0 && spec.h > 0)) return fail("w, d and h must all be positive metres.");
-    const known: CatalogEntry["category"][] = ["living", "bedroom", "kitchen", "bath", "office", "decor"];
-    const category = known.includes(spec.category as CatalogEntry["category"])
-      ? (spec.category as CatalogEntry["category"])
-      : "decor";
-    const color = spec.color ?? "#9a9186";
+    if (isBuiltInKind(kind) || FURNITURE_BUILDERS[kind]) {
+      return fail(`"${kind}" is a built-in kind — pick another id or use place_item.`);
+    }
+    // the supplier's namespace is the supplier's: an agent kind there would shadow a product
+    if (isSupplierKind(kind)) {
+      return fail(`"${kind}" is reserved for supplier products — pick another id, or use place_supplier_product.`);
+    }
     const existing = catalogByKind(kind);
+    if (!existing && customKindCount() >= MAX_CUSTOM_KINDS) {
+      return fail(`The catalogue already holds ${MAX_CUSTOM_KINDS} custom kinds, the most it keeps — redefine one of them instead.`);
+    }
+    const category = isCategory(spec.category) ? spec.category : "decor";
+    const color = spec.color ?? DEFAULT_ITEM_COLOR;
     if (existing) {
       existing.label = spec.label;
       existing.w = spec.w;
@@ -496,10 +736,11 @@ export const actions = {
     } else {
       registerCatalogEntry({ kind, label: spec.label, w: spec.w, d: spec.d, h: spec.h, color, category });
     }
-    if (spec.parts?.length) defineCustomKind(kind, spec.parts);
+    const partCount = parts?.data.length ?? 0;
+    if (parts && partCount > 0) defineCustomKind(kind, parts.data);
     bumpCatalog();
     return ok(
-      `"${spec.label}" defined as ${kind} (${spec.w} × ${spec.d} × ${spec.h} m${spec.parts?.length ? `, ${spec.parts.length} parts` : ", blocked out from its footprint"}). Place it with place_item.`,
+      `"${spec.label}" defined as ${kind} (${spec.w} × ${spec.d} × ${spec.h} m${partCount ? `, ${partCount} parts` : ", blocked out from its footprint"}). Place it with place_item.`,
       { kind },
     );
   },

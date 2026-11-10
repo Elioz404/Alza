@@ -9,6 +9,7 @@ import type { Item, Opening, PlanModel, Room, Wall } from "../model/types";
 import { catalogByKind } from "../model/catalog";
 import { segLen } from "../model/geometry";
 import { openingSpan } from "../model/issues";
+import { WALL_DEFAULTS, type FloorFinish } from "../model/limits";
 
 export const wallMaterial = new THREE.MeshStandardMaterial({
   color: "#f2ede4",
@@ -48,8 +49,8 @@ const SKIRTING_H = 0.09;
 const DOOR_SWING = (82 * Math.PI) / 180;
 
 /** Procedural floor finishes — one canvas per finish, cloned per room so each gets its own repeat. */
-const texCache = new Map<string, THREE.CanvasTexture>();
-function floorTexture(kind: string): THREE.CanvasTexture | null {
+const texCache = new Map<FloorFinish, THREE.CanvasTexture>();
+function floorTexture(kind: FloorFinish): THREE.CanvasTexture | null {
   if (typeof document === "undefined") return null;
   const hit = texCache.get(kind);
   if (hit) return hit;
@@ -132,9 +133,9 @@ function floorTexture(kind: string): THREE.CanvasTexture | null {
 }
 
 /** Metres of floor covered by one texture tile, per finish. */
-const FLOOR_SCALE: Record<string, number> = { oak: 2.4, tile: 1.2, carpet: 2, concrete: 3 };
+const FLOOR_SCALE: Record<FloorFinish, number> = { oak: 2.4, tile: 1.2, carpet: 2, concrete: 3 };
 
-const FLOOR_COLORS: Record<string, string> = {
+const FLOOR_COLORS: Record<FloorFinish, string> = {
   oak: "#c39a67",
   tile: "#dcd6cb",
   carpet: "#a9b39e",
@@ -345,13 +346,13 @@ function buildWall(wall: Wall, openings: Opening[], walls: Wall[], curtained: Se
 }
 
 function buildFloor(room: Room): THREE.Mesh {
-  const color = FLOOR_COLORS[room.floor] ?? FLOOR_COLORS.oak;
+  const color = FLOOR_COLORS[room.floor];
   const mat = new THREE.MeshStandardMaterial({ color, roughness: room.floor === "carpet" ? 1 : 0.72 });
-  const base = floorTexture(room.floor in FLOOR_SCALE ? room.floor : "oak");
+  const base = floorTexture(room.floor);
   if (base) {
     const tex = base.clone();
     tex.needsUpdate = true;
-    const sc = FLOOR_SCALE[room.floor] ?? 2.4;
+    const sc = FLOOR_SCALE[room.floor];
     tex.repeat.set(room.w / sc, room.h / sc);
     mat.map = tex;
     mat.color.set("#ffffff");
@@ -441,7 +442,7 @@ export function buildPlan(model: PlanModel): BuiltPlan {
   for (const r of model.rooms) {
     group.add(buildFloor(r));
   }
-  const ceiling = model.walls[0]?.height ?? 2.7;
+  const ceiling = model.walls[0]?.height ?? WALL_DEFAULTS.height;
   for (const r of model.rooms) {
     group.add(buildPendant(r, ceiling));
   }

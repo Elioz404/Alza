@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { useAppStore, actions, logActivity } from "../model/store";
 import { SUPPLIER_ORIGIN, SUPPLIER_URL, listProducts, type SupplierProduct } from "../mcp/supplier";
+import { supplierKind } from "../model/catalog";
 
 export function SupplierPanel() {
   const supplierTools = useAppStore((s) => s.supplierTools);
@@ -18,10 +19,11 @@ export function SupplierPanel() {
   const pull = async () => {
     setError(null);
     try {
-      const { products: p, transport: t } = await listProducts({});
+      const { products: p, rejected, transport: t } = await listProducts({});
       setProducts(p);
       setTransport(t);
-      logActivity("human", "get_supplier_catalog", `Pulled ${p.length} product(s) from ${SUPPLIER_ORIGIN} via ${t}.`, true);
+      const dropped = rejected > 0 ? ` ${rejected} malformed product(s) were dropped.` : "";
+      logActivity("human", "get_supplier_catalog", `Pulled ${p.length} product(s) from ${SUPPLIER_ORIGIN} via ${t}.${dropped}`, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -71,8 +73,9 @@ export function SupplierPanel() {
               disabled={p.stock === 0}
               title={p.stock === 0 ? "Out of stock at the supplier" : `${p.w} × ${p.d} m — click, then click on the plan`}
               onClick={() => {
-                actions.importSupplierProduct(p);
-                actions.setDrawMode("place", `nordika:${p.sku}`);
+                const r = actions.importSupplierProduct(p);
+                if (r.ok) actions.setDrawMode("place", supplierKind(p.sku));
+                else setError(r.summary);
               }}
             >
               <span className="catalog-swatch" style={{ background: p.color }} />

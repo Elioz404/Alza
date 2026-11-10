@@ -7,8 +7,9 @@
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
 import { fromRoot } from "./paths.mjs";
+import { STUDIO_DEV_ORIGIN } from "../config/origins.js";
 
-const BASE = process.env.BASE_URL ?? "http://localhost:5199";
+const BASE = process.env.BASE_URL ?? STUDIO_DEV_ORIGIN;
 const OUT = fromRoot("shots/full");
 mkdirSync(OUT, { recursive: true });
 

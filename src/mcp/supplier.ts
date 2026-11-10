@@ -12,42 +12,102 @@
  *
  * Where the runtime has no cross-origin support (or no WebMCP at all) the same protocol runs
  * over postMessage, so the feature degrades instead of disappearing.
+ *
+ * Everything the partner answers is untrusted input from another origin. Each answer is
+ * validated here, at the boundary, against a schema built from the same domain limits the
+ * tools use: a malformed product is dropped from a listing (and counted) or refused outright,
+ * and never reaches the catalogue, the 3D builders or the agent.
  */
 
+import { z } from "zod";
 import { actions, logActivity } from "../model/store";
+import { SUPPLIER, TEXT } from "../model/limits";
+import { clip, describeIssues, furnitureDim, hexColor, inRange, label, supplierSku, text } from "../model/schemas";
 import { callRemoteTool, discoverTools, type ModelContextLike, type RemoteTool } from "./registry";
+import { PARTNER_PAGE_PATH, resolveOrigins, supplierOriginFor } from "../../config/origins.js";
 
 /**
- * Where the partner lives. In production it is baked in at build time with
- * VITE_SUPPLIER_ORIGIN, because the two origins are deliberately hosted by different
- * providers and cannot be derived from this one. `?supplier=https://…` overrides it for
- * debugging. It MUST be https: `exposedTo` only accepts secure origins (localhost counts).
+ * The origins this build talks to, from config/origins.js: baked in at build time from
+ * .env.production (and validated there, so a production bundle always has both), or the local
+ * dev ports when running `npm run dev` / the tests.
  */
-export const SUPPLIER_ORIGIN: string = (() => {
-  const q = new URLSearchParams(location.search).get("supplier");
-  if (q) return q.replace(/\/$/, "");
-  const baked = import.meta.env.VITE_SUPPLIER_ORIGIN;
-  if (baked) return String(baked).replace(/\/$/, "");
-  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
-    return `${location.protocol}//${location.hostname}:5200`;
+const ORIGINS = resolveOrigins(import.meta.env, { production: import.meta.env.PROD, devHost: location.hostname });
+
+/**
+ * Where the partner lives. `?supplier=https://…` overrides it for debugging; the override must
+ * itself be a valid origin or it is ignored. It MUST be https: `exposedTo` only accepts secure
+ * origins (localhost counts).
+ */
+export const SUPPLIER_ORIGIN: string = supplierOriginFor(new URLSearchParams(location.search).get("supplier"), ORIGINS.supplier);
+
+export const SUPPLIER_URL = `${SUPPLIER_ORIGIN}${PARTNER_PAGE_PATH}`;
+
+/**
+ * One product as the studio accepts it. Unknown fields are stripped rather than refused, so
+ * the partner can grow its records without breaking the studio — but nothing unvetted passes.
+ */
+export const supplierProductSchema = z.object({
+  sku: supplierSku,
+  name: label,
+  category: text(TEXT.category),
+  w: furnitureDim,
+  d: furnitureDim,
+  h: furnitureDim,
+  price: inRange(SUPPLIER.price),
+  currency: z.string().regex(SUPPLIER.currency, "must be a three-letter currency code"),
+  color: hexColor,
+  stock: inRange(SUPPLIER.stock).int(),
+});
+export type SupplierProduct = z.output<typeof supplierProductSchema>;
+
+/** The envelopes of the two answers; products inside are checked one by one. */
+const listAnswer = z.object({ products: z.array(z.unknown()).max(SUPPLIER.maxProducts) });
+const productAnswer = z.object({ product: z.unknown().nullable().optional() });
+
+/** Raised when the partner answers with something the studio will not accept. */
+export class SupplierDataError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SupplierDataError";
   }
-  return `${location.protocol}//partner.${location.host.replace(/^www\./, "")}`;
-})();
+}
 
-export const SUPPLIER_URL = `${SUPPLIER_ORIGIN}/partner/index.html`;
+const issuesOf = (error: z.ZodError): string => describeIssues(error, { root: "answer" }).join("; ");
 
-export type SupplierProduct = {
-  sku: string;
-  name: string;
-  category: string;
-  w: number;
-  d: number;
-  h: number;
-  price: number;
-  currency: string;
-  color: string;
-  stock: number;
-};
+/**
+ * A postMessage reply, as the studio accepts it. Only the envelope is checked here — `result`
+ * is judged by the caller's schema like a WebMCP answer — but the error text is bounded and
+ * typed, because it is relayed to the agent and shown on the page.
+ */
+const replyEnvelope = z.object({
+  __alzaSupplierResult: z.literal(true),
+  id: z.string().max(TEXT.ref),
+  ok: z.boolean(),
+  result: z.unknown().optional(),
+  error: z
+    .string()
+    .optional()
+    .transform((e) => (e === undefined ? undefined : clip(e, TEXT.supplierError))),
+});
+type Reply = { ok: boolean; result?: unknown; error?: string };
+
+/** Parse one raw answer: bounded in size, valid JSON, and matching `schema`. */
+function parseAnswer<S extends z.ZodType>(tool: string, raw: unknown, schema: S): z.output<S> {
+  let data = raw;
+  if (typeof raw === "string") {
+    if (raw.length > SUPPLIER.maxResponseChars) {
+      throw new SupplierDataError(`${tool} answered ${raw.length} characters (max ${SUPPLIER.maxResponseChars}).`);
+    }
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new SupplierDataError(`${tool} did not answer with JSON.`);
+    }
+  }
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) throw new SupplierDataError(`${tool} answered in an unexpected shape (${issuesOf(parsed.error)}).`);
+  return parsed.data;
+}
 
 let modelContext: ModelContextLike | null = null;
 let remoteTools: RemoteTool[] = [];
@@ -55,14 +115,19 @@ let frame: Window | null = null;
 
 /** postMessage fallback plumbing. */
 let msgSeq = 0;
-const pending = new Map<string, (payload: { ok: boolean; result?: unknown; error?: string }) => void>();
+const pending = new Map<string, (payload: Reply) => void>();
 
 window.addEventListener("message", (e: MessageEvent) => {
   if (e.origin !== SUPPLIER_ORIGIN) return;
-  const data = e.data as { __alzaSupplierResult?: boolean; id?: string; ok?: boolean; result?: unknown; error?: string };
-  if (!data?.__alzaSupplierResult || !data.id) return;
-  pending.get(data.id)?.({ ok: !!data.ok, result: data.result, error: data.error });
-  pending.delete(data.id);
+  const data: unknown = e.data;
+  // only a reply to a call still waiting is looked at; anything else is not addressed to us
+  const id = (data as { id?: unknown } | null)?.id;
+  if (typeof id !== "string") return;
+  const settle = pending.get(id);
+  if (!settle || (data as { __alzaSupplierResult?: unknown }).__alzaSupplierResult !== true) return;
+  pending.delete(id);
+  const reply = replyEnvelope.safeParse(data);
+  settle(reply.success ? reply.data : { ok: false, error: `${SUPPLIER_ORIGIN} sent a malformed reply (${issuesOf(reply.error)}).` });
 });
 
 /** Called by the bridge component once its iframe is live. */
@@ -121,7 +186,7 @@ async function viaPostMessage(tool: string, args: Record<string, unknown>): Prom
   const target = supplierFrame();
   if (!target) throw new Error(`The partner origin (${SUPPLIER_ORIGIN}) is not loaded on this page.`);
   const id = `sup_${++msgSeq}`;
-  const reply = new Promise<{ ok: boolean; result?: unknown; error?: string }>((resolve, reject) => {
+  const reply = new Promise<Reply>((resolve, reject) => {
     pending.set(id, resolve);
     setTimeout(() => {
       if (pending.delete(id)) reject(new Error(`Supplier did not answer "${tool}" in time.`));
@@ -141,41 +206,74 @@ async function viaPostMessage(tool: string, args: Record<string, unknown>): Prom
 }
 
 /**
- * Call one of the supplier's tools. Prefers the real WebMCP cross-origin path and states
- * which transport was used, because that distinction is the whole point of the feature.
+ * Call one of the supplier's tools and validate its answer against `schema`. Prefers the real
+ * WebMCP cross-origin path and states which transport was used, because that distinction is
+ * the whole point of the feature. A transport failure falls back; an answer that arrives but
+ * fails validation does not — the partner said something, and it was not acceptable.
  */
-export async function callSupplier(
+export async function callSupplier<S extends z.ZodType>(
   tool: string,
-  args: Record<string, unknown> = {},
-): Promise<{ data: unknown; transport: "webmcp" | "postmessage" }> {
+  args: Record<string, unknown>,
+  schema: S,
+): Promise<{ data: z.output<S>; transport: "webmcp" | "postmessage" }> {
   const attempt = async (): Promise<string | null> => {
     const remote = remoteTools.find((t) => t.name === tool);
     if (!remote || !modelContext?.executeTool) return null;
     return callRemoteTool(modelContext, remote, args);
   };
+  let text: string | null = null;
   try {
-    const text = await attempt();
-    if (text != null) return { data: JSON.parse(text), transport: "webmcp" };
+    text = await attempt();
   } catch (err) {
     // a descriptor can outlive its frame; refresh the list once before giving up on WebMCP
     console.warn("[webmcp] cross-origin call failed, re-discovering", err);
     await connectSupplier(modelContext);
     try {
-      const retry = await attempt();
-      if (retry != null) return { data: JSON.parse(retry), transport: "webmcp" };
+      text = await attempt();
     } catch {
       /* fall through to the postMessage transport */
     }
   }
-  return { data: await viaPostMessage(tool, args), transport: "postmessage" };
+  if (text != null) return { data: parseAnswer(tool, text, schema), transport: "webmcp" };
+  return { data: parseAnswer(tool, await viaPostMessage(tool, args), schema), transport: "postmessage" };
 }
 
-export async function listProducts(filters: Record<string, unknown> = {}) {
-  const { data, transport } = await callSupplier("nordika_list_products", filters);
-  return { products: (data as { products: SupplierProduct[] }).products ?? [], transport };
+export interface ProductFilters {
+  category?: string;
+  maxPrice?: number;
+  maxWidth?: number;
+  inStock?: boolean;
 }
 
+/** The partner's listing, keeping only products that pass validation; `rejected` counts the rest. */
+export async function listProducts(filters: ProductFilters = {}) {
+  const tool = "nordika_list_products";
+  const { data, transport } = await callSupplier(tool, { ...filters }, listAnswer);
+  const products: SupplierProduct[] = [];
+  let rejected = 0;
+  for (const raw of data.products) {
+    const p = supplierProductSchema.safeParse(raw);
+    if (p.success) products.push(p.data);
+    else {
+      rejected++;
+      console.warn(`[supplier] dropped a malformed product from ${tool}: ${issuesOf(p.error)}`);
+    }
+  }
+  if (rejected > 0) {
+    logActivity("system", "cross-origin", `Dropped ${rejected} malformed product(s) from ${SUPPLIER_ORIGIN}.`, false);
+  }
+  return { products, rejected, transport };
+}
+
+/** One product by sku; a malformed record, or one for a different sku, is an error. */
 export async function getProduct(sku: string) {
-  const { data, transport } = await callSupplier("nordika_get_product", { sku });
-  return { product: (data as { product: SupplierProduct | null }).product ?? null, transport };
+  const tool = "nordika_get_product";
+  const { data, transport } = await callSupplier(tool, { sku }, productAnswer);
+  if (data.product == null) return { product: null, transport };
+  const p = supplierProductSchema.safeParse(data.product);
+  if (!p.success) throw new SupplierDataError(`${SUPPLIER_ORIGIN} sent an invalid product for "${sku}" (${issuesOf(p.error)}).`);
+  if (p.data.sku.toUpperCase() !== sku.toUpperCase()) {
+    throw new SupplierDataError(`${SUPPLIER_ORIGIN} answered "${sku}" with a different product ("${p.data.sku}").`);
+  }
+  return { product: p.data, transport };
 }

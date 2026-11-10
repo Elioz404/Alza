@@ -11,6 +11,8 @@
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,
+    "allowJs": true,
+    "checkJs": true,
     "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": true,

@@ -1,5 +1,7 @@
 /** Domain model — all units are meters, plan lives on the XY plane (y grows downward in 2D view). */
 
+import type { FloorFinish, Hinge, NoteAuthor, SwingSide } from "./limits";
+
 export interface Wall {
   id: string;
   ax: number;
@@ -22,12 +24,12 @@ export interface Opening {
   sill: number; // height of the bottom edge (0 for doors, ~0.9 for windows)
   height: number; // clear height of the opening
   /** doors only — which jamb carries the hinges (default "a", the wall's A end) */
-  hinge?: "a" | "b";
+  hinge?: Hinge;
   /**
    * doors only — which side of the wall the leaf swings to, walking from the wall's
    * A endpoint to its B endpoint on the plan (default "right").
    */
-  side?: "left" | "right";
+  side?: SwingSide;
 }
 
 export interface Room {
@@ -37,7 +39,7 @@ export interface Room {
   w: number;
   h: number;
   label: string;
-  floor: string; // floor finish key, e.g. "oak" | "tile" | "concrete" | "carpet"
+  floor: FloorFinish;
 }
 
 export interface Item {
@@ -82,7 +84,7 @@ export interface PendingApproval {
 
 export interface Note {
   id: string;
-  author: "human" | "agent";
+  author: NoteAuthor;
   text: string;
   at: number; // epoch ms
 }

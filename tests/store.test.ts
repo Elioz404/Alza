@@ -4,7 +4,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { actions, store, UNDO_DEPTH } from "../src/model/store";
-import { SNAP } from "../src/model/geometry";
+import { SNAP } from "../src/model/limits";
 import { resetStore } from "./support/store";
 
 const model = () => store.getState().model;

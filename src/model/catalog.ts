@@ -1,5 +1,7 @@
 /** Furniture catalog — footprints (meters) and display metadata. 3D builders live in three/furniture.ts. */
 
+import type { ItemCategory } from "./limits";
+
 export interface CatalogEntry {
   kind: string;
   label: string;
@@ -7,7 +9,7 @@ export interface CatalogEntry {
   d: number; // footprint depth  (local y)
   h: number; // approximate height (3D)
   color: string;
-  category: "living" | "bedroom" | "kitchen" | "bath" | "office" | "decor";
+  category: ItemCategory;
   /** rugs may overlap other furniture */
   isRug?: boolean;
 }
@@ -60,3 +62,21 @@ export function registerCatalogEntry(entry: CatalogEntry): CatalogEntry {
   CATALOG.push(entry);
   return entry;
 }
+
+/**
+ * Products adopted from the partner origin live in the catalogue under this prefix, so a
+ * supplier sku can never collide with a built-in or agent-defined kind: define_item_kind
+ * refuses ids in this namespace. Skus match case-insensitively (SUPPLIER.sku), so the kind is
+ * built from one case and "nk-sof-3s" and "NK-SOF-3S" are the same product.
+ */
+export const SUPPLIER_KIND_PREFIX = "nordika:";
+export const supplierKind = (sku: string): string => `${SUPPLIER_KIND_PREFIX}${sku.toUpperCase()}`;
+export const isSupplierKind = (kind: string): boolean => kind.toLowerCase().startsWith(SUPPLIER_KIND_PREFIX);
+
+/** The kinds the catalogue ships with, captured before anything is added at runtime. */
+const BUILT_IN_KINDS: ReadonlySet<string> = new Set(CATALOG.map((c) => c.kind));
+export const isBuiltInKind = (kind: string): boolean => BUILT_IN_KINDS.has(kind);
+
+/** How many kinds agents have added with define_item_kind (neither built in nor from the supplier). */
+export const customKindCount = (): number =>
+  CATALOG.filter((c) => !isBuiltInKind(c.kind) && !isSupplierKind(c.kind)).length;

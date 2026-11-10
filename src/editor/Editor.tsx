@@ -10,6 +10,7 @@ import type { Opening, Wall } from "../model/types";
 import { snap, segLen, segPoint } from "../model/geometry";
 import { openingSpan } from "../model/issues";
 import { catalogByKind } from "../model/catalog";
+import { DEFAULT_FLOOR, ROOM_SIZE, WALL_DEFAULTS, WALL_MIN_LENGTH, type FloorFinish } from "../model/limits";
 
 interface View {
   x: number; // world coords at top-left
@@ -20,7 +21,7 @@ interface View {
 /** Canvas size assumed until the SVG has been laid out and measured. */
 const UNMEASURED_CANVAS = { w: 1200, h: 800 } as const;
 
-const FLOOR_FILL: Record<string, string> = {
+const FLOOR_FILL: Record<FloorFinish, string> = {
   oak: "#e8d5b5",
   tile: "#e3e0d8",
   carpet: "#cfd6c4",
@@ -173,8 +174,9 @@ export function Editor() {
         actions.setPendingWallStart(sp);
       } else {
         const s = editor.pendingWallStart;
-        if (Math.hypot(sp.x - s.x, sp.y - s.y) >= 0.2) {
-          const r = actions.addWall(s.x, s.y, sp.x, sp.y, 0.15, 2.7);
+        // the store's own minimum, so a click it would refuse is not sent and one it accepts is not skipped
+        if (Math.hypot(sp.x - s.x, sp.y - s.y) >= WALL_MIN_LENGTH) {
+          const r = actions.addWall(s.x, s.y, sp.x, sp.y);
           logActivity("human", "add_wall", r.summary, r.ok);
           actions.setPendingWallStart(sp); // chain
         }
@@ -212,8 +214,8 @@ export function Editor() {
       const y = Math.min(roomStart.y, sp.y);
       const w = Math.abs(sp.x - roomStart.x);
       const h = Math.abs(sp.y - roomStart.y);
-      if (w >= 0.5 && h >= 0.5) {
-        const r = actions.addRoom(x, y, w, h, `Room ${model.rooms.length + 1}`, "oak");
+      if (w >= ROOM_SIZE.min && h >= ROOM_SIZE.min) {
+        const r = actions.addRoom(x, y, w, h, `Room ${model.rooms.length + 1}`, DEFAULT_FLOOR);
         logActivity("human", "add_room", r.summary, r.ok);
       }
       setRoomStart(null);
@@ -331,7 +333,7 @@ export function Editor() {
             y={r.y * S}
             width={r.w * S}
             height={r.h * S}
-            fill={FLOOR_FILL[r.floor] ?? FLOOR_FILL.oak}
+            fill={FLOOR_FILL[r.floor]}
             stroke={editor.selectedRoomId === r.id ? "#e07b39" : "#c9c2b2"}
             strokeWidth={editor.selectedRoomId === r.id ? 2.5 : 1}
           />
@@ -425,7 +427,7 @@ export function Editor() {
           x2={mouse.x * S}
           y2={mouse.y * S}
           stroke="#e07b39"
-          strokeWidth={Math.max(3, 0.15 * S)}
+          strokeWidth={Math.max(3, WALL_DEFAULTS.thickness * S)}
           strokeDasharray="8 5"
           strokeLinecap="square"
         />

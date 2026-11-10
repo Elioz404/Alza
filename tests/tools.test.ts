@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { store } from "../src/model/store";
-import { registerAll, wrapTool, type ModelContextLike } from "../src/mcp/registry";
+import { inputSchemaOf, registerAll, wrapTool, type ModelContextLike } from "../src/mcp/registry";
 import { EXTEND_SELECTED_WALL, TOOLS, runToolManually } from "../src/mcp/tools";
 import { resetStore } from "./support/store";
 
@@ -30,7 +30,7 @@ describe("tool surface", () => {
     for (const t of [...TOOLS, EXTEND_SELECTED_WALL]) {
       expect(t.title, t.name).toBeTruthy();
       expect(t.description, t.name).toBeTruthy();
-      expect(t.inputSchema.type, t.name).toBe("object");
+      expect(inputSchemaOf(t).type, t.name).toBe("object");
     }
   });
 
@@ -43,7 +43,7 @@ describe("wrapTool", () => {
   it("builds a WebMCP descriptor whose execute returns the result as JSON text", async () => {
     const def = TOOLS.find((t) => t.name === "add_wall")!;
     const descriptor = wrapTool(def);
-    expect(descriptor).toMatchObject({ name: "add_wall", title: def.title, inputSchema: def.inputSchema });
+    expect(descriptor).toMatchObject({ name: "add_wall", title: def.title, inputSchema: inputSchemaOf(def) });
 
     const execute = descriptor.execute as (input: unknown) => Promise<string>;
     const text = await execute({ ax: 0, ay: 0, bx: 4, by: 0 });
@@ -76,8 +76,7 @@ describe("registerAll", () => {
 
 describe("runToolManually", () => {
   it("runs a tool by name through the same wrapper", async () => {
-    const input: Record<string, unknown> = { name: "Manual" };
-    const r = await runToolManually("set_plan_name", input as Record<string, never>);
+    const r = await runToolManually("set_plan_name", { name: "Manual" });
     expect(r.ok).toBe(true);
     expect(store.getState().model.name).toBe("Manual");
   });

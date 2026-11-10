@@ -9,6 +9,8 @@
  * runtimes without cross-origin WebMCP.
  */
 
+import { hostOriginsFor, resolveOrigins } from "../config/origins.js";
+
 const PRODUCTS = [
   { sku: "NK-SOF-3S", name: "Frejda 3-seat sofa", category: "living", w: 2.18, d: 0.92, h: 0.84, price: 749, currency: "EUR", color: "#8d8577", stock: 12 },
   { sku: "NK-ARM-01", name: "Frejda armchair", category: "living", w: 0.88, d: 0.86, h: 0.84, price: 329, currency: "EUR", color: "#96907f", stock: 20 },
@@ -100,21 +102,16 @@ const TOOLS = [
 ];
 
 // ------------------------------------------------- WebMCP registration
-const HOST_ORIGINS = (() => {
-  const p = new URLSearchParams(location.search).get("host");
-  const list = p ? [p.replace(/\/$/, "")] : [];
-  if (document.referrer) {
-    try {
-      list.push(new URL(document.referrer).origin);
-    } catch {
-      /* ignore */
-    }
-  }
-  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
-    list.push(`${location.protocol}//${location.hostname}:5199`);
-  }
-  return [...new Set(list)];
-})();
+// Which studio origins may see these tools and talk to this frame. The list is built by
+// config/origins.js — the same module the studio reads its partner origin from — starting
+// with the studio origin this build was configured for.
+const ORIGINS = resolveOrigins(import.meta.env, { production: import.meta.env.PROD, devHost: location.hostname });
+const HOST_ORIGINS = hostOriginsFor({
+  configured: ORIGINS.studio,
+  host: new URLSearchParams(location.search).get("host"),
+  referrer: document.referrer,
+  hostname: location.hostname,
+});
 
 const mc = document.modelContext ?? navigator.modelContext ?? null;
 

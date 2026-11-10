@@ -9,6 +9,8 @@ import { seedLoft } from "../model/seed";
 import { ToolRunner } from "./ToolRunner";
 import { SupplierPanel } from "./SupplierPanel";
 import { thumbnailFor } from "../three/thumbnails";
+import { OPACITY, TEXT, UNDERLAY } from "../model/limits";
+import { decodeUnderlay } from "./underlay";
 
 type Tab = "model" | "check" | "catalog" | "supplier" | "notes" | "tools";
 
@@ -32,28 +34,22 @@ export function Sidebar() {
     { id: "tools", label: "Tools" },
   ];
 
-  const onUploadBlueprint = (file: File) => {
-    const img = new Image();
-    const reader = new FileReader();
-    reader.onload = () => {
-      img.onload = () => {
-        // reencode to JPEG ≤1600 px (localStorage-friendly)
-        const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
-        const aspect = img.height / img.width;
-        actions.setUnderlay({
-          dataUrl, opacity: 0.55, x: 0, y: 0, w: 8, h: 8 * aspect,
-          pw: canvas.width, ph: canvas.height,
-        });
-        logActivity("human", "set_underlay", `Blueprint loaded (${canvas.width}×${canvas.height}), opacity 55%. Drag walls over it to trace.`);
-      };
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
+  const onUploadBlueprint = async (file: File) => {
+    // checked, bounded and re-encoded to a small JPEG before it reaches the model (see underlay.ts)
+    try {
+      const underlay = await decodeUnderlay(file);
+      const r = actions.setUnderlay(underlay);
+      logActivity(
+        "human",
+        "set_underlay",
+        r.ok
+          ? `Blueprint loaded (${underlay.pw}×${underlay.ph}), opacity ${Math.round(underlay.opacity * 100)}%. Drag walls over it to trace.`
+          : `Blueprint not loaded: ${r.summary}`,
+        r.ok,
+      );
+    } catch (err) {
+      logActivity("human", "set_underlay", `Blueprint not loaded: ${err instanceof Error ? err.message : String(err)}`, false);
+    }
   };
 
   return (
@@ -74,6 +70,7 @@ export function Sidebar() {
               Plan name
               <input
                 value={model.name}
+                maxLength={TEXT.planName}
                 onChange={(e) => actions.setPlanName(e.target.value)}
               />
             </label>
@@ -117,20 +114,25 @@ export function Sidebar() {
               Blueprint underlay
               <input
                 type="file"
-                accept="image/*"
-                onChange={(e) => e.target.files?.[0] && onUploadBlueprint(e.target.files[0])}
+                accept={UNDERLAY.acceptedTypes.join(",")}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void onUploadBlueprint(file);
+                }}
               />
               {model.underlay && (
                 <>
                   <input
                     type="range"
-                    min={0}
-                    max={1}
+                    min={OPACITY.min}
+                    max={OPACITY.max}
                     step={0.05}
                     value={model.underlay.opacity}
-                    onChange={(e) =>
-                      actions.setUnderlay({ ...model.underlay!, opacity: Number(e.target.value) })
-                    }
+                    onChange={(e) => {
+                      // a refusal is reported, not swallowed: a slider that silently stops is a bug report
+                      const r = actions.setUnderlay({ ...model.underlay!, opacity: Number(e.target.value) });
+                      if (!r.ok) logActivity("human", "set_underlay", `Opacity not changed: ${r.summary}`, false);
+                    }}
                   />
                   <button onClick={() => actions.setUnderlay(null)}>Remove underlay</button>
                 </>
@@ -194,12 +196,14 @@ export function Sidebar() {
                 onChange={(e) => setNoteText(e.target.value)}
                 placeholder="Leave a note for your agent (e.g. “make the bedroom bigger”)"
                 rows={2}
+                maxLength={TEXT.note}
               />
               <button
                 onClick={() => {
                   if (!noteText.trim()) return;
-                  actions.leaveNote("human", noteText.trim());
-                  setNoteText("");
+                  const r = actions.leaveNote("human", noteText.trim());
+                  if (r.ok) setNoteText("");
+                  else logActivity("human", "leave_note", r.summary, false);
                 }}
               >
                 Add note

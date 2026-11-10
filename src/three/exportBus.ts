@@ -1,5 +1,7 @@
 /** Tiny event bus so header buttons / tools can trigger scene-level actions (OBJ export, PNG snapshot, doors). */
 
+import type { DoorState } from "../model/limits";
+
 type Handler = (payload?: unknown) => void;
 
 const handlers: Record<string, Handler[]> = {};
@@ -23,6 +25,6 @@ export const EVENTS = {
 } as const;
 
 export interface SetDoorsPayload {
-  state: "open" | "closed" | "toggle";
+  state: DoorState;
   id?: string;
 }

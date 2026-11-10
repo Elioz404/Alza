@@ -7,6 +7,7 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { catalogByKind } from "../model/catalog";
+import { DEFAULT_ITEM_COLOR } from "../model/limits";
 
 const mat = (color: string, roughness = 0.8, metalness = 0): THREE.MeshStandardMaterial =>
   new THREE.MeshStandardMaterial({ color, roughness, metalness });
@@ -610,7 +611,7 @@ function genericPiece(w: number, d: number, h: number, color: string): THREE.Gro
 export function buildFurniture(kind: string): THREE.Group | null {
   const cat = catalogByKind(kind);
   const custom = CUSTOM_PARTS.get(kind);
-  if (custom) return buildCustom(custom, cat?.color ?? "#9a9186");
+  if (custom) return buildCustom(custom, cat?.color ?? DEFAULT_ITEM_COLOR);
   const b = FURNITURE_BUILDERS[kind];
   if (b) return b();
   return cat ? genericPiece(cat.w, cat.d, cat.h, cat.color) : null;

@@ -20,8 +20,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WALLS, OPEN, ROOMS, FURN, DEFINE, DEFINED_ITEMS, NOTES } from "./trace.mjs";
 import { fromRoot } from "./paths.mjs";
+import { productionOrigins } from "./origins.mjs";
 
-const BASE = process.env.BASE_URL ?? "https://alza-dev.pages.dev";
+// the film is shot against the deployed studio, so the default is the production origin
+const BASE = process.env.BASE_URL ?? productionOrigins().studio;
 const OUT = fromRoot("videos/alza-webmcp/capture/footage6");
 const FFMPEG = "C:/Users/elias/.local/bin/ffmpeg.exe";
 mkdirSync(OUT, { recursive: true });

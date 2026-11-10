@@ -28,6 +28,13 @@ export default defineConfig(
     languageOptions: { globals: globals.node },
   },
   {
+    // shared by the browser bundles, vite.config.ts and the Node scripts, so it may lean on
+    // neither environment's globals
+    files: ["config/**/*.js"],
+    extends: [js.configs.recommended],
+    languageOptions: { globals: globals["shared-node-browser"] },
+  },
+  {
     files: ["partner/**/*.js"],
     extends: [js.configs.recommended],
     languageOptions: { globals: globals.browser },

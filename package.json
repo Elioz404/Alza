@@ -12,7 +12,7 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
-    "partner": "vite --port 5200 --strictPort",
+    "partner": "node scripts/partner-dev.mjs",
     "serve:local": "node scripts/serve-local.mjs",
     "e2e": "node scripts/e2e-full.mjs",
     "shots": "node scripts/shots.mjs",
@@ -23,6 +23,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "three": "^0.178.0",
+    "zod": "^4.6.7",
     "zustand": "^5.0.6"
   },
   "devDependencies": {

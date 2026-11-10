@@ -4,6 +4,7 @@
  * each way out of a parked call does to the model.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { actions, store, type ActionResult } from "../src/model/store";
 import { executeWrapped, type ToolDef } from "../src/mcp/registry";
 import { TOOLS } from "../src/mcp/tools";
@@ -19,13 +20,13 @@ const tool = (name: string): ToolDef => {
 const spyTool = (): ToolDef & { execute: ReturnType<typeof vi.fn> } => ({
   name: "spy_destroy",
   description: "test double",
-  inputSchema: { type: "object", properties: {} },
+  input: z.strictObject({}),
   annotations: { destructiveHint: true },
   confirm: () => "destroy the thing",
   execute: vi.fn((): ActionResult => ({ ok: true, summary: "destroyed" })),
 });
 
-const input = (o: Record<string, unknown>) => o as Record<string, never>;
+const input = (o: Record<string, unknown>) => o;
 const pending = () => store.getState().approvals;
 
 function seedWall(): string {
@@ -151,7 +152,7 @@ describe("approval gate", () => {
     const def: ToolDef = {
       name: "explodes",
       description: "test double",
-      inputSchema: { type: "object", properties: {} },
+      input: z.strictObject({}),
       execute: () => {
         throw new Error("boom");
       },
@@ -168,8 +169,11 @@ describe("every destructive tool is gated", () => {
     expect(destructive.sort()).toEqual(["clear_model", "remove_item", "remove_opening", "remove_room", "remove_wall"]);
   });
 
+  // each with arguments its schema accepts, so it is the gate that stops it, not validation
+  const validInput = (name: string) => (name === "clear_model" ? {} : { id: "anything" });
+
   it.each(destructive)("%s parks instead of running", async (name) => {
-    const call = executeWrapped(tool(name), input({ id: "anything" }));
+    const call = executeWrapped(tool(name), input(validInput(name)));
     await flush();
     expect(pending()).toHaveLength(1);
     actions.resolveApproval(pending()[0].id, false);
