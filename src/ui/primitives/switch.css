@@ -1,0 +1,127 @@
+/*
+ * The switch (Switch.tsx). Tokens only: a full-radius track, grey off and accent on, a surface
+ * thumb that slides and grows as it turns on; the row answers hover and press as one.
+ */
+@layer alza-components {
+  .switch-field {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+  }
+  .switch-field--spread { justify-content: space-between; width: 100%; }
+  .switch-field--start .switch-field__text { order: -1; }
+
+  .switch-field__text {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: var(--size-switch-height);
+  }
+  .switch-field__label {
+    color: var(--color-text-secondary);
+    font-size: var(--text-label-size);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--text-label-leading);
+    cursor: pointer;
+  }
+  .switch-field__description {
+    color: var(--color-text-secondary);
+    font-family: var(--font-family-body);
+    font-size: var(--text-supporting-size);
+    line-height: var(--text-supporting-leading);
+  }
+
+  .switch {
+    position: relative;
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    isolation: isolate;
+    width: var(--size-switch-width);
+    height: var(--size-switch-height);
+  }
+  /* the real control, invisible, over the drawing: it takes the clicks and the focus */
+  .switch__input {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  /* under a finger, or at phone width, the control answers a band at least --size-hit each
+     way, centred on the track, which does not move (the focus ring stays on the track) */
+  @media (pointer: coarse), (max-width: 40rem) {
+    .switch__input {
+      inset: auto;
+      top: 50%;
+      left: 50%;
+      width: max(100%, var(--size-hit));
+      height: max(100%, var(--size-hit));
+      translate: -50% -50%;
+    }
+  }
+
+  .switch__track {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    padding: var(--spacing-1);
+    border-radius: var(--radius-full);
+    background-color: var(--color-skeleton);
+    transition: background-color var(--duration-fast) var(--ease-standard);
+  }
+  .switch__input:checked + .switch__track { background-color: var(--color-accent); }
+  .switch__input:focus-visible + .switch__track {
+    outline: var(--focus-outline-width) var(--focus-outline-style) var(--focus-outline-color);
+    outline-offset: var(--focus-outline-offset);
+  }
+
+  .switch__thumb {
+    width: var(--size-switch-thumb);
+    height: var(--size-switch-thumb);
+    border-radius: var(--radius-full);
+    background-color: var(--color-background-surface);
+    transition:
+      transform var(--duration-fast) var(--ease-standard),
+      width var(--duration-fast) var(--ease-standard),
+      height var(--duration-fast) var(--ease-standard);
+  }
+  /* on: the larger thumb, a hair from the track's far end */
+  .switch__input:checked + .switch__track .switch__thumb {
+    width: var(--size-switch-thumb-on);
+    height: var(--size-switch-thumb-on);
+    transform: translateX(calc(var(--size-switch-width) - var(--size-switch-thumb-on) - var(--spacing-1) - var(--spacing-0-5)));
+  }
+
+  /* the whole row answers the pointer */
+  @media (hover: hover) and (forced-colors: none) {
+    .switch-field:not(.switch-field--disabled):hover .switch__track { background-color: color-mix(in srgb, var(--color-skeleton), var(--color-tint-hover) var(--mix-hover-surface)); }
+    .switch-field:not(.switch-field--disabled):hover .switch__input:checked + .switch__track { background-color: color-mix(in srgb, var(--color-accent), var(--color-tint-hover) var(--mix-hover-accent)); }
+  }
+  @media (forced-colors: none) and (pointer: fine) {
+    .switch-field:not(.switch-field--disabled):active .switch__track,
+    .switch-field:not(.switch-field--disabled):active .switch__thumb {
+      background-image: linear-gradient(var(--color-overlay-pressed), var(--color-overlay-pressed));
+    }
+  }
+  @media (forced-colors: active) {
+    .switch__track { border: var(--size-hairline) solid CanvasText; background-color: Canvas; }
+    .switch__input:checked + .switch__track { background-color: Highlight; }
+    .switch__thumb { background-color: CanvasText; }
+    .switch__input:checked + .switch__track .switch__thumb { background-color: HighlightText; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .switch__track,
+    .switch__thumb { transition-duration: 0s; }
+  }
+
+  .switch-field--disabled .switch__track { opacity: var(--opacity-disabled); }
+  .switch-field--disabled .switch__input,
+  .switch-field--disabled .switch-field__label { cursor: not-allowed; }
+}

@@ -24,22 +24,15 @@ import type { PendingApproval } from "../../model/types";
 import { canvasStore, screenOf, useCanvas } from "../../editor/canvasState";
 import { useAppStore } from "../useAppStore";
 import { isInsideOverlay, isTypingTarget } from "../keys";
-import { useBreakpoint } from "../theme/media";
-import { SPACING } from "../theme/tokens";
+import { spacingPx, useBreakpoint } from "../theme/media";
 import { CANVAS_REGION_ID } from "../shell/ids";
 import { cornersOf, requestText, targetShapes } from "./describe";
 import { showRequest, useReview } from "./review";
 import { useResolveApproval } from "./useResolve";
 import { ApprovalCard } from "./ApprovalCard";
 
-/** What a rem is when the page cannot say (no layout yet, as in a test DOM). */
-const BROWSER_DEFAULT_FONT_PX = 16;
-
 /** A spacing token in pixels, for geometry placed from script. */
-const px = (step: keyof typeof SPACING): number => {
-  const root = typeof document !== "undefined" ? parseFloat(getComputedStyle(document.documentElement).fontSize) : NaN;
-  return parseFloat(SPACING[step]) * (Number.isFinite(root) && root > 0 ? root : BROWSER_DEFAULT_FONT_PX);
-};
+const px = spacingPx;
 
 interface Box {
   x0: number;

@@ -3,7 +3,7 @@
  * AlertDialog. Fetched the first time it opens (src/ui/LazyLayer.tsx).
  */
 
-import { AlertDialog } from "../primitives";
+import { AlertDialog } from "../primitives/astryx";
 import type { LayerProps } from "../LazyLayer";
 
 export function ClearPlanDialog({ isOpen, onOpenChange, onAction }: LayerProps & { onAction(): void }) {

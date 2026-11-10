@@ -6,7 +6,7 @@
  */
 
 import type { Swatch } from "./color";
-import { FONT, FONT_SIZE, FONT_WEIGHT, LEADING, MOTION, OPACITY, PALETTE, RADIUS, SHADOW, SIZE, SPACING, Z } from "./tokens";
+import { FONT, FONT_SIZE, FONT_WEIGHT, LEADING, MIX, MOTION, OPACITY, PALETTE, RADIUS, SHADOW, SIZE, SPACING, TOOLTIP, Z } from "./tokens";
 
 const { chrome, accent, agent, status, sheet, scene, dark } = PALETTE;
 
@@ -174,6 +174,7 @@ export const LIGHT_TOKENS: TokenSheet = Object.freeze({
   "--ease-in": MOTION.easeIn,
   "--ease-standard": ref("--ease-out"),
   "--press-offset": MOTION.pressOffset,
+  "--scale-enter": MOTION.enterScale,
   // sizes
   "--size-control": SIZE.control,
   "--size-control-sm": SIZE.controlSm,
@@ -199,6 +200,15 @@ export const LIGHT_TOKENS: TokenSheet = Object.freeze({
   "--size-measure": SIZE.measure,
   "--size-hairline": SIZE.hairline,
   "--size-focus-ring": SIZE.focusRing,
+  "--size-tab-indicator": SIZE.tabIndicator,
+  "--size-tooltip": SIZE.tooltip,
+  /** a tooltip's gap from its control, and the room it keeps from the viewport's edges */
+  "--tooltip-offset": ref(`--spacing-${TOOLTIP.offset}`),
+  "--tooltip-gutter": ref(`--spacing-${TOOLTIP.gutter}`),
+  "--size-switch-width": SIZE.switchWidth,
+  "--size-switch-height": SIZE.switchHeight,
+  "--size-switch-thumb": SIZE.switchThumb,
+  "--size-switch-thumb-on": SIZE.switchThumbOn,
   "--size-icon-stroke": SIZE.iconStroke,
   /** a request card floating beside its target on the plan */
   "--size-request-card": "calc(var(--size-activity) - var(--spacing-8))",
@@ -208,6 +218,9 @@ export const LIGHT_TOKENS: TokenSheet = Object.freeze({
   "--ratio-thumb": "4 / 3",
   "--opacity-disabled": OPACITY.disabled,
   "--opacity-quiet": OPACITY.quiet,
+  /** how much of the hover tint a hovered surface and a hovered accent fill take */
+  "--mix-hover-surface": MIX.hoverSurface,
+  "--mix-hover-accent": MIX.hoverAccent,
   // layers
   ...scaleVars("--z", Z),
 });

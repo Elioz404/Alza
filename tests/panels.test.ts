@@ -3,7 +3,7 @@
  * names entities and selects them, Notes and the composer leave the human's note, the Library
  * starts placing, and the tool runner runs a tool as the human.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { store, actions } from "../src/model/store";
@@ -25,13 +25,8 @@ import { loadDeferred } from "./support/deferred";
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
-const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  Object.defineProperty(Element.prototype, "animate", { value: undefined, configurable: true, writable: true });
-});
-afterAll(() => {
-  if (animate) Object.defineProperty(Element.prototype, "animate", animate);
 });
 beforeEach(() => {
   resetStore();

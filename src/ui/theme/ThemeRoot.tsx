@@ -1,23 +1,25 @@
 /**
- * The root every Astryx component needs above it: the built stone theme (whose `__built` flag
- * keeps Astryx from writing a <style> at run time, which the CSP would refuse) and the layer
- * provider that toasts and anchored layers hang from.
+ * The root the page is drawn under: the element the theme's scoped rules and the tokens'
+ * selectors reach (`[data-astryx-theme]`), in the page's colour mode. It draws nothing itself
+ * (display: contents, in theme.css) and needs no script: `<html>` carries the same two
+ * attributes from index.html, so layers drawn outside the app's tree (tooltips, menus, toasts)
+ * are themed the same way.
  *
- * The page runs light. Its tokens (tokens.ts) override the stone theme's from the stylesheet;
- * the theme object here only names the theme and carries its icon registry.
+ * Astryx's own runtime is not needed for any of this, so none of it is on the first load. The
+ * Astryx components that open later (dialogs, menus, popovers, toasts, number inputs) find the
+ * theme by name on `<html>` and its registration in src/ui/primitives/astryx.ts, which arrives
+ * with them.
  */
 
 import type { ReactNode } from "react";
-import { Theme } from "@astryxdesign/core/theme";
-import { LayerProvider } from "@astryxdesign/core/Layer";
-import { stoneTheme } from "@astryxdesign/theme-stone/built";
+import { THEME } from "./tokens";
 
-export const THEME_NAME = stoneTheme.name;
+export const THEME_NAME = THEME.name;
 
 export function ThemeRoot({ children }: { children: ReactNode }) {
   return (
-    <Theme theme={stoneTheme} mode="light">
-      <LayerProvider>{children}</LayerProvider>
-    </Theme>
+    <div className="theme-root" data-astryx-theme={THEME.name} data-theme={THEME.mode}>
+      {children}
+    </div>
   );
 }

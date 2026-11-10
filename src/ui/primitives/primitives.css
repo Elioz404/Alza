@@ -59,11 +59,6 @@
   .delta--destructive .delta__tri { fill: var(--color-error-muted); stroke: var(--color-error); }
   .delta--destructive .delta__num { fill: var(--color-text-error); }
 
-  /* ---------------------------------------------------------------- tooltip content */
-  .tip { display: inline-flex; align-items: center; gap: var(--spacing-2); flex-wrap: wrap; max-width: var(--size-measure); }
-  .tip__sub { flex-basis: 100%; font-weight: var(--font-weight-regular); opacity: var(--opacity-quiet); }
-  .tip__kbd { color: inherit; }
-
   /* ---------------------------------------------------------------- buttons */
   .btn {
     position: relative;
@@ -232,11 +227,11 @@
   .badge--error { background: var(--color-error-muted); color: var(--color-text-error); }
   .badge--warning { background: var(--color-warning-muted); color: var(--color-text-warning); }
 
-  /* ---------------------------------------------------------------- kbd word keys */
-  /* Del and Space, drawn by Kbd.tsx beside Astryx's own chips: the same declarations, from the
-     same tokens, as Astryx's Kbd key (tests/theme.test.ts holds the two to each other) */
+  /* ---------------------------------------------------------------- kbd (Kbd.tsx) */
+  /* One chip per key: exactly Astryx's key declarations, from the same tokens (tests/theme.test.ts
+     holds the two to each other), so a chip looks the same wherever it is drawn. */
   .kbd { display: inline-flex; flex-shrink: 0; align-items: center; gap: var(--spacing-1); }
-  .kbd__word {
+  .kbd__key {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -271,7 +266,8 @@
   /* Under a finger, or at phone width, the small controls answer a 44px band around their box
      without moving it: as tall as --size-hit, and as wide when the box is narrower. Rows of
      them (the zoom bar, a segmented switch) grow only in height, so no band takes a
-     neighbour's taps. Astryx's own segments measure their bands; they get the width. */
+     neighbour's taps. A segment of a segmented control draws the same band and gets the width
+     as well (segmented.css); a switch's control grows both ways over its track (switch.css). */
   @media (pointer: coarse), (max-width: 40rem) {
     .btn--sm::before,
     .text-link::before,
@@ -292,6 +288,5 @@
     .text-link,
     .presence,
     .zoom__value { position: relative; }
-    .astryx-segmented-control-item { min-inline-size: var(--size-hit); }
   }
 }

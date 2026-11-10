@@ -5,7 +5,7 @@
  */
 
 import { useId } from "react";
-import { NumberField } from "../primitives";
+import { NumberField } from "../primitives/NumberField";
 
 /** A number in metres (or another unit) that commits on Enter or when the field is left. */
 export function MeasureField({

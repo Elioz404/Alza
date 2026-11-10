@@ -2,15 +2,26 @@
  * What draws the notices useNotify() asks for: Astryx's toast, with an Undo button on an undo
  * offer. Fetched apart from the first chunk (src/ui/deferred.tsx); the shell mounts it, and
  * notices asked for before it arrived are shown as it connects.
+ *
+ * The toasts hang from Astryx's layer provider, which arrives here with them: the page's root
+ * carries no Astryx at all, so the first paint does not wait for its runtime.
  */
 
 import { useEffect } from "react";
-import { useToast } from "../primitives";
+import { LayerProvider, useToast } from "../primitives/astryx";
 import { dispatch } from "../../model/commands";
 import { MOTION } from "../theme/tokens";
 import { connectNoticeHost, type Notice } from "./useNotify";
 
 export function NoticeHost() {
+  return (
+    <LayerProvider>
+      <Notices />
+    </LayerProvider>
+  );
+}
+
+function Notices() {
   const toast = useToast();
   useEffect(
     () =>

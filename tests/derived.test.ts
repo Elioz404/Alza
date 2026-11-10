@@ -4,7 +4,7 @@
  * never leave the page describing a different set. (The request card's account of a request,
  * and nothing the caller typed, is tested in activityApprovals.test.ts.)
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { DESTRUCTIVE_TOOL_NAMES, TOOLS } from "../src/mcp/tools";
@@ -31,14 +31,8 @@ async function render(component: () => ReturnType<typeof createElement>): Promis
   return el;
 }
 
-// happy-dom rejects an animation promise when an Astryx control unmounts (as in shell.test.ts)
-const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  Object.defineProperty(Element.prototype, "animate", { value: undefined, configurable: true, writable: true });
-});
-afterAll(() => {
-  if (animate) Object.defineProperty(Element.prototype, "animate", animate);
 });
 beforeEach(() => {
   resetStore();

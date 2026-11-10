@@ -4,7 +4,8 @@
  * shell fetches it the first time it opens (src/ui/LazyLayer.tsx).
  */
 
-import { Dialog, DialogHeader, Kbd } from "../primitives";
+import { Kbd } from "../primitives";
+import { Dialog, DialogHeader } from "../primitives/astryx";
 import type { LayerProps } from "../LazyLayer";
 import { SHORTCUT_SHEET } from "./shortcuts";
 

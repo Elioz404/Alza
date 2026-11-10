@@ -1,0 +1,101 @@
+/*
+ * The segmented control (SegmentedControl.tsx). Tokens only: a neutral well, the chosen segment
+ * raised on the surface with the low shadow, the hover and press overlays on the others.
+ */
+@layer alza-components {
+  .seg {
+    --seg-padding: var(--spacing-0-5);
+    position: relative;
+    isolation: isolate;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-0-5);
+    width: fit-content;
+    padding: var(--seg-padding);
+    border-radius: var(--radius-element);
+    background-color: var(--color-neutral);
+  }
+  /* a control whose labels show may shrink with its row; an icon-only one keeps its size */
+  .seg:has(.seg__label) { max-width: 100%; min-width: 0; }
+  .seg--fill { display: flex; width: 100%; }
+
+  .seg__item {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-1);
+    min-width: 0;
+    height: calc(var(--size-element-md) - 2 * var(--seg-padding));
+    padding: 0 var(--spacing-3);
+    border: 0;
+    /* concentric with the well */
+    border-radius: max(0px, calc(var(--radius-element) - var(--seg-padding)));
+    background-color: transparent;
+    color: var(--color-text-secondary);
+    font-family: inherit;
+    font-size: var(--text-label-size);
+    font-weight: var(--font-weight-medium);
+    line-height: var(--text-label-leading);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      color var(--duration-fast) var(--ease-standard),
+      background-color var(--duration-fast) var(--ease-standard),
+      box-shadow var(--duration-fast) var(--ease-standard);
+  }
+  .seg--sm .seg__item {
+    height: calc(var(--size-element-sm) - 2 * var(--seg-padding));
+    padding: 0 var(--spacing-2);
+    font-size: var(--text-supporting-size);
+  }
+  .seg--fill .seg__item { flex: 1; }
+  .seg__item--icon { flex-shrink: 0; }
+
+  .seg__item[aria-checked="true"] {
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-semibold);
+    background-color: var(--color-background-surface);
+    box-shadow: var(--shadow-low);
+  }
+  @media (forced-colors: active) {
+    .seg__item[aria-checked="true"] { forced-color-adjust: none; background-color: Highlight; color: HighlightText; }
+  }
+  .seg__item[aria-disabled="true"] { cursor: default; color: var(--color-text-disabled); }
+
+  .seg__item:not([aria-checked="true"]):not([aria-disabled="true"]):active { background-color: var(--color-overlay-pressed); }
+  @media (hover: hover) {
+    .seg__item:not([aria-checked="true"]):not([aria-disabled="true"]):hover { background-color: var(--color-overlay-hover); }
+    .seg__item:not([aria-checked="true"]):not([aria-disabled="true"]):active { background-color: var(--color-overlay-pressed); }
+  }
+  @media (pointer: coarse) {
+    .seg__item:not([aria-checked="true"]):active { background-color: transparent; }
+  }
+
+  .seg__icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: var(--size-icon-sm);
+    height: var(--size-icon-sm);
+  }
+  .seg--sm .seg__icon { width: var(--size-icon-xs); height: var(--size-icon-xs); }
+  .seg__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+  /* under a finger, or at phone width, a segment is at least a finger wide, and answers a band
+     --size-hit tall around its box without moving it (primitives.css, finger targets): only
+     the height grows, so no segment takes its neighbour's taps */
+  @media (pointer: coarse), (max-width: 40rem) {
+    .seg__item { min-inline-size: var(--size-hit); }
+    .seg__item::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 100%;
+      height: max(100%, var(--size-hit));
+      translate: -50% -50%;
+    }
+  }
+}

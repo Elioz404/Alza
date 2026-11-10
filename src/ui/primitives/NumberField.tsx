@@ -1,10 +1,11 @@
 /**
  * `NumberField` is Astryx's NumberInput (keyboard stepping, parsing, min/max, commit on Enter
  * and blur) with the unit after the value and the drawing face for the figures. Kept apart from
- * Field.tsx: only the selection inspectors use it, and they are not in the first chunk.
+ * Field.tsx and out of the primitives' index: only the selection inspectors use it, and they are
+ * not in the first chunk, so it is imported from here (with Astryx, through ./astryx).
  */
 
-import { NumberInput, type NumberInputProps } from "@astryxdesign/core/NumberInput";
+import { NumberInput, type NumberInputProps } from "./astryx";
 
 export type NumberFieldProps = Omit<NumberInputProps, "units" | "size" | "hasClear" | "onChange"> & {
   /** the unit shown after the value: "m", "cm", "°", "m²" */

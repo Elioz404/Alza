@@ -20,16 +20,26 @@
 /** A StyleX atomic class name: `x` and a short base-36 hash. */
 export const ATOMIC_CLASS = /\bx[a-z0-9]{4,9}\b/g;
 
+/**
+ * A custom property StyleX registers (`@property --x-paddingInline`) and code sets inline. Its
+ * keyframes are named with an atomic name and `-B` (`@keyframes x1abcd-B`), so ATOMIC_CLASS
+ * already finds those in code.
+ */
+const STYLEX_PROPERTY = /--x-[\w-]+/g;
+
+/** The StyleX at-rules that define a name for other rules to use: `[keyword, name]`. */
+const STYLEX_DEFINITION = /^@(keyframes|property)\s+(x[a-z0-9]{4,9}-B|--x-[\w-]+)$/i;
+
 /** At-rules whose block holds rules of their own, to be filtered too. */
 const GROUPING = /^@(media|supports|layer|container|scope|document|starting-style)\b/i;
 
 /**
- * Every atomic class name a piece of code mentions.
+ * Every atomic class name, and every StyleX custom property, a piece of code mentions.
  * @param {string} code
  * @returns {Set<string>}
  */
 export function atomicClassesIn(code) {
-  return new Set(code.match(ATOMIC_CLASS) ?? []);
+  return new Set([...(code.match(ATOMIC_CLASS) ?? []), ...(code.match(STYLEX_PROPERTY) ?? [])]);
 }
 
 /**
@@ -284,7 +294,82 @@ export function splitAtomicCss(css, first, all) {
   splitRules(css, 0, css.length, null, survey);
   const order = new Map();
   for (const [name, state] of survey.layers) if (state.moved && !state.nested) order.set(name, state.segment + 1);
-  return splitRules(css, 0, css.length, null, { first, all, layers: new Map(), order, declared: new Set() });
+  const sheets = splitRules(css, 0, css.length, null, { first, all, layers: new Map(), order, declared: new Set() });
+  // only the split moves definitions: with nothing moved, the sheet is left as it was
+  if (!sheets.later) return sheets;
+  const definitions = takeUnusedDefinitions(sheets.now, first);
+  return { now: definitions.kept, later: sheets.later + definitions.taken };
+}
+
+/**
+ * How many times `name` appears in `css` as a whole name (not inside a longer one).
+ * @param {string} css
+ * @param {string} name
+ */
+function occurrences(css, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (css.match(new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`, "g")) ?? []).length;
+}
+
+/**
+ * The StyleX keyframes and registered properties no rule of `css` uses and the first load's
+ * code does not name, taken out of it (kept inside the grouping rules around them) for the
+ * second sheet: only lazily fetched code can use them. A definition is used when its name
+ * appears in `css` anywhere but in itself. Repeated until none is left, since taking one
+ * (keyframes that read a property) can leave another unused.
+ *
+ * @param {string} css
+ * @param {Set<string>} first
+ * @returns {{ kept: string, taken: string }}
+ */
+function takeUnusedDefinitions(css, first) {
+  let kept = css;
+  let taken = "";
+  for (;;) {
+    const whole = kept;
+    /** @param {string} name @param {string} rule */
+    const unused = (name, rule) => !first.has(name) && !first.has(name.replace(/-B$/, "")) && occurrences(whole, name) <= occurrences(rule, name);
+    const pass = takeDefinitions(whole, 0, whole.length, unused);
+    if (!pass.taken) return { kept, taken };
+    kept = pass.kept;
+    taken += pass.taken;
+  }
+}
+
+/**
+ * One pass of `takeUnusedDefinitions` over the block content between `from` and `to`.
+ * @param {string} css
+ * @param {number} from
+ * @param {number} to
+ * @param {(name: string, rule: string) => boolean} take
+ * @returns {{ kept: string, taken: string }}
+ */
+function takeDefinitions(css, from, to, take) {
+  let kept = "";
+  let taken = "";
+  let i = from;
+  while (i < to) {
+    const end = preludeEnd(css, i);
+    if (end >= to || css[end] !== "{") {
+      const stop = Math.min(end + 1, to);
+      kept += css.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    const close = blockEnd(css, end);
+    const prelude = css.slice(i, end);
+    const head = prelude.trim();
+    const definition = head.match(STYLEX_DEFINITION);
+    if (definition && take(definition[2], css.slice(i, close))) taken += css.slice(i, close);
+    else if (GROUPING.test(head)) {
+      const inner = takeDefinitions(css, end + 1, close - 1, take);
+      // a layer's block stays even when emptied: it still declares the layer's place in the order
+      if (inner.kept.trim() || /^@layer\b/i.test(head)) kept += `${prelude}{${inner.kept}}`;
+      if (inner.taken) taken += `${prelude}{${inner.taken}}`;
+    } else kept += css.slice(i, close);
+    i = close;
+  }
+  return { kept, taken };
 }
 
 /**

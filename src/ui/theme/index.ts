@@ -3,17 +3,12 @@
  * theme.css declares the cascade's layer order, so it must be the first CSS on the page.
  *
  * - virtual:alza-tokens.css is rendered from tokens.ts at build time (vite.config.ts).
- * - virtual:astryx-slide-rules.css is the stylesheet Astryx's anchored layers would otherwise
- *   inject as a <style> at run time, which the CSP refuses. It is built from the installed
- *   Astryx, so it can never drift from it; index.html carries the marker element that tells
- *   Astryx it is already on the page.
- * - virtual:astryx-touch-action.css holds the touch-action rules Astryx's gesture host would
- *   write at run time (a <style>, where an engine has no constructable sheets); the build swaps
- *   its writer for one that only marks the element (config/astryxTouchAction.js).
+ *
+ * The two stylesheets that stand in for what Astryx's runtime would write (its anchored layers'
+ * slide rules, its gesture host's touch-action rules) arrive with that runtime, after the first
+ * paint: src/ui/primitives/astryx.ts imports them.
  */
 import "./theme.css";
 import "virtual:alza-tokens.css";
-import "virtual:astryx-slide-rules.css";
-import "virtual:astryx-touch-action.css";
 
 export { ThemeRoot, THEME_NAME } from "./ThemeRoot";

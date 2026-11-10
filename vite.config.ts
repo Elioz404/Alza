@@ -13,6 +13,7 @@ import { renderTokenCss } from "./src/ui/theme/tokenSheet";
 import { TOUCH_ACTION_RULE_MODULE, touchActionCss, touchActionRuleSource } from "./config/astryxTouchAction.js";
 import { atomicClassesIn, purgeAtomicCss, splitAtomicCss } from "./config/purgeAtomicCss.js";
 import { checkBudgets, firstLoadFiles, type BundleLike } from "./config/budgets.js";
+import { checkFirstLoad, staticImportChains, type BundleWithModules } from "./config/firstLoad.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -40,6 +41,9 @@ async function astryxSlideRules(): Promise<string> {
   return mod.slideRulesCss();
 }
 
+/** How Rollup marks a module no file backs (a virtual stylesheet, a bundler helper). */
+const VIRTUAL_PREFIX = "\0";
+
 /**
  * Serves VIRTUAL_STYLES as ordinary CSS modules, so they are bundled, hashed and attached to the
  * studio's entry like any other stylesheet. A change to tokens.ts restarts the dev server (it is
@@ -51,18 +55,17 @@ function alzaStyles(): Plugin {
     [VIRTUAL_STYLES.slideRules, astryxSlideRules],
     [VIRTUAL_STYLES.touchAction, touchActionCss],
   ]);
-  const PREFIX = "\0";
   return {
     name: "alza-styles",
     resolveId(id) {
-      return ids.has(id) ? PREFIX + id : undefined;
+      return ids.has(id) ? VIRTUAL_PREFIX + id : undefined;
     },
     load(id) {
       // Astryx's touch-action writer, replaced by one that only marks the element: its rules
       // are already in VIRTUAL_STYLES.touchAction (config/astryxTouchAction.js)
       if (id.split(sep).join("/").endsWith(TOUCH_ACTION_RULE_MODULE)) return touchActionRuleSource();
-      if (!id.startsWith(PREFIX)) return undefined;
-      return ids.get(id.slice(PREFIX.length))?.();
+      if (!id.startsWith(VIRTUAL_PREFIX)) return undefined;
+      return ids.get(id.slice(VIRTUAL_PREFIX.length))?.();
     },
   };
 }
@@ -174,9 +177,11 @@ function reachableFrom(bundle: Rollup.OutputBundle, site: Site): Set<string> {
  * belongs to no site fails the build: it would otherwise ship with no headers of its own.
  *
  * Before re-filing, each site's first load (its entry chunk, the chunks that one imports
- * statically, and their stylesheets) is measured against its budget in config/budgets.js, after
- * every other plugin has finished with the output; a build over any budget fails, naming the
- * site, the size, the budget and the files.
+ * statically, and their stylesheets) is checked, after every other plugin has finished with the
+ * output: it may hold none of the modules config/firstLoad.js forbids (Astryx's runtime, which
+ * only deferred code may bring), and it must be within its budget in config/budgets.js. Either
+ * failure stops the build, naming the site and what is wrong: the modules and the chain of
+ * project files, from the entry point, that brought each in, or the size, the budget and the files.
  */
 function perSiteOutput(origins: { studio: string; supplier: string }): Plugin {
   let publicDir = "";
@@ -191,6 +196,27 @@ function perSiteOutput(origins: { studio: string; supplier: string }): Plugin {
     generateBundle: {
       order: "post",
       handler(_options, bundle) {
+        // the project files (not packages, not virtual modules) on the static import chain from
+        // a site's entry module to `id`, to name in a failure; one walk of the graph per site
+        const chains = new Map<string, (target: string) => string[] | null>();
+        const chainsOf = (site: string) => {
+          let of = chains.get(site);
+          if (!of) {
+            const entry = Object.values(bundle).find((o): o is Rollup.OutputChunk => o.type === "chunk" && o.isEntry && o.name === site);
+            const root = entry?.facadeModuleId;
+            of = root ? staticImportChains(root, (id) => this.getModuleInfo(id)?.importedIds ?? []) : () => null;
+            chains.set(site, of);
+          }
+          return of;
+        };
+        const isProject = (id: string) => !id.split(sep).join("/").includes("/node_modules/") && !id.startsWith(VIRTUAL_PREFIX);
+        const chainOf = (site: string, id: string) =>
+          chainsOf(site)(id)
+            ?.filter(isProject)
+            .map((step) => relative(__dirname, step).split(sep).join("/")) ?? null;
+        const forbidden = checkFirstLoad(bundle as unknown as BundleWithModules, SITES, chainOf);
+        if (forbidden.length > 0) this.error(`forbidden in the first load:\n${forbidden.join("\n")}`);
+
         const budgets = checkBudgets(bundle as unknown as BundleLike, (bytes) => gzipSync(bytes).length);
         for (const line of budgets.report) logger.info(line);
         if (budgets.violations.length > 0) this.error(`over budget:\n${budgets.violations.join("\n")}`);

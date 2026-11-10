@@ -65,6 +65,15 @@
     text-underline-offset: var(--link-underline-offset);
   }
 
+  /* The theme root (ThemeRoot.tsx): no box of its own, the theme's ink and face, its mode. */
+  .theme-root {
+    display: contents;
+    color: var(--color-text-primary);
+    font-family: var(--font-family-body);
+  }
+  .theme-root[data-theme="light"] { color-scheme: light; }
+  .theme-root[data-theme="dark"] { color-scheme: dark; }
+
   /* Visually hidden, still read. */
   .sr-only {
     position: absolute;

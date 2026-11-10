@@ -38,8 +38,8 @@ export const MARGIN = 0.02;
  */
 export const SHIPPED = Object.freeze({
   studio: {
-    js: { min: 925_187, gzip: 301_474 },
-    css: { min: 210_305, gzip: 31_689 },
+    js: { min: 467_901, gzip: 152_204 },
+    css: { min: 110_997, gzip: 18_767 },
   },
   partner: {
     js: { min: 8_991, gzip: 4_209 },

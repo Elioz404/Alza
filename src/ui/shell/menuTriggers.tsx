@@ -10,7 +10,8 @@
  */
 
 import type { KeyboardEvent, Ref } from "react";
-import { IconChevronDown, IconDownload, type MenuTriggerProps } from "../primitives";
+import { IconChevronDown, IconDownload } from "../primitives";
+import type { MenuTriggerProps } from "../primitives/astryx";
 import { useAppStore } from "../useAppStore";
 
 /** What a trigger is given: Astryx's trigger props once the menu is here, the stand-in's before. */

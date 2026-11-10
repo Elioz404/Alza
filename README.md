@@ -275,27 +275,34 @@ ALZA_CHROMIUM_PATH=/path/to/chrome npm run e2e
 ```
 
 Stack: Vite 7 · React 19 · TypeScript (strict) · zustand · Three.js (ACES tone mapping,
-PCF soft shadows) · SVG 2D · Astryx (dialogs, menus, tooltips, tabs, switches) · vitest ·
+PCF soft shadows) · SVG 2D · Astryx (dialogs, menus, popovers, toasts, number inputs) ·
+native tabs, segmented controls, switches and tooltips on the same tokens · vitest ·
 Playwright. Deploys as a fully static site.
 
 First load, measured on `npm run build:local`: the studio's first-load script (its entry
-chunk and the small transport chunk it shares with the partner) is 924 KB minified (301 KB
-gzip), and its stylesheet 210 KB (32 KB gzip). First paint needs only the shell, the plan and
+chunk and the small transport chunk it shares with the partner) is 468 KB minified (152 KB
+gzip), and its stylesheet 111 KB (19 KB gzip). First paint needs only the shell, the plan and
 the plan's Properties; the other tabs, the selection inspectors, Activity's details and
 Developer tools, the plan and Export menus, notices, the first-run state, the approval card
 and the two dialogs are chunks of their own, fetched once the browser is idle after the first
 paint (`src/ui/deferred.tsx`), so the first click on any of them finds its code already here.
 three.js still arrives only with the 3D view. Of what the first load holds, about 180 KB is
-React DOM, 110 KB zod (the model's and the tools' schemas), 200 KB the studio's own code, and
-most of the rest the Astryx runtime the first-paint controls need (tabs, the Plan/3D switch,
-switches, tooltips); before the Astryx-based interface the entry script was 383 KB, and with
-every surface loaded eagerly it was 1.11 MB (360 KB gzip). The build drops every Astryx style
-rule no chunk can use, and keeps in the render-blocking stylesheet only the rules the first
-load's own code can use: the rest (about 73 KB, 12 KB gzip: menus, notices, dialogs, number
-fields) is a stylesheet of its own that Vite links when the first chunk needing it is fetched,
-with each rule in an ordered sub-layer so the cascade is exactly what it was
-(`config/purgeAtomicCss.js`). It fails when a site's first load goes over its budget in
-`config/budgets.js`: what the site shipped, plus 2% (script and stylesheet, minified and gzip).
+React DOM, 110 KB zod (the model's and the tools' schemas), and the rest the studio's own
+code. The controls the first paint draws (the panel's tabs, the Plan/3D switch and the other
+segmented controls, the approval switch, tooltips and shortcut chips) are the studio's own,
+drawn on the design tokens, so Astryx's runtime arrives only with the dialogs, menus,
+popovers, notices and number fields that need it: with it on the first load the script was
+925 KB (301 KB gzip) and the stylesheet 210 KB, so about 457 KB of script (149 KB gzip) left
+the first load, spread over several deferred chunks (the largest, `astryx-*.js`, is 230 KB).
+The build fails if any Astryx module, or a package only Astryx uses, reaches a site's first
+load (`config/firstLoad.js`), naming the modules and the chain of static imports, from the
+entry point to the file that imported them, that brought them in. It drops every Astryx
+style rule no chunk can use, and keeps in the render-blocking stylesheet only Astryx's reset,
+theme and tokens: its component rules, with the keyframes and registered properties only
+they use (about 113 KB, 18 KB gzip), are a stylesheet of their own that Vite links when the
+first chunk needing it is fetched, with each rule in an ordered sub-layer so the cascade is exactly what it was (`config/purgeAtomicCss.js`). It also
+fails when a site's first load goes over its budget in `config/budgets.js`: what the site
+shipped, plus 2% (script and stylesheet, minified and gzip).
 
 ## What building this taught me about the spec
 

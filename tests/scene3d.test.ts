@@ -10,7 +10,7 @@
  *
  * The view's own chrome (the camera switch and the hint bar) is checked here too.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Profiler, act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { pageActions, store } from "../src/model/store";
@@ -45,16 +45,8 @@ let host: HTMLDivElement;
 let root: Root;
 let renders = 0;
 
-// happy-dom's Animation.cancel() rejects a promise nobody observes when Astryx's segmented
-// control (the camera switch) unmounts. Without element.animate, Astryx sets each end state
-// directly, as it does for reduced motion (the same shim as tests/shell.test.ts).
-const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  Object.defineProperty(Element.prototype, "animate", { value: undefined, configurable: true, writable: true });
-});
-afterAll(() => {
-  if (animate) Object.defineProperty(Element.prototype, "animate", animate);
 });
 beforeEach(async () => {
   resetStore();

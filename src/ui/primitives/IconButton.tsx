@@ -45,18 +45,30 @@ export function IconButton({
   ...rest
 }: IconButtonProps) {
   const reasonId = useId();
+  const hintId = useId();
   const blocked = Boolean(disabledReason);
   const classes = ["icon-btn", `icon-btn--${variant}`, className ?? ""].filter(Boolean).join(" ");
+  // The tooltip's first line is the label, which already names the button, and its shortcut is
+  // aria-keyshortcuts: the tooltip does not describe the button, its second line does (the
+  // reason it cannot act, or the hint), so nothing is read twice.
+  const describedBy = [rest["aria-describedby"], blocked ? reasonId : hint ? hintId : undefined].filter(Boolean).join(" ") || undefined;
   return (
     <Tip
       content={
         <>
           {label}
-          {hint || disabledReason ? <span className="tip__sub">{disabledReason ?? hint}</span> : null}
+          {blocked ? (
+            <span className="tip__sub">{disabledReason}</span>
+          ) : hint ? (
+            <span id={hintId} className="tip__sub">
+              {hint}
+            </span>
+          ) : null}
         </>
       }
       shortcut={blocked ? undefined : shortcut}
       placement={tooltipPlacement}
+      describes={false}
     >
       <button
         {...rest}
@@ -66,7 +78,7 @@ export function IconButton({
         aria-label={label}
         aria-pressed={isPressed}
         aria-disabled={blocked || undefined}
-        aria-describedby={blocked ? reasonId : rest["aria-describedby"]}
+        aria-describedby={describedBy}
         aria-keyshortcuts={shortcut ? ariaShortcut(shortcut) : undefined}
         onClick={blocked ? (e) => e.preventDefault() : onClick}
       >

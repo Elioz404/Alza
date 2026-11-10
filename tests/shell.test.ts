@@ -4,7 +4,7 @@
  * cannot happen (3D on an empty plan, Undo with nothing to undo, Export in 2D), and the page
  * renders with no <style> element, which the CSP would refuse.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { store } from "../src/model/store";
@@ -41,16 +41,8 @@ const key = (k: string, init: KeyboardEventInit = {}, target?: EventTarget) => {
   return e;
 };
 
-// happy-dom's Animation.cancel() rejects a promise nobody observes when Astryx's segmented
-// control unmounts. Without element.animate, Astryx sets each end state directly, as it does
-// for reduced motion, which is all these tests read.
-const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  Object.defineProperty(Element.prototype, "animate", { value: undefined, configurable: true, writable: true });
-});
-afterAll(() => {
-  if (animate) Object.defineProperty(Element.prototype, "animate", animate);
 });
 beforeEach(() => {
   resetStore();
@@ -229,12 +221,32 @@ describe("the rendered shell", () => {
 });
 
 describe("shortcut chips", () => {
+  it("draw one chip per key, with one spoken name for the shortcut", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () =>
+      r.render(createElement("div", null, createElement(Kbd, { keys: "mod+z" }), createElement(Kbd, { keys: "shift++" }), createElement(Kbd, { keys: "esc" }))),
+    );
+    const [undo, zoomIn, esc] = [...host.querySelectorAll<HTMLElement>('[role="img"]')];
+    // happy-dom is not an Apple platform: the modifier is Control, written Ctrl
+    expect([...undo.querySelectorAll(".kbd__key")].map((k) => k.textContent)).toEqual(["Ctrl", "Z"]);
+    expect(undo.getAttribute("aria-label")).toBe("Control + Z");
+    expect(zoomIn.getAttribute("aria-label")).toBe("Shift + Plus");
+    expect(esc.textContent).toBe("Esc");
+    expect(esc.getAttribute("aria-label")).toBe("Escape");
+    // the chips themselves are not read: the shortcut's name is
+    for (const key of host.querySelectorAll(".kbd__key")) expect(key.getAttribute("aria-hidden")).toBe("true");
+    await act(async () => r.unmount());
+    host.remove();
+  });
+
   it("write word keys as a keyboard does, not in capitals", async () => {
     const host = document.createElement("div");
     document.body.appendChild(host);
     const r = createRoot(host);
     await act(async () => r.render(createElement("div", null, createElement(Kbd, { keys: "del" }), createElement(Kbd, { keys: "space" }))));
-    expect([...host.querySelectorAll(".kbd__word")].map((k) => k.textContent)).toEqual(["Del", "Space"]);
+    expect([...host.querySelectorAll(".kbd__key")].map((k) => k.textContent)).toEqual(["Del", "Space"]);
     expect(host.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Del");
     await act(async () => r.unmount());
     host.remove();

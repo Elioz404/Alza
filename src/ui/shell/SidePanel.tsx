@@ -95,7 +95,7 @@ export function SidePanel() {
   return (
     <aside id={SIDE_PANEL_ID} className="side" data-open={panelOpen} aria-label="Plan panel">
       <div className="side__head">
-        <Tabs role="tablist" value={tab} onChange={(v) => setTab(v as PanelTab)} aria-label="Panel" size="md" className="side__tabs">
+        <Tabs value={tab} onChange={(v) => setTab(v as PanelTab)} aria-label="Panel" className="side__tabs">
           {PANEL_TABS.map((t) => (
             <Tab
               key={t}

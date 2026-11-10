@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { contrast, oklch, oklchToHex, srgb } from "../src/ui/theme/color";
-import { BREAKPOINT, FLOOR_FILL, MATERIAL, PLAN_HEX, mediaQuery } from "../src/ui/theme/tokens";
+import { BREAKPOINT, FLOOR_FILL, MATERIAL, PLAN_HEX, THEME, mediaQuery } from "../src/ui/theme/tokens";
 import { DARK_TOKENS, LIGHT_TOKENS, renderTokenCss } from "../src/ui/theme/tokenSheet";
 import { FLOOR_FINISHES } from "../src/model/limits";
 import indexHtml from "../index.html?raw";
@@ -192,6 +192,25 @@ describe("Astryx under the CSP", () => {
     expect((stoneTheme as { __built?: boolean }).__built).toBe(true);
   });
 
+  it("the page names the theme it ships, in its mode, where Astryx's deferred components look for it", async () => {
+    const { stoneTheme } = await import("@astryxdesign/theme-stone/built");
+    expect(THEME.name).toBe(stoneTheme.name);
+    expect(indexHtml).toMatch(new RegExp(`<html[^>]* data-astryx-theme="${THEME.name}"`));
+    expect(indexHtml).toMatch(new RegExp(`<html[^>]* data-theme="${THEME.mode}"`));
+  });
+
+  it("only deferred code imports Astryx: the primitives' index and the theme root are free of it", () => {
+    const astryx = /from "@astryxdesign\//;
+    for (const path of ["../src/ui/primitives/index.ts", "../src/ui/theme/index.ts", "../src/ui/theme/ThemeRoot.tsx", "../src/main.tsx", "../src/ui/App.tsx"]) {
+      expect(MODULES[path]).toBeDefined();
+      expect(MODULES[path]).not.toMatch(astryx);
+    }
+    const importers = Object.entries(MODULES)
+      .filter(([, text]) => astryx.test(text))
+      .map(([path]) => path);
+    expect(importers).toEqual(["../src/ui/primitives/astryx.ts"]);
+  });
+
   it("nothing imports a component that injects styles at run time, or the barrel", () => {
     expect(Object.keys(MODULES).length).toBeGreaterThan(50);
     for (const text of Object.values(MODULES)) {
@@ -223,7 +242,7 @@ describe("shortcut chips are one chip", () => {
     const m = new RegExp(String.raw`\.${cls}(?::not\(#\\#\))*\{([a-z-]+):([^}]+)\}`).exec(astryxCss);
     if (m) astryxKey[m[1]] = m[2];
   }
-  const word = declarationsOf(read("src/ui/primitives/primitives.css"), ".kbd__word");
+  const chip = declarationsOf(read("src/ui/primitives/primitives.css"), ".kbd__key");
 
   it("finds Astryx's key", () => {
     expect(keyClasses.length).toBeGreaterThan(10);
@@ -231,14 +250,14 @@ describe("shortcut chips are one chip", () => {
   });
 
   it.each(["height", "min-width", "padding-inline", "border-radius", "background-color", "color", "font-family", "font-size", "font-weight", "line-height"])(
-    "the word keys (Del, Space) take Astryx's %s",
+    "every key chip takes Astryx's %s",
     (property) => {
-      expect(word[property]).toBe(astryxKey[property]);
+      expect(chip[property]).toBe(astryxKey[property]);
     },
   );
 
   it("and its raised lower edge", () => {
-    const [width, style, color] = word["border-bottom"].split(/\s+/);
+    const [width, style, color] = chip["border-bottom"].split(/\s+/);
     expect(LIGHT_TOKENS[width.slice(4, -1)]).toBe(astryxKey["border-bottom-width"]);
     expect(style).toBe(astryxKey["border-bottom-style"]);
     expect(color).toBe(astryxKey["border-bottom-color"]);

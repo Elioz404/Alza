@@ -4,7 +4,7 @@
  * nudge a selection in one undo step; the zoom group moves the shared view; the hint bar names
  * the tool and what to do next.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { actions, pageActions, store } from "../src/model/store";
@@ -21,15 +21,9 @@ import { resetStore } from "./support/store";
 
 let root: Root;
 let host: HTMLElement;
-const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  // see tests/shell.test.ts: happy-dom rejects an animation promise when an Astryx control unmounts
-  Object.defineProperty(Element.prototype, "animate", { value: undefined, configurable: true, writable: true });
-});
-afterAll(() => {
-  if (animate) Object.defineProperty(Element.prototype, "animate", animate);
 });
 beforeEach(() => {
   resetStore();

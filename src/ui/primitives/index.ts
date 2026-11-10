@@ -1,45 +1,26 @@
 /**
  * Everything a surface builds with, from one import:
  *
- *   import { Button, IconButton, Section, NumberField, Tabs, Menu, IconWall } from "../primitives";
+ *   import { Button, IconButton, Section, Tabs, SegmentedControl, Switch, Tip, IconWall } from "../primitives";
  *
- * Lean components on the tokens are Alza's own (Button, IconButton, Field, Panel, Section,
- * Badge, EmptyState, the icons). Components whose accessibility is hard to get right are
- * Astryx's, imported per subpath and re-exported here under the names surfaces use: dialogs,
- * tooltips, menus, popovers, tabs, segmented controls, switches, number inputs, toasts, Kbd.
- * Do not import Astryx's barrel (`@astryxdesign/core`), nor DateInput, CodeBlock or Chat: they
- * inject <style> at run time, which the CSP refuses.
+ * All of these are Alza's own, on the tokens, and none of them brings Astryx's runtime: they
+ * are what the first paint draws (the panel's tabs, the Plan | 3D switch, the approval switch,
+ * the tooltips), and the build fails if any Astryx module reaches the first load
+ * (config/firstLoad.js).
+ *
+ * The heavy components that only open on interaction (dialogs, menus, popovers, toasts, number
+ * inputs) are Astryx's, imported from `./astryx` (or `./NumberField`) by the deferred code that
+ * opens them, so they arrive after the first paint (src/ui/deferred.tsx).
  */
 import "./primitives.css";
 
 export { Button, type ButtonProps, type ButtonVariant, type ButtonSize } from "./Button";
 export { IconButton, ariaShortcut, type IconButtonProps } from "./IconButton";
-export { Tip, type TipProps } from "./Tip";
+export { Tip, type TipProps, type TipPlacement, type TipAlignment } from "./Tip";
 export { Field, TextInput, TextArea, type FieldProps, type FieldControlProps, type TextInputProps, type TextAreaProps } from "./Field";
-export { NumberField, type NumberFieldProps } from "./NumberField";
 export { Panel, Section, Badge, EmptyState, type SectionProps, type BadgeProps, type BadgeTone, type EmptyStateProps } from "./Layout";
 export * from "./icons";
 export { Kbd, type KbdProps } from "./Kbd";
-
-// ---- Astryx, accessibility-bearing components
-export { Dialog, DialogHeader, type DialogProps, type DialogHeaderProps } from "@astryxdesign/core/Dialog";
-export { AlertDialog, type AlertDialogProps } from "@astryxdesign/core/AlertDialog";
-export {
-  DropdownMenu as Menu,
-  DropdownMenuItem as MenuItem,
-  DropdownMenuDivider as MenuDivider,
-  DropdownMenuGroup as MenuGroup,
-  DropdownMenuCheckboxItem as MenuCheckboxItem,
-  type DropdownMenuProps as MenuProps,
-  type DropdownMenuTriggerProps as MenuTriggerProps,
-} from "@astryxdesign/core/DropdownMenu";
-export { Popover, type PopoverProps } from "@astryxdesign/core/Popover";
-export { TabList as Tabs, Tab, type TabListProps as TabsProps, type TabProps } from "@astryxdesign/core/TabList";
-export {
-  SegmentedControl,
-  SegmentedControlItem,
-  type SegmentedControlProps,
-  type SegmentedControlItemProps,
-} from "@astryxdesign/core/SegmentedControl";
-export { Switch, type SwitchProps } from "@astryxdesign/core/Switch";
-export { useToast, type ToastOptions } from "@astryxdesign/core/Toast";
+export { Tabs, Tab, type TabsProps, type TabProps } from "./Tabs";
+export { SegmentedControl, SegmentedControlItem, type SegmentedControlProps, type SegmentedControlItemProps } from "./SegmentedControl";
+export { Switch, type SwitchProps } from "./Switch";

@@ -1,61 +1,101 @@
 /**
- * A keyboard shortcut chip. Astryx's Kbd draws the keys it knows (modifiers, Enter, Esc, the
- * arrows) and writes any other name in capitals, which turns "delete" into DELETE. This wrapper
- * takes the page's own notation, maps the names Astryx knows under another spelling ("arrowup",
- * "+"), and draws the few word keys (Del, Space) itself in the same chip.
+ * A keyboard shortcut chip, in the page's own notation: one chip per key, glyphs for the keys a
+ * keyboard marks with one (modifiers, Enter, the arrows), words for the few it spells out (Esc,
+ * Del, Space), capitals for a letter. The chips are drawn with exactly Astryx's key declarations
+ * (`.kbd__key` in primitives.css; tests/theme.test.ts holds the two equal), and the whole
+ * shortcut has one spoken name ("Control + Z").
  *
  *   <Kbd keys="mod+z" />   <Kbd keys="del" />   <Kbd keys="shift+1" />   <Kbd keys="+" />
+ *
+ * "mod" is Command on Apple platforms and Control elsewhere.
  */
 
-import type { ComponentProps } from "react";
-import { Kbd as AstryxKbd } from "@astryxdesign/core/Kbd";
+import type { HTMLAttributes, Ref } from "react";
 
-export type KbdProps = ComponentProps<typeof AstryxKbd>;
+export interface KbdProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
+  ref?: Ref<HTMLSpanElement>;
+  /** the shortcut: keys joined with "+" ("mod+z", "shift+/", "+") */
+  keys: string;
+}
 
-/** Names the page writes, as Astryx spells them. */
+/** Names the page writes for one key under another spelling. */
 const ALIAS: Readonly<Record<string, string>> = {
   arrowup: "up",
   arrowdown: "down",
   arrowleft: "left",
   arrowright: "right",
+  esc: "escape",
+  return: "enter",
+  delete: "del",
+  " ": "space",
   "+": "plus",
   "=": "plus",
 };
 
-/** Keys Astryx has no glyph or word for, written as a person reads them on a keyboard. */
-const WORD: Readonly<Record<string, string>> = {
-  del: "Del",
-  delete: "Del",
-  space: "Space",
-  " ": "Space",
-  home: "Home",
-  end: "End",
+/** What each named key shows on its chip, and what it is called aloud. */
+const KEY: Readonly<Record<string, { chip: string; spoken: string }>> = {
+  ctrl: { chip: "⌃", spoken: "Control" },
+  alt: { chip: "⌥", spoken: "Alt" },
+  shift: { chip: "⇧", spoken: "Shift" },
+  enter: { chip: "↵", spoken: "Enter" },
+  backspace: { chip: "⌫", spoken: "Backspace" },
+  tab: { chip: "⇥", spoken: "Tab" },
+  up: { chip: "↑", spoken: "Up arrow" },
+  down: { chip: "↓", spoken: "Down arrow" },
+  left: { chip: "←", spoken: "Left arrow" },
+  right: { chip: "→", spoken: "Right arrow" },
+  plus: { chip: "+", spoken: "Plus" },
+  escape: { chip: "Esc", spoken: "Escape" },
+  // word keys: written as a person reads them on a keyboard, never in capitals
+  del: { chip: "Del", spoken: "Del" },
+  space: { chip: "Space", spoken: "Space" },
+  home: { chip: "Home", spoken: "Home" },
+  end: { chip: "End", spoken: "End" },
 };
 
-/** Split "shift++" or "+" into its keys: a "+" on its own, or at the end, is the plus key. */
-function partsOf(keys: string): string[] {
-  if (keys === "+") return ["+"];
-  const trailingPlus = keys.endsWith("++");
-  const parts = (trailingPlus ? keys.slice(0, -2) : keys).split("+").map((k) => k.trim().toLowerCase());
-  return trailingPlus ? [...parts, "+"] : parts;
+/** The platform's modifier: Command where the keyboard has one, Control elsewhere. */
+function modKey(): { chip: string; spoken: string } {
+  return isApplePlatform() ? { chip: "⌘", spoken: "Command" } : { chip: "Ctrl", spoken: "Control" };
 }
 
-export function Kbd({ keys, className, ...rest }: KbdProps) {
-  const parts = partsOf(keys).map((k) => ALIAS[k] ?? k);
-  if (!parts.some((k) => WORD[k])) return <AstryxKbd keys={parts.join("+")} className={className} {...rest} />;
-  // a word key: draw the chips here, one per key, with one spoken name for the whole shortcut
-  const spoken = parts.map((k) => WORD[k] ?? (k.length === 1 ? k.toUpperCase() : k)).join(" + ");
+/** Whether the page runs on an Apple platform, where the shortcut modifier is Command. */
+export function isApplePlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const uaData = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
+  const named = uaData?.platform?.trim() ?? "";
+  if (named !== "" && named.toLowerCase() !== "unknown") return /mac/i.test(named);
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform ?? "");
+}
+
+/** Split "shift++" or "+" into its keys: a "+" on its own, or at the end, is the plus key. */
+export function keysOf(keys: string): string[] {
+  if (keys === "+") return ["plus"];
+  const trailingPlus = keys.endsWith("++");
+  const parts = (trailingPlus ? keys.slice(0, -2) : keys).split("+").map((k) => k.trim().toLowerCase());
+  return (trailingPlus ? [...parts, "+"] : parts).map((k) => ALIAS[k] ?? k);
+}
+
+/** One key's chip and spoken name. */
+function keyFace(key: string): { chip: string; spoken: string } {
+  if (key === "mod") return modKey();
+  return KEY[key] ?? { chip: key.toUpperCase(), spoken: key.toUpperCase() };
+}
+
+export function Kbd({ ref, keys, className, ...rest }: KbdProps) {
+  const faces = keysOf(keys).map(keyFace);
   return (
-    <span {...rest} role="img" aria-label={spoken} className={`kbd${className ? ` ${className}` : ""}`}>
-      {parts.map((k, i) =>
-        WORD[k] ? (
-          <kbd key={`${k}:${i}`} aria-hidden="true" className="kbd__word">
-            {WORD[k]}
-          </kbd>
-        ) : (
-          <AstryxKbd key={`${k}:${i}`} keys={k} aria-hidden="true" />
-        ),
-      )}
+    <span
+      {...rest}
+      ref={ref}
+      role="img"
+      aria-label={faces.map((f) => f.spoken).join(" + ")}
+      className={`kbd${className ? ` ${className}` : ""}`}
+    >
+      {faces.map((f, i) => (
+        <kbd key={i} aria-hidden="true" className="kbd__key">
+          {f.chip}
+        </kbd>
+      ))}
     </span>
   );
 }

@@ -1,0 +1,62 @@
+/*
+ * The tooltip (Tip.tsx). Tokens only. Its place comes from script as two custom properties
+ * (--tip-x, --tip-y), its enter motion from the side it ended up on (data-side).
+ */
+@layer alza-components {
+  /* the wrapper around the control: no box, so it never changes the layout it sits in */
+  .tip-anchor { display: contents; }
+
+  /* the one layer every tooltip is drawn in, above the page and outside every scroller */
+  .tip-layer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: var(--z-tooltip);
+  }
+
+  /* while it shows it is a manual popover in the top layer: the popover's own box (centred,
+     bordered, scrolling, Canvas-coloured) gives way to the tooltip's */
+  .tooltip {
+    position: fixed;
+    inset: var(--tip-y, 0) auto auto var(--tip-x, 0);
+    margin: 0;
+    border: 0;
+    overflow: visible;
+    max-width: min(var(--size-tooltip), calc(100vw - 2 * var(--tooltip-gutter)));
+    padding: var(--spacing-1) var(--spacing-2);
+    border-radius: var(--radius-container);
+    background-color: var(--color-background-inverted);
+    color: var(--color-background-surface);
+    font-family: var(--font-family-body);
+    font-size: var(--text-body-size);
+    font-weight: var(--font-weight-regular);
+    line-height: var(--text-body-leading);
+    word-break: break-word;
+    animation: tip-enter var(--duration-fast-max) var(--ease-standard) backwards;
+  }
+  .tooltip[hidden] { display: none; }
+  /* it enters from its control's side */
+  .tooltip[data-side="above"] { --tip-from: 0 var(--spacing-2); }
+  .tooltip[data-side="below"] { --tip-from: 0 calc(-1 * var(--spacing-2)); }
+  .tooltip[data-side="start"] { --tip-from: var(--spacing-2) 0; }
+  .tooltip[data-side="end"] { --tip-from: calc(-1 * var(--spacing-2)) 0; }
+
+  @keyframes tip-enter {
+    from {
+      opacity: 0;
+      translate: var(--tip-from, 0 0);
+      scale: var(--scale-enter);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tooltip { animation: none; }
+  }
+
+  /* the content: its text, a second line under it (IconButton's hint or reason), the shortcut */
+  .tip { display: inline-flex; align-items: center; column-gap: var(--spacing-2); flex-wrap: wrap; max-width: var(--size-measure); }
+  .tip__text { display: contents; }
+  .tip__kbd { order: 1; }
+  .tip__sub { order: 2; flex-basis: 100%; font-weight: var(--font-weight-regular); opacity: var(--opacity-quiet); }
+  /* on the inverted surface the chips take its ink */
+  .tip__kbd .kbd__key { color: inherit; }
+}

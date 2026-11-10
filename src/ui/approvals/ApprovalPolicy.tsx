@@ -9,7 +9,8 @@ import "./approvals.css";
 import { pageActions } from "../../model/store";
 import { DESTRUCTIVE_TOOL_NAMES } from "../../mcp/tools";
 import { useAppStore } from "../useAppStore";
-import { IconAgent, IconWarning, Popover, Switch } from "../primitives";
+import { IconAgent, IconWarning, Switch } from "../primitives";
+import { Popover } from "../primitives/astryx";
 import { approvalPolicySentence, POLICY_SWITCH_LABEL, policySentence } from "../inspector/policy";
 
 /** The policy switch with what it covers, in a popover. */

@@ -74,6 +74,46 @@ describe("the first-load split", () => {
     expect(splitAtomicCss(css, first, all)).toEqual({ now: css, later: "" });
   });
 
+  it("moves the StyleX keyframes and properties only the later rules use, and keeps the rest", () => {
+    const css =
+      "@layer a{" +
+      "@property --x-gap{syntax:'*';inherits:false}" +
+      "@property --x-only-later{syntax:'*';inherits:false}" +
+      "@property --x-in-code{syntax:'*';inherits:false}" +
+      "@property --x-via-frames{syntax:'*';inherits:false}" +
+      "@keyframes xspin1-B{to{rotate:1turn}}" +
+      "@keyframes xfade2-B{to{opacity:var(--x-via-frames)}}" +
+      "@keyframes xnamed3-B{to{opacity:0}}" +
+      "@keyframes tip-enter{from{opacity:0}}" +
+      ".xaaaa01{gap:var(--x-gap);animation-name:xspin1-B}" +
+      ".xlate03{padding:var(--x-only-later);animation-name:xfade2-B}" +
+      "}";
+    // the first load's code sets one property inline and names one keyframes itself
+    const firstNames = new Set([...first, "--x-in-code", "xnamed3"]);
+    const { now, later } = splitAtomicCss(css, firstNames, new Set([...firstNames, ...all]));
+    // used by a rule of the first sheet, named by its code, or not StyleX's: they stay
+    for (const kept of ["@property --x-gap{", "@property --x-in-code{", "@keyframes xspin1-B{", "@keyframes xnamed3-B{", "@keyframes tip-enter{"]) {
+      expect(now).toContain(kept);
+      expect(later).not.toContain(kept);
+    }
+    // used only by the moved rule, or only by keyframes that moved: they go with it, in their layer
+    for (const moved of ["@property --x-only-later{", "@keyframes xfade2-B{", "@property --x-via-frames{"]) {
+      expect(now).not.toContain(moved);
+      expect(later).toContain(moved);
+    }
+    expect(later.startsWith("@layer a{")).toBe(true);
+    expect(later).toContain(".xlate03{padding:var(--x-only-later);animation-name:xfade2-B}");
+  });
+
+  it("leaves the definitions alone when nothing moves", () => {
+    const css = "@layer a{@property --x-unused{syntax:'*';inherits:false}@keyframes xspin1-B{to{rotate:1turn}}.xaaaa01{top:0}}";
+    expect(splitAtomicCss(css, first, all)).toEqual({ now: css, later: "" });
+  });
+
+  it("reads the StyleX properties a chunk sets, with the atomic classes", () => {
+    expect([...atomicClassesIn('el.style.setProperty("--x-paddingInline", v); const c = "xaaaa01";')].sort()).toEqual(["--x-paddingInline", "xaaaa01"]);
+  });
+
   it("is the purge when the first load uses everything there is", () => {
     const css = "@layer a{.xaaaa01{top:0}.xlate03{top:1px}.xgone12{top:2px}}";
     expect(splitAtomicCss(css, all, all)).toEqual({ now: purgeAtomicCss(css, all), later: "" });

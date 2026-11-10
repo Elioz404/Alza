@@ -1,0 +1,101 @@
+/*
+ * Tabs (Tabs.tsx). Tokens only: the label face, the element height and radius, the accent line
+ * under the selected tab, the hover and press overlays.
+ */
+@layer alza-components {
+  .tabs {
+    /* room for a focused tab's ring inside the scroller, given back by the margin */
+    --tabs-bleed: calc(var(--focus-outline-width) + var(--focus-outline-offset));
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    gap: var(--spacing-0-5);
+    max-width: 100%;
+    padding: var(--tabs-bleed);
+    margin: calc(-1 * var(--tabs-bleed));
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .tabs__tab {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-1);
+    height: var(--size-element-md);
+    padding: 0 var(--spacing-3);
+    border: 0;
+    border-radius: var(--radius-element);
+    background-color: transparent;
+    color: var(--color-text-secondary);
+    font-family: inherit;
+    font-size: var(--text-label-size);
+    font-weight: var(--font-weight-regular);
+    line-height: var(--text-label-leading);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color var(--duration-fast) var(--ease-standard);
+  }
+  .tabs__tab[aria-selected="true"] {
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  /* the hover and press overlay */
+  .tabs__tab::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background-color: transparent;
+    transition: background-color var(--duration-fast) var(--ease-standard);
+  }
+  @media (hover: hover) {
+    .tabs__tab:hover::before { background-color: var(--color-overlay-hover); }
+  }
+  .tabs__tab:active::before { background-color: var(--color-overlay-pressed); }
+  @media (pointer: coarse) {
+    .tabs__tab:active::before { background-color: transparent; }
+  }
+
+  /* the line under the selected tab, over the head's own bottom edge */
+  .tabs__tab::after {
+    content: "";
+    position: absolute;
+    right: var(--spacing-3);
+    bottom: calc(-1 * var(--size-hairline));
+    left: var(--spacing-3);
+    height: var(--size-tab-indicator);
+    border-radius: var(--radius-full);
+    pointer-events: none;
+    background-color: transparent;
+    opacity: 0;
+    transition:
+      opacity var(--duration-fast) var(--ease-standard),
+      background-color var(--duration-fast) var(--ease-standard);
+  }
+  .tabs__tab[aria-selected="true"]::after {
+    background-color: var(--color-accent);
+    opacity: 1;
+  }
+
+  /* the label, as wide as it is when selected: a hidden copy at that weight shares its cell (the
+     copy is drawn by CSS and spoken by nothing: its alternative text is empty) */
+  .tabs__label { display: inline-grid; }
+  .tabs__text { grid-area: 1 / 1; }
+  .tabs__label::after {
+    content: attr(data-label) / "";
+    grid-area: 1 / 1;
+    height: 0;
+    visibility: hidden;
+    overflow: hidden;
+    font-weight: var(--font-weight-semibold);
+    pointer-events: none;
+    user-select: none;
+  }
+  .tabs__end { display: inline-flex; flex-shrink: 0; align-items: center; }
+}

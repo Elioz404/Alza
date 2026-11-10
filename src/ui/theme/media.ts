@@ -4,7 +4,7 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { MOTION, mediaQuery, type BREAKPOINT } from "./tokens";
+import { MOTION, ROOT_FONT_PX, SPACING, mediaQuery, type BREAKPOINT } from "./tokens";
 
 const query = (q: string): MediaQueryList | null => (typeof matchMedia === "function" ? matchMedia(q) : null);
 
@@ -29,3 +29,9 @@ export const prefersReducedMotion = (): boolean => query("(prefers-reduced-motio
 
 /** A movement's duration in ms: zero under reduced motion (colour and opacity changes keep theirs). */
 export const moveMs = (ms: number = MOTION.mediumMs): number => (prefersReducedMotion() ? 0 : ms);
+
+/** A spacing token in pixels, for geometry placed from script (SPACING is in rem). */
+export function spacingPx(step: keyof typeof SPACING): number {
+  const root = typeof document !== "undefined" ? parseFloat(getComputedStyle(document.documentElement).fontSize) : NaN;
+  return parseFloat(SPACING[step]) * (Number.isFinite(root) && root > 0 ? root : ROOT_FONT_PX);
+}

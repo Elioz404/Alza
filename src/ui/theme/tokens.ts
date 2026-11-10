@@ -186,6 +186,20 @@ export const SPACING = Object.freeze({
   "12": "3rem",
 });
 
+/**
+ * The browsers' default root font size, which the px in the comments above assume. Script turns
+ * rem into px with the page's own root size, and with this one only when the page cannot say
+ * (no layout yet, as in a test DOM).
+ */
+export const ROOT_FONT_PX = 16;
+
+/**
+ * A tooltip's gap from its control and the room it keeps from the viewport's edges, as SPACING
+ * steps: the stylesheet reads them as --tooltip-offset and --tooltip-gutter, the script that
+ * places the tooltip (Tip.tsx) through spacingPx.
+ */
+export const TOOLTIP = Object.freeze({ offset: "1", gutter: "4" } as const satisfies Record<string, keyof typeof SPACING>);
+
 export const RADIUS = Object.freeze({
   none: "0px",
   /** kbd, handles, tooltips */
@@ -221,6 +235,11 @@ export const MOTION = Object.freeze({
   exitMs: 150,
   /** how long a pointer rests on a control before its tooltip shows (focus shows it at once) */
   tooltipDelayMs: 800,
+  /**
+   * How long a tooltip waits after the pointer leaves its control before it hides: long enough
+   * to cross the gap onto the tooltip itself, which keeps it open (WCAG 1.4.13, hoverable).
+   */
+  tooltipBridgeMs: 100,
   /** how long an undo offer stays on screen */
   undoOfferMs: 8000,
   /**
@@ -232,6 +251,8 @@ export const MOTION = Object.freeze({
   easeIn: "cubic-bezier(0.7, 0, 0.84, 0)",
   /** how far a pressed control drops */
   pressOffset: "1px",
+  /** how small a floating layer (a tooltip) starts as it enters, before it settles at full size */
+  enterScale: 0.95,
 });
 
 // ============================================================================ sizes and layers
@@ -276,6 +297,15 @@ export const SIZE = Object.freeze({
   hairline: "1px",
   /** the focus ring */
   focusRing: "2px",
+  /** the line under the selected tab */
+  tabIndicator: "2px",
+  /** the widest a tooltip grows before its text wraps */
+  tooltip: "300px",
+  /** the switch's track, and its thumb off and on (the thumb grows as it slides) */
+  switchWidth: "40px",
+  switchHeight: "24px",
+  switchThumb: "16px",
+  switchThumbOn: "20px",
   /** the stroke every icon is drawn with */
   iconStroke: "1.5",
 });
@@ -286,6 +316,12 @@ export const OPACITY = Object.freeze({
   /** secondary text inside an inverted surface (a tooltip's second line) */
   quiet: 0.8,
 });
+
+/**
+ * How much of the hover tint (--color-tint-hover) a hovered fill takes, as Astryx's own hover
+ * recipe mixes it: a neutral surface a little, the accent more, so both read as one change.
+ */
+export const MIX = Object.freeze({ hoverSurface: "5%", hoverAccent: "15%" });
 
 export const Z = Object.freeze({ raised: 10, dropdown: 100, sticky: 200, drawer: 300, toast: 500, tooltip: 600 });
 
@@ -300,6 +336,13 @@ export const BREAKPOINT = Object.freeze({
   /** at or under this width the layout is one column: canvas plus a bottom sheet (640px) */
   phone: 40,
 });
+
+/**
+ * The theme the page runs: the built Astryx theme its stylesheets carry (index.html names it on
+ * <html>, where the theme's scoped rules and the deferred Astryx components look for it) and
+ * its colour mode. Studio's dark values exist (tokenSheet.ts) but are not complete.
+ */
+export const THEME = Object.freeze({ name: "stone", mode: "light" } as const);
 
 /** The media query for "at or under this breakpoint". */
 export const mediaQuery = (bp: keyof typeof BREAKPOINT): string => `(max-width: ${BREAKPOINT[bp]}rem)`;

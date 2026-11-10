@@ -73,5 +73,13 @@ export function Button({
       ) : null}
     </button>
   );
-  return blocked ? <Tip content={disabledReason}>{button}</Tip> : button;
+  // the reason describes the button through its own line above; the tooltip shows the same
+  // words, so it does not describe it again
+  return blocked ? (
+    <Tip content={disabledReason} describes={false}>
+      {button}
+    </Tip>
+  ) : (
+    button
+  );
 }

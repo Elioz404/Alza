@@ -5,7 +5,7 @@
  * screens the panel toggle.
  */
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { pageActions } from "../../model/store";
 import { dispatch } from "../../model/commands";
 import { useAppStore } from "../useAppStore";
@@ -39,6 +39,7 @@ function ViewSwitch() {
   const reason = useAppStore((s) => noThreeDReason(s.model.walls.length));
   const notify = useNotify();
   const phone = useBreakpoint("phone");
+  const reasonId = useId();
   const onChange = (next: string) => {
     if (next === "2d") {
       pageActions.setView("2d");
@@ -48,8 +49,10 @@ function ViewSwitch() {
     if (!r.ok) notify({ body: r.summary, type: "error" });
   };
   return (
-    <Tip content={reason} isEnabled={Boolean(reason)}>
-      <SegmentedControl label="View" value={view} onChange={onChange} size="sm" className="view-switch">
+    // the reason describes the radios themselves (the chosen one, where focus lands, and the
+    // disabled one), not the group around them, so it is read as focus arrives
+    <Tip id={reasonId} content={reason} isEnabled={Boolean(reason)} describes={false}>
+      <SegmentedControl label="View" value={view} onChange={onChange} size="sm" className="view-switch" describedBy={reason ? reasonId : undefined}>
         <SegmentedControlItem value="2d" label="Plan" isLabelHidden={phone} icon={<IconPlan size="sm" />} />
         <SegmentedControlItem value="3d" label="3D" isLabelHidden={phone} icon={<IconCube size="sm" />} isDisabled={Boolean(reason) && view === "2d"} />
       </SegmentedControl>

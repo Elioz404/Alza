@@ -3,7 +3,7 @@
  * two draw buttons pick the rail's draw modes (and hand the sheet back to the drawing), and the
  * demo link loads Sunset Loft as the human, with Undo to bring the empty plan back.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { pageActions, store } from "../src/model/store";
@@ -14,15 +14,8 @@ import { loadDeferred } from "./support/deferred";
 
 vi.mock("../src/ui/SupplierBridge", () => ({ SupplierBridge: () => null }));
 
-// happy-dom's Animation.cancel() rejects a promise nobody observes when Astryx's segmented
-// control unmounts (see tests/shell.test.ts).
-const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  Object.defineProperty(Element.prototype, "animate", { value: undefined, configurable: true, writable: true });
-});
-afterAll(() => {
-  if (animate) Object.defineProperty(Element.prototype, "animate", animate);
 });
 
 let host: HTMLDivElement;

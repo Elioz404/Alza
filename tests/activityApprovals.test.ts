@@ -4,7 +4,7 @@
  * activity rows point at the same request; feed lines name entities, not ids; the tool count is
  * read off the tools.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { actions, store } from "../src/model/store";
@@ -49,15 +49,8 @@ const buttonNamed = (el: Element, name: string) =>
 
 const tool = (name: string) => TOOLS.find((t) => t.name === name)!;
 
-// happy-dom rejects an animation promise nobody observes when Astryx's segmented control
-// unmounts; without element.animate Astryx sets each end state directly (see shell.test.ts)
-const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  Object.defineProperty(Element.prototype, "animate", { value: undefined, configurable: true, writable: true });
-});
-afterAll(() => {
-  if (animate) Object.defineProperty(Element.prototype, "animate", animate);
 });
 beforeEach(() => {
   resetStore();
