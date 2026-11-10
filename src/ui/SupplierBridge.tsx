@@ -10,18 +10,28 @@
  */
 
 import { useEffect, useRef } from "react";
-import { attachSupplierFrame, supplierFrameSrc } from "../mcp/supplier";
+import { registerSupplierFrame, supplierFrameSrc } from "../mcp/supplier";
 
 export function SupplierBridge() {
   const ref = useRef<HTMLIFrameElement>(null);
+  /** Undoes the current registration; this component owns the transport's frame for its lifetime. */
+  const release = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
-    const id = setTimeout(() => attachSupplierFrame(ref.current?.contentWindow ?? null), 300);
-    return () => {
-      clearTimeout(id);
-      attachSupplierFrame(null);
-    };
-  }, []);
+  useEffect(
+    () => () => {
+      release.current?.();
+      release.current = null;
+    },
+    [],
+  );
+
+  // Registered on load, not on mount: before the partner page is in the frame, a message
+  // addressed to the partner's origin would be dropped by the browser and only time out.
+  const onLoad = () => {
+    release.current?.();
+    const win = ref.current?.contentWindow;
+    release.current = win ? registerSupplierFrame(win) : null;
+  };
 
   return (
     <iframe
@@ -32,7 +42,7 @@ export function SupplierBridge() {
       allow="tools"
       aria-hidden="true"
       tabIndex={-1}
-      onLoad={() => attachSupplierFrame(ref.current?.contentWindow ?? null)}
+      onLoad={onLoad}
     />
   );
 }

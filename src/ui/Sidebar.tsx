@@ -1,16 +1,19 @@
 /** Sidebar — Model / Check / Catalog / Notes tabs. */
 
-import { useState } from "react";
-import { useAppStore, actions, logActivity } from "../model/store";
+import { useMemo, useState } from "react";
+import { pageActions } from "../model/store";
+import { useAppStore } from "./useAppStore";
+import { dispatch } from "../model/commands";
 import { checkModel } from "../model/issues";
-import { CATALOG } from "../model/catalog";
-import { TOOLS } from "../mcp/tools";
+import { catalogFor } from "../model/catalog";
+import { DESTRUCTIVE_TOOL_NAMES, TOOLS } from "../mcp/tools";
 import { seedLoft } from "../model/seed";
 import { ToolRunner } from "./ToolRunner";
 import { SupplierPanel } from "./SupplierPanel";
 import { thumbnailFor } from "../three/thumbnails";
 import { OPACITY, TEXT, UNDERLAY } from "../model/limits";
 import { decodeUnderlay } from "./underlay";
+import { useGesture } from "./useGesture";
 
 type Tab = "model" | "check" | "catalog" | "supplier" | "notes" | "tools";
 
@@ -21,9 +24,13 @@ export function Sidebar() {
   const selectedWallId = useAppStore((s) => s.editor.selectedWallId);
   const requireApproval = useAppStore((s) => s.requireApproval);
   const supplierTools = useAppStore((s) => s.supplierTools);
-  const catalogRev = useAppStore((s) => s.catalogRev);
   const [noteText, setNoteText] = useState("");
-  const issues = checkModel(model);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  // the model is immutable, so a new check is needed exactly when it is a new object
+  const issues = useMemo(() => checkModel(model), [model]);
+  const catalog = catalogFor(model.kinds);
+  const nameEdit = useGesture();
+  const opacityEdit = useGesture();
 
   const tabs: { id: Tab; label: string; badge?: number }[] = [
     { id: "model", label: "Model" },
@@ -36,20 +43,17 @@ export function Sidebar() {
 
   const onUploadBlueprint = async (file: File) => {
     // checked, bounded and re-encoded to a small JPEG before it reaches the model (see underlay.ts)
+    setUploadError(null);
+    let underlay;
     try {
-      const underlay = await decodeUnderlay(file);
-      const r = actions.setUnderlay(underlay);
-      logActivity(
-        "human",
-        "set_underlay",
-        r.ok
-          ? `Blueprint loaded (${underlay.pw}×${underlay.ph}), opacity ${Math.round(underlay.opacity * 100)}%. Drag walls over it to trace.`
-          : `Blueprint not loaded: ${r.summary}`,
-        r.ok,
-      );
+      underlay = await decodeUnderlay(file);
     } catch (err) {
-      logActivity("human", "set_underlay", `Blueprint not loaded: ${err instanceof Error ? err.message : String(err)}`, false);
+      // the file never became an underlay, so there is no change to dispatch: say so here
+      setUploadError(`Blueprint not loaded: ${err instanceof Error ? err.message : String(err)}`);
+      return;
     }
+    const r = dispatch({ type: "set_underlay", underlay }, { actor: "human" });
+    if (!r.ok) setUploadError(`Blueprint not loaded: ${r.summary}`);
   };
 
   return (
@@ -71,7 +75,8 @@ export function Sidebar() {
               <input
                 value={model.name}
                 maxLength={TEXT.planName}
-                onChange={(e) => actions.setPlanName(e.target.value)}
+                onChange={(e) => nameEdit.update({ type: "set_plan_name", name: e.target.value })}
+                onBlur={nameEdit.end}
               />
             </label>
             <div className="stat-grid">
@@ -82,32 +87,21 @@ export function Sidebar() {
               <div><strong>{model.items.length}</strong> items</div>
               <div><strong>{model.rooms.reduce((a, r) => a + r.w * r.h, 0).toFixed(1)}</strong> m²</div>
             </div>
-            <button
-              onClick={() => {
-                actions.loadModel(seedLoft());
-                logActivity("human", "load_seed", "Sunset Loft demo loaded.");
-              }}
-            >
+            <button onClick={() => dispatch({ type: "load_model", model: seedLoft() }, { actor: "human" })}>
               Load Sunset Loft demo
             </button>
-            <button
-              className="danger"
-              onClick={() => {
-                const r = actions.clearModel();
-                logActivity("human", "clear_model", r.summary, r.ok);
-              }}
-            >
+            <button className="danger" onClick={() => dispatch({ type: "clear_model" }, { actor: "human" })}>
               Clear plan
             </button>
             <label className="toggle-row" title="When on, any destructive tool an agent calls is parked on the page until you approve it">
               <input
                 type="checkbox"
                 checked={requireApproval}
-                onChange={(e) => actions.setRequireApproval(e.target.checked)}
+                onChange={(e) => pageActions.setRequireApproval(e.target.checked)}
               />
               <span>
                 Ask me before destructive agent actions
-                <small>clear_model, remove_wall, remove_room, remove_item, remove_opening</small>
+                <small>{DESTRUCTIVE_TOOL_NAMES.join(", ")}</small>
               </span>
             </label>
             <div className="field">
@@ -120,6 +114,7 @@ export function Sidebar() {
                   if (file) void onUploadBlueprint(file);
                 }}
               />
+              {uploadError && <p className="field-error">{uploadError}</p>}
               {model.underlay && (
                 <>
                   <input
@@ -129,12 +124,19 @@ export function Sidebar() {
                     step={0.05}
                     value={model.underlay.opacity}
                     onChange={(e) => {
-                      // a refusal is reported, not swallowed: a slider that silently stops is a bug report
-                      const r = actions.setUnderlay({ ...model.underlay!, opacity: Number(e.target.value) });
-                      if (!r.ok) logActivity("human", "set_underlay", `Opacity not changed: ${r.summary}`, false);
+                      // one gesture per slide: the plan follows every step, the feed and undo get
+                      // one entry, and a refusal is reported there rather than swallowed
+                      if (model.underlay) {
+                        opacityEdit.update({ type: "set_underlay", underlay: { ...model.underlay, opacity: Number(e.target.value) } });
+                      }
                     }}
+                    onPointerUp={opacityEdit.end}
+                    onKeyUp={opacityEdit.end}
+                    onBlur={opacityEdit.end}
                   />
-                  <button onClick={() => actions.setUnderlay(null)}>Remove underlay</button>
+                  <button onClick={() => dispatch({ type: "set_underlay", underlay: null }, { actor: "human" })}>
+                    Remove underlay
+                  </button>
                 </>
               )}
             </div>
@@ -163,14 +165,14 @@ export function Sidebar() {
         )}
 
         {tab === "catalog" && (
-          <div className="panel catalog-grid" key={catalogRev}>
-            {CATALOG.map((c) => {
-              const thumb = thumbnailFor(c.kind);
+          <div className="panel catalog-grid">
+            {catalog.entries.map((c) => {
+              const thumb = thumbnailFor(c);
               return (
                 <button
                   key={c.kind}
                   className="catalog-card"
-                  onClick={() => actions.setDrawMode("place", c.kind)}
+                  onClick={() => pageActions.setDrawMode("place", c.kind)}
                   title={`${c.w} × ${c.d} × ${c.h} m — click, then click on the plan`}
                 >
                   {thumb ? (
@@ -201,9 +203,9 @@ export function Sidebar() {
               <button
                 onClick={() => {
                   if (!noteText.trim()) return;
-                  const r = actions.leaveNote("human", noteText.trim());
+                  // signed by the actor: a note the human writes here is the human's
+                  const r = dispatch({ type: "leave_note", text: noteText.trim() }, { actor: "human" });
                   if (r.ok) setNoteText("");
-                  else logActivity("human", "leave_note", r.summary, false);
                 }}
               >
                 Add note

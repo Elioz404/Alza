@@ -129,15 +129,25 @@ await page.click("button:has-text('Add note')");
 check("notes: human note saved", (await state("s.notes.length")) === 1);
 
 // ---------- 10. REAL WebMCP runtime path ----------
-const mct = await page.evaluate(() => {
+const mct = await page.evaluate(async () => {
   const m = navigator.modelContextTesting;
   if (!m) return { available: false };
+  const call = async (name, input) => String(await m.executeTool(name, JSON.stringify(input)));
+  const answer = (text) => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return {};
+    }
+  };
   try {
-    const r1 = m.executeTool("add_wall", JSON.stringify({ ax: 6, ay: 1, bx: 6, by: 5 }));
-    const r2 = m.executeTool("add_door", JSON.stringify({ wallId: "wall", t: 0.5 }));
-    const r3 = m.executeTool("get_issues", "{}");
-    const r4 = m.executeTool("leave_note", JSON.stringify({ text: "Agent was here." }));
-    return { available: true, r1: String(r1).slice(0, 120), r2: String(r2).slice(0, 120), r3: String(r3).slice(0, 160), r4: String(r4).slice(0, 80) };
+    const r1 = await call("add_wall", { ax: 6, ay: 1, bx: 6, by: 5 });
+    // the door goes on the wall just drawn, named by the exact id add_wall answered with:
+    // references match an id or one name, never a fragment of one
+    const r2 = await call("add_door", { wallId: answer(r1).id, t: 0.5 });
+    const r3 = await call("get_issues", {});
+    const r4 = await call("leave_note", { text: "Agent was here." });
+    return { available: true, doorOk: answer(r2).ok === true, r1: r1.slice(0, 120), r2: r2.slice(0, 120), r3: r3.slice(0, 160), r4: r4.slice(0, 80) };
   } catch (e) {
     return { available: true, error: String(e) };
   }
@@ -147,7 +157,7 @@ console.log("modelContextTesting:", JSON.stringify(mct, null, 1));
 // Tool REGISTRATION is already proven by the "Site tools live" pill (31 tools);
 // real end-to-end execution is verified in ChatGPT desktop before submission.
 if (mct.available && !mct.error) {
-  check("webmcp runtime: add_wall executed", (await state("s.model.walls.length")) >= 3);
+  check("webmcp runtime: add_wall and add_door on it executed", (await state("s.model.walls.length")) >= 3 && mct.doorOk, mct.r2);
   check("webmcp runtime: agent note landed", (await state("s.notes.length")) >= 2);
 } else {
   console.log("WARN  modelContextTesting not in this Chromium build — the 2 runtime-execution checks below are skipped (54 of 56 run here); registration is verified via the pill and the execution path via the ToolRunner, which shares the same wrapper.");
@@ -195,9 +205,13 @@ r = await runTool("update_room", { id: "Study", label: "Office" });
 check("tool update_room by label", r.ok);
 r = await runTool("place_item", { kind: "desk", x: 7, y: 2, rotation: 0 });
 check("tool place_item", r.ok);
+// the loft already has a desk, so "desk" now names two items and is refused, never "the first"
+const deskId = r.id;
 r = await runTool("move_item", { id: "desk", x: 7.2, y: 2.2 });
-check("tool move_item", r.ok);
-r = await runTool("remove_item", { id: "desk" });
+const ambiguousRefused = !r.ok && Array.isArray(r.candidates);
+r = await runTool("move_item", { id: deskId, x: 7.2, y: 2.2 });
+check("tool move_item (an ambiguous kind is refused, the id moves it)", ambiguousRefused && r.ok, r.summary);
+r = await runTool("remove_item", { id: deskId });
 check("tool remove_item", r.ok);
 r = await runTool("get_issues", {});
 check("tool get_issues returns list", r.ok && Array.isArray(r.issues));

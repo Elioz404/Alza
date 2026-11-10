@@ -1,20 +1,21 @@
-/** Furniture catalog — footprints (meters) and display metadata. 3D builders live in three/furniture.ts. */
+/**
+ * The furniture catalogue: the built-in kinds the app ships with, plus whatever a plan adds.
+ *
+ * The built-in list is a frozen constant. Everything added at runtime — agent-defined pieces
+ * and adopted supplier products — lives in the plan (PlanModel.kinds), so it is undone, saved
+ * and carried with the plan like any other edit. A lookup is always over both, through
+ * catalogOf(model), which indexes them by kind once per kinds list.
+ *
+ * 3D builders live in three/furniture.ts and read this data; nothing here knows about them.
+ */
 
-import type { ItemCategory } from "./limits";
+import type { KindDef, PartSpec, PlanModel } from "./types";
 
-export interface CatalogEntry {
-  kind: string;
-  label: string;
-  w: number; // footprint width  (local x)
-  d: number; // footprint depth  (local y)
-  h: number; // approximate height (3D)
-  color: string;
-  category: ItemCategory;
-  /** rugs may overlap other furniture */
-  isRug?: boolean;
-}
+export type { KindDef } from "./types";
 
-export const CATALOG: CatalogEntry[] = [
+type BuiltInRow = Omit<KindDef, "source" | "parts">;
+
+const BUILT_IN_ROWS: readonly BuiltInRow[] = [
   { kind: "sofa", label: "Sofa", w: 2.1, d: 0.9, h: 0.85, color: "#7a8ba0", category: "living" },
   { kind: "sofa_3", label: "Sofa (3-seat)", w: 2.6, d: 0.95, h: 0.82, color: "#6f8095", category: "living" },
   { kind: "armchair", label: "Armchair", w: 0.85, d: 0.85, h: 0.85, color: "#8a9bb0", category: "living" },
@@ -48,20 +49,45 @@ export const CATALOG: CatalogEntry[] = [
   { kind: "plant", label: "Plant", w: 0.4, d: 0.4, h: 1.1, color: "#5d8a54", category: "decor" },
 ];
 
-export const catalogByKind = (kind: string): CatalogEntry | undefined =>
-  CATALOG.find((c) => c.kind === kind);
+/** The kinds the app ships with. Frozen: no caller can add to it or edit a row in place. */
+export const BUILT_IN_KINDS: readonly KindDef[] = Object.freeze(
+  BUILT_IN_ROWS.map((row) => Object.freeze<KindDef>({ ...row, source: "builtin" })),
+);
+
+/** A kind definition frozen all the way down, so a definition held by a plan never changes under it. */
+export function freezeKind(def: KindDef): KindDef {
+  const parts = def.parts?.map((p) => Object.freeze<PartSpec>({ ...p }));
+  return Object.freeze<KindDef>({ ...def, ...(parts ? { parts: Object.freeze(parts) } : {}) });
+}
+
+/** The catalogue a plan sees: the built-ins, then the plan's own kinds, indexed by kind. */
+export interface Catalog {
+  /** built-ins first, in their shipped order, then the plan's kinds in the order they were added */
+  readonly entries: readonly KindDef[];
+  get(kind: string): KindDef | undefined;
+}
+
+/** One index per kinds list. Plans are immutable, so the list only changes when its kinds do. */
+const catalogs = new WeakMap<readonly KindDef[], Catalog>();
 
 /**
- * Add a catalogue entry at runtime — used for products imported from a partner origin's
- * own WebMCP tools, so a supplier's real dimensions drive the geometry and the checker.
- * Returns the entry that ends up in the catalogue (existing one wins, keeping ids stable).
+ * The catalogue over the built-ins and `kinds`. A plan kind can never replace a built-in one —
+ * define_item_kind refuses those ids, and a loaded plan that carries one anyway does not get
+ * to redefine a sofa for everybody else's checker and 3D view.
  */
-export function registerCatalogEntry(entry: CatalogEntry): CatalogEntry {
-  const existing = catalogByKind(entry.kind);
-  if (existing) return existing;
-  CATALOG.push(entry);
-  return entry;
+export function catalogFor(kinds: readonly KindDef[]): Catalog {
+  const cached = catalogs.get(kinds);
+  if (cached) return cached;
+  const index = new Map<string, KindDef>();
+  for (const def of BUILT_IN_KINDS) index.set(def.kind, def);
+  for (const def of kinds) if (!index.has(def.kind)) index.set(def.kind, def);
+  const catalog: Catalog = { entries: Object.freeze([...index.values()]), get: (kind) => index.get(kind) };
+  catalogs.set(kinds, catalog);
+  return catalog;
 }
+
+/** The catalogue of a plan. */
+export const catalogOf = (model: Pick<PlanModel, "kinds">): Catalog => catalogFor(model.kinds);
 
 /**
  * Products adopted from the partner origin live in the catalogue under this prefix, so a
@@ -73,10 +99,25 @@ export const SUPPLIER_KIND_PREFIX = "nordika:";
 export const supplierKind = (sku: string): string => `${SUPPLIER_KIND_PREFIX}${sku.toUpperCase()}`;
 export const isSupplierKind = (kind: string): boolean => kind.toLowerCase().startsWith(SUPPLIER_KIND_PREFIX);
 
-/** The kinds the catalogue ships with, captured before anything is added at runtime. */
-const BUILT_IN_KINDS: ReadonlySet<string> = new Set(CATALOG.map((c) => c.kind));
-export const isBuiltInKind = (kind: string): boolean => BUILT_IN_KINDS.has(kind);
+/** How many kinds agents have added to this plan with define_item_kind. */
+export const customKindCount = (model: Pick<PlanModel, "kinds">): number =>
+  model.kinds.filter((k) => k.source === "custom").length;
 
-/** How many kinds agents have added with define_item_kind (neither built in nor from the supplier). */
-export const customKindCount = (): number =>
-  CATALOG.filter((c) => !isBuiltInKind(c.kind) && !isSupplierKind(c.kind)).length;
+/**
+ * The name the page uses for a kind in sentences it writes itself — tool summaries, checker
+ * messages, approval requests. A supplier product's label is the partner's text, so it is
+ * named by its kind id (built from a validated sku) instead; the label itself only ever
+ * travels to an agent inside a result's `untrusted` field.
+ */
+export const kindName = (def: KindDef): string => (def.source === "supplier" ? def.kind : def.label);
+
+/** A product as the plan adopts it from the partner (already validated at the supplier boundary). */
+export interface SupplierProductData {
+  sku: string;
+  name: string;
+  category: string;
+  w: number;
+  d: number;
+  h: number;
+  color: string;
+}

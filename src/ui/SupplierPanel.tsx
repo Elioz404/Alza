@@ -6,9 +6,10 @@
  */
 
 import { useState } from "react";
-import { useAppStore, actions, logActivity } from "../model/store";
+import { pageActions } from "../model/store";
+import { useAppStore } from "./useAppStore";
+import { dispatch } from "../model/commands";
 import { SUPPLIER_ORIGIN, listProducts, supplierFrameSrc, type SupplierProduct } from "../mcp/supplier";
-import { supplierKind } from "../model/catalog";
 
 export function SupplierPanel() {
   const supplierTools = useAppStore((s) => s.supplierTools);
@@ -19,11 +20,11 @@ export function SupplierPanel() {
   const pull = async () => {
     setError(null);
     try {
-      const { products: p, rejected, transport: t } = await listProducts({});
+      // a read: nothing in the plan changes, so nothing is dispatched (dropped products are
+      // reported by the supplier boundary itself)
+      const { products: p, transport: t } = await listProducts({});
       setProducts(p);
       setTransport(t);
-      const dropped = rejected > 0 ? ` ${rejected} malformed product(s) were dropped.` : "";
-      logActivity("human", "get_supplier_catalog", `Pulled ${p.length} product(s) from ${SUPPLIER_ORIGIN} via ${t}.${dropped}`, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -73,8 +74,8 @@ export function SupplierPanel() {
               disabled={p.stock === 0}
               title={p.stock === 0 ? "Out of stock at the supplier" : `${p.w} × ${p.d} m — click, then click on the plan`}
               onClick={() => {
-                const r = actions.importSupplierProduct(p);
-                if (r.ok) actions.setDrawMode("place", supplierKind(p.sku));
+                const r = dispatch({ type: "import_supplier_product", product: p }, { actor: "human" });
+                if (r.ok) pageActions.setDrawMode("place", String(r.kind));
                 else setError(r.summary);
               }}
             >

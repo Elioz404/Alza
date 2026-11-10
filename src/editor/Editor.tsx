@@ -1,15 +1,19 @@
 /**
  * Editor — precise 2D SVG plan editor.
  * Chained wall drawing, rooms, openings with door arcs, furniture, blueprint underlay,
- * metric dimensions, 5 cm snap, pan & zoom. Everything mutates the same store the agent uses.
+ * metric dimensions, 5 cm snap, pan & zoom. Every change goes through dispatch() as the human,
+ * the same path the agent's tools take; a drag is one gesture, so one undo step and one feed line.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { store, useAppStore, actions, logActivity } from "../model/store";
+import { store, pageActions } from "../model/store";
+import { useAppStore } from "../ui/useAppStore";
+import { dispatch } from "../model/commands";
 import type { Opening, Wall } from "../model/types";
 import { snap, segLen, segPoint } from "../model/geometry";
 import { openingSpan } from "../model/issues";
-import { catalogByKind } from "../model/catalog";
+import { catalogOf } from "../model/catalog";
+import { useGesture } from "../ui/useGesture";
 import { DEFAULT_FLOOR, ROOM_SIZE, WALL_DEFAULTS, WALL_MIN_LENGTH, type FloorFinish } from "../model/limits";
 
 interface View {
@@ -37,6 +41,7 @@ export function Editor() {
   const [dragRoom, setDragRoom] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [roomStart, setRoomStart] = useState<{ x: number; y: number } | null>(null);
   const [panning, setPanning] = useState<{ px: number; py: number; vx: number; vy: number } | null>(null);
+  const drag = useGesture();
   const svgRef = useRef<SVGSVGElement>(null);
   // The viewBox and the grid need the canvas size in pixels. Reading it off the ref during
   // render returned a stale (or, on first paint, missing) size and never re-rendered on
@@ -91,38 +96,36 @@ export function Editor() {
   );
 
   // ---- keyboard ----
+  // Subscribed once: the handler reads the selection from the store when a key is pressed.
   useEffect(() => {
+    const human = { actor: "human" } as const;
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "TEXTAREA") return;
       if (e.key === "Escape") {
-        actions.setDrawMode("select");
+        pageActions.setDrawMode("select");
         setRoomStart(null);
       }
       if (e.key === "Delete" || e.key === "Backspace") {
-        const { selectedWallId, selectedItemId, selectedRoomId } = editor;
+        const { selectedWallId, selectedItemId, selectedRoomId } = store.getState().editor;
         if (selectedWallId) {
-          const r = actions.removeWall(selectedWallId);
-          logActivity("human", "remove_wall", r.summary, r.ok);
-          actions.selectWall(null);
+          dispatch({ type: "remove_wall", id: selectedWallId }, human);
+          pageActions.selectWall(null);
         } else if (selectedItemId) {
-          const r = actions.removeItem(selectedItemId);
-          logActivity("human", "remove_item", r.summary, r.ok);
-          actions.selectItem(null);
+          dispatch({ type: "remove_item", id: selectedItemId }, human);
+          pageActions.selectItem(null);
         } else if (selectedRoomId) {
-          const r = actions.removeRoom(selectedRoomId);
-          logActivity("human", "remove_room", r.summary, r.ok);
-          actions.selectRoom(null);
+          dispatch({ type: "remove_room", id: selectedRoomId }, human);
+          pageActions.selectRoom(null);
         }
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "z") {
         e.preventDefault();
-        const r = actions.undo();
-        logActivity("human", "undo", r.summary, r.ok);
+        dispatch({ type: "undo" }, human);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editor]);
+  }, []);
 
   // ---- wheel zoom ----
   const onWheel = useCallback(
@@ -154,11 +157,10 @@ export function Editor() {
       return;
     }
     if (dragItem) {
-      actions.moveItem(dragItem.id, snap(p.x - dragItem.dx), snap(p.y - dragItem.dy));
+      drag.update({ type: "move_item", id: dragItem.id, x: snap(p.x - dragItem.dx), y: snap(p.y - dragItem.dy) });
     }
     if (dragRoom) {
-      const room = model.rooms.find((r) => r.id === dragRoom.id);
-      if (room) actions.updateRoom(room.id, { x: snap(p.x - dragRoom.dx), y: snap(p.y - dragRoom.dy) });
+      drag.update({ type: "update_room", id: dragRoom.id, patch: { x: snap(p.x - dragRoom.dx), y: snap(p.y - dragRoom.dy) } });
     }
   };
 
@@ -171,14 +173,13 @@ export function Editor() {
     }
     if (editor.drawMode === "wall") {
       if (!editor.pendingWallStart) {
-        actions.setPendingWallStart(sp);
+        pageActions.setPendingWallStart(sp);
       } else {
         const s = editor.pendingWallStart;
         // the store's own minimum, so a click it would refuse is not sent and one it accepts is not skipped
         if (Math.hypot(sp.x - s.x, sp.y - s.y) >= WALL_MIN_LENGTH) {
-          const r = actions.addWall(s.x, s.y, sp.x, sp.y);
-          logActivity("human", "add_wall", r.summary, r.ok);
-          actions.setPendingWallStart(sp); // chain
+          dispatch({ type: "add_wall", ax: s.x, ay: s.y, bx: sp.x, by: sp.y }, { actor: "human" });
+          pageActions.setPendingWallStart(sp); // chain
         }
       }
       return;
@@ -188,25 +189,23 @@ export function Editor() {
       return;
     }
     if (editor.drawMode === "place" && editor.placingKind) {
-      const r = actions.placeItem(editor.placingKind, sp.x, sp.y, 0);
-      logActivity("human", "place_item", r.summary, r.ok);
+      dispatch({ type: "place_item", kind: editor.placingKind, x: sp.x, y: sp.y, rotation: 0 }, { actor: "human" });
       return;
     }
     // select mode: background click clears selection / starts pan
-    actions.selectWall(null);
-    actions.selectItem(null);
-    actions.selectRoom(null);
+    pageActions.selectWall(null);
+    pageActions.selectItem(null);
+    pageActions.selectRoom(null);
     setPanning({ px: e.clientX, py: e.clientY, vx: view.x, vy: view.y });
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
     if (panning) setPanning(null);
-    if (dragItem) {
-      const it = model.items.find((i) => i.id === dragItem.id);
-      if (it) logActivity("human", "move_item", `Moved ${catalogByKind(it.kind)?.label ?? it.kind} to (${it.x.toFixed(2)}, ${it.y.toFixed(2)}).`);
+    if (dragItem || dragRoom) {
+      drag.end(); // the whole drag: one undo step, one line in the feed (nothing, if it never moved)
       setDragItem(null);
+      setDragRoom(null);
     }
-    if (dragRoom) setDragRoom(null);
     if (roomStart) {
       const p = toWorld(e.clientX, e.clientY);
       const sp = { x: snap(p.x), y: snap(p.y) };
@@ -215,8 +214,7 @@ export function Editor() {
       const w = Math.abs(sp.x - roomStart.x);
       const h = Math.abs(sp.y - roomStart.y);
       if (w >= ROOM_SIZE.min && h >= ROOM_SIZE.min) {
-        const r = actions.addRoom(x, y, w, h, `Room ${model.rooms.length + 1}`, DEFAULT_FLOOR);
-        logActivity("human", "add_room", r.summary, r.ok);
+        dispatch({ type: "add_room", x, y, w, h, label: `Room ${model.rooms.length + 1}`, floor: DEFAULT_FLOOR }, { actor: "human" });
       }
       setRoomStart(null);
     }
@@ -225,13 +223,13 @@ export function Editor() {
   const onWallClick = (w: Wall, e: React.MouseEvent) => {
     if (editor.drawMode !== "select") return; // let wall/room/place modes receive the click
     e.stopPropagation();
-    actions.selectWall(w.id);
+    pageActions.selectWall(w.id);
   };
 
   const onItemDown = (id: string, e: React.PointerEvent) => {
     if (editor.drawMode !== "select") return; // let place mode receive the click
     e.stopPropagation();
-    actions.selectItem(id);
+    pageActions.selectItem(id);
     const p = toWorld(e.clientX, e.clientY);
     const it = model.items.find((i) => i.id === id)!;
     setDragItem({ id, dx: p.x - it.x, dy: p.y - it.y });
@@ -240,7 +238,7 @@ export function Editor() {
   const onRoomDown = (id: string, e: React.PointerEvent) => {
     if (editor.drawMode !== "select") return; // let place mode receive the click
     e.stopPropagation();
-    actions.selectRoom(id);
+    pageActions.selectRoom(id);
     const p = toWorld(e.clientX, e.clientY);
     const room = model.rooms.find((r) => r.id === id)!;
     setDragRoom({ id, dx: p.x - room.x, dy: p.y - room.y });
@@ -249,6 +247,7 @@ export function Editor() {
   // ---- rendering helpers ----
   const S = view.scale;
   const wallById = new Map(model.walls.map((w) => [w.id, w]));
+  const catalog = catalogOf(model);
 
   const renderOpening = (o: Opening) => {
     const wall = wallById.get(o.wallId);
@@ -307,7 +306,7 @@ export function Editor() {
       onPointerUp={onPointerUp}
       onContextMenu={(e) => {
         e.preventDefault();
-        actions.setDrawMode("select");
+        pageActions.setDrawMode("select");
       }}
     >
       {gridLines}
@@ -382,7 +381,7 @@ export function Editor() {
 
       {/* furniture */}
       {model.items.map((it) => {
-        const cat = catalogByKind(it.kind);
+        const cat = catalog.get(it.kind);
         if (!cat) return null;
         const selected = editor.selectedItemId === it.id;
         return (

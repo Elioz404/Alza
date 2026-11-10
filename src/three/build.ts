@@ -6,7 +6,7 @@
 
 import * as THREE from "three";
 import type { Item, Opening, PlanModel, Room, Wall } from "../model/types";
-import { catalogByKind } from "../model/catalog";
+import { catalogOf, type Catalog } from "../model/catalog";
 import { segLen } from "../model/geometry";
 import { openingSpan } from "../model/issues";
 import { WALL_DEFAULTS, type FloorFinish } from "../model/limits";
@@ -395,7 +395,7 @@ export interface BuiltPlan {
 }
 
 /** Is a piece of furniture parked within curtain depth of this window? */
-function blockedInFront(wall: Wall, o: Opening, items: Item[]): boolean {
+function blockedInFront(wall: Wall, o: Opening, items: Item[], catalog: Catalog): boolean {
   const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
   if (len === 0) return true;
   const dx = (wall.bx - wall.ax) / len;
@@ -403,7 +403,7 @@ function blockedInFront(wall: Wall, o: Opening, items: Item[]): boolean {
   const cx = wall.ax + dx * o.t * len;
   const cy = wall.ay + dy * o.t * len;
   for (const it of items) {
-    const cat = catalogByKind(it.kind);
+    const cat = catalog.get(it.kind);
     if (!cat || cat.isRug) continue;
     const radius = Math.max(cat.w, cat.d) / 2;
     const vx = it.x - cx;
@@ -428,11 +428,12 @@ export function buildPlan(model: PlanModel): BuiltPlan {
 
   // A window only gets curtains when the floor in front of it is free — otherwise the
   // fabric would grow straight through a sofa or a wardrobe.
+  const catalog = catalogOf(model);
   const curtained = new Set<string>();
   for (const w of model.walls) {
     for (const o of openingsByWall.get(w.id) ?? []) {
       if (o.kind !== "window") continue;
-      if (!blockedInFront(w, o, model.items)) curtained.add(o.id);
+      if (!blockedInFront(w, o, model.items, catalog)) curtained.add(o.id);
     }
   }
 

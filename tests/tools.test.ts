@@ -34,8 +34,8 @@ describe("tool surface", () => {
     }
   });
 
-  it("only gives a confirm sentence to tools the gate stops", () => {
-    for (const t of TOOLS) expect(!!t.confirm, t.name).toBe(!!t.annotations?.destructiveHint);
+  it("gives a resolve step to every tool the gate stops, and only to those", () => {
+    for (const t of TOOLS) expect(!!t.resolve, t.name).toBe(!!t.annotations?.destructiveHint);
   });
 });
 

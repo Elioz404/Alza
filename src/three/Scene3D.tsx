@@ -13,17 +13,21 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { SSAOPass } from "three/examples/jsm/postprocessing/SSAOPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { store, useAppStore, actions, logActivity } from "../model/store";
+import { store, pageActions } from "../model/store";
+import { useAppStore } from "../ui/useAppStore";
+import { dispatch } from "../model/commands";
 import { buildPlan } from "./build";
 import { buildFurniture } from "./furniture";
-import { bus, EVENTS, type SetDoorsPayload } from "./exportBus";
-import { catalogByKind } from "../model/catalog";
+import { bus, EVENTS, type SetDoorsPayload } from "../model/sceneBus";
+import { catalogOf } from "../model/catalog";
+import { runToolManually } from "../mcp/tools";
 
 export function Scene3D() {
   const mountRef = useRef<HTMLDivElement>(null);
   const model = useAppStore((s) => s.model);
   const camera = useAppStore((s) => s.editor.camera);
   const placingKind = useAppStore((s) => (s.editor.drawMode === "place" ? s.editor.placingKind : null));
+  const catalog = catalogOf(model);
   const cameraRef = useRef<string>(camera);
   // Mirrored into a ref for the render loop, which outlives any single render. Written in an
   // effect, not during render, and declared before the build effect so a rebuild in the same
@@ -81,8 +85,9 @@ export function Scene3D() {
     const radius = Math.max(size.x, size.z, 4);
 
     for (const it of model.items) {
-      const fg = buildFurniture(it.kind);
-      if (!fg) continue;
+      const def = catalog.get(it.kind);
+      if (!def) continue;
+      const fg = buildFurniture(def);
       fg.position.set(it.x, 0.04, it.y);
       fg.rotation.y = (it.rotation * Math.PI) / 180;
       group.add(fg);
@@ -213,19 +218,17 @@ export function Scene3D() {
       ray.setFromCamera(ndcOf(e), cam);
       if (!kind) {
         // no placement in progress: a click on a leaf swings that door open / shut
+        // through set_doors, the tool an agent uses for the same thing, so the click is logged
+        // as the human's set_doors call and swings the leaf through the same bus event
         const hits = ray.intersectObjects(doorMeshes, false);
         const rec = hits.length > 0 ? doorRecFor(hits[0].object) : null;
-        if (rec) {
-          rec.target = rec.target > 0.5 ? 0 : 1;
-          logActivity("human", "door", `Door ${rec.hinge.userData.doorId} ${rec.target > 0.5 ? "opened" : "closed"}.`, true);
-        }
+        if (rec) void runToolManually("set_doors", { state: "toggle", id: rec.doorId });
         return;
       }
       const hit = new THREE.Vector3();
       if (ray.ray.intersectPlane(floorPlane, hit)) {
-        const r = actions.placeItem(kind, hit.x, hit.z, 0);
-        logActivity("human", "place_item", r.summary, r.ok);
-        actions.setDrawMode("select");
+        dispatch({ type: "place_item", kind, x: hit.x, y: hit.z, rotation: 0 }, { actor: "human" });
+        pageActions.setDrawMode("select");
       }
     };
     const onMove = (e: MouseEvent) => {
@@ -295,7 +298,7 @@ export function Scene3D() {
     });
 
     const itemBlockers = model.items.flatMap((it) => {
-      const c = catalogByKind(it.kind);
+      const c = catalog.get(it.kind);
       if (!c || c.isRug || c.h < STEP_OVER) return [];
       const th = (it.rotation * Math.PI) / 180;
       return [{ cx: it.x, cy: it.y, hw: c.w / 2, hh: c.d / 2, cos: Math.cos(th), sin: Math.sin(th) }];
@@ -423,14 +426,14 @@ export function Scene3D() {
         }
       });
     };
-  }, [model]);
+  }, [model, catalog]);
 
   return (
     <div className="scene3d-wrap">
       <div ref={mountRef} className="scene3d" />
       {placingKind && (
         <div className="placing-hint">
-          Click on the floor to place: <strong>{catalogByKind(placingKind)?.label ?? placingKind}</strong> — Esc to cancel
+          Click on the floor to place: <strong>{catalog.get(placingKind)?.label ?? placingKind}</strong> — Esc to cancel
         </div>
       )}
       <div className="camera-hint">

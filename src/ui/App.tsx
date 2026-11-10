@@ -1,13 +1,15 @@
 /** App shell — header (view/camera/tools status), editor or 3D scene, sidebar, activity feed. */
 
-import { useAppStore, actions, logActivity } from "../model/store";
+import { pageActions } from "../model/store";
+import { useAppStore } from "./useAppStore";
+import { dispatch } from "../model/commands";
 import { Editor } from "../editor/Editor";
 import { Scene3D } from "../three/Scene3D";
 import { Sidebar } from "./Sidebar";
 import { ActivityFeed } from "./ActivityFeed";
 import { ApprovalBar } from "./ApprovalBar";
 import { SupplierBridge } from "./SupplierBridge";
-import { bus, EVENTS } from "../three/exportBus";
+import { bus, EVENTS } from "../model/sceneBus";
 import { CAMERA_MODES } from "../model/limits";
 
 export function App() {
@@ -29,28 +31,21 @@ export function App() {
         <div className="header-group">
           {view === "2d" ? (
             <>
-              <button className={drawMode === "select" ? "active" : ""} onClick={() => actions.setDrawMode("select")}>
+              <button className={drawMode === "select" ? "active" : ""} onClick={() => pageActions.setDrawMode("select")}>
                 Select
               </button>
-              <button className={drawMode === "wall" ? "active" : ""} onClick={() => actions.setDrawMode("wall")}>
+              <button className={drawMode === "wall" ? "active" : ""} onClick={() => pageActions.setDrawMode("wall")}>
                 + Wall
               </button>
-              <button className={drawMode === "room" ? "active" : ""} onClick={() => actions.setDrawMode("room")}>
+              <button className={drawMode === "room" ? "active" : ""} onClick={() => pageActions.setDrawMode("room")}>
                 + Room
               </button>
-              <button
-                onClick={() => {
-                  const r = actions.undo();
-                  logActivity("human", "undo", r.summary, r.ok);
-                }}
-              >
-                Undo
-              </button>
+              <button onClick={() => dispatch({ type: "undo" }, { actor: "human" })}>Undo</button>
             </>
           ) : (
             <>
               {CAMERA_MODES.map((m) => (
-                <button key={m} className={camera === m ? "active" : ""} onClick={() => actions.setCamera(m)}>
+                <button key={m} className={camera === m ? "active" : ""} onClick={() => pageActions.setCamera(m)}>
                   {m === "orbit" ? "Orbit" : m === "top" ? "Top" : "Walk"}
                 </button>
               ))}
@@ -61,7 +56,7 @@ export function App() {
         </div>
 
         <div className="header-group">
-          <button className="primary" onClick={() => (view === "2d" ? actions.build3d() : actions.setView("2d"))}>
+          <button className="primary" onClick={() => (view === "2d" ? pageActions.build3d() : pageActions.setView("2d"))}>
             {view === "2d" ? "Build 3D ▲" : "Back to 2D"}
           </button>
           <span className={`pill ${webmcpStatus}`} title={webmcpStatus === "live" ? "WebMCP runtime detected — tools are live for your agent" : "No WebMCP runtime — use the Tools tab to run tools manually"}>
@@ -71,7 +66,7 @@ export function App() {
       </header>
 
       <main className="main">
-        <div className="canvas-area">{view === "2d" ? <Editor /> : <Scene3D key={JSON.stringify([view])} />}</div>
+        <div className="canvas-area">{view === "2d" ? <Editor /> : <Scene3D />}</div>
         <Sidebar />
       </main>
 

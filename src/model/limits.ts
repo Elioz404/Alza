@@ -104,6 +104,7 @@ export const MAX_PARTS = 64;
  */
 export const MAX_CUSTOM_KINDS = 100;
 export const PART_SHAPES = ["box", "cylinder", "sphere"] as const;
+export type PartShape = (typeof PART_SHAPES)[number];
 export const ITEM_CATEGORIES = ["living", "bedroom", "kitchen", "bath", "office", "decor"] as const;
 export type ItemCategory = (typeof ITEM_CATEGORIES)[number];
 /** Fallback colour for a custom kind defined without one. */
@@ -180,6 +181,8 @@ export const VALIDATION_REPORT = Object.freeze({
   maxEchoedKeys: 5,
   /** longest unknown key name echoed */
   maxKeyChars: 40,
+  /** longest stretch of a caller's reference a failed lookup quotes back */
+  maxRefChars: 60,
 });
 
 /** `#rrggbb`, the only colour form the 3D builders and the catalogue swatches agree on. */
@@ -187,12 +190,25 @@ export const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
 // ---------------------------------------------------------------------------- collaboration
 
-export const NOTE_AUTHORS = ["human", "agent"] as const;
-export type NoteAuthor = (typeof NOTE_AUTHORS)[number];
+/**
+ * Who can change the plan: the person at the page, or an agent calling its tools. Every
+ * change is attributed to one of them in the activity feed, and a note is signed by one.
+ */
+export const ACTORS = ["human", "agent"] as const;
+export type Actor = (typeof ACTORS)[number];
+export const NOTE_AUTHORS = ACTORS;
+export type NoteAuthor = Actor;
 /** Notes the plan holds at once. */
 export const MAX_NOTES = 200;
+/** How much of a note the summary of saving it quotes back. */
+export const NOTE_EXCERPT_CHARS = 60;
 /** Destructive calls that may wait for the human at once; more are refused, not queued. */
 export const MAX_PENDING_APPROVALS = 5;
+/**
+ * Entities a failed lookup names when a reference matches more than one: enough for an agent
+ * to pick the right id, few enough that an ambiguous "door" on a big plan stays a short answer.
+ */
+export const MAX_CANDIDATES = 10;
 
 // ---------------------------------------------------------------------------- supplier
 

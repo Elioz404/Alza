@@ -1,7 +1,7 @@
 /** Activity feed — every tool call (human or agent) is visible on the page. */
 
 import { useEffect, useRef } from "react";
-import { useAppStore } from "../model/store";
+import { useAppStore } from "./useAppStore";
 
 export function ActivityFeed() {
   const activity = useAppStore((s) => s.activity);

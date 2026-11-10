@@ -1,6 +1,7 @@
 /**
  * Manual ToolRunner — executes the exact same tools the WebMCP agent gets, through the
- * same wrapper (approval gate + activity log included).
+ * same wrapper (resolution, approval gate and activity log included). It is the human pressing
+ * Run, so the feed attributes each call to the human, and a note left from here is theirs.
  * Guarantees judges can always run the tools, even without a WebMCP runtime.
  */
 

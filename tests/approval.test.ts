@@ -8,6 +8,7 @@ import { z } from "zod";
 import { actions, store, type ActionResult } from "../src/model/store";
 import { executeWrapped, type ToolDef } from "../src/mcp/registry";
 import { TOOLS } from "../src/mcp/tools";
+import { seedLoft } from "../src/model/seed";
 import { flush, resetStore } from "./support/store";
 
 const tool = (name: string): ToolDef => {
@@ -22,7 +23,7 @@ const spyTool = (): ToolDef & { execute: ReturnType<typeof vi.fn> } => ({
   description: "test double",
   input: z.strictObject({}),
   annotations: { destructiveHint: true },
-  confirm: () => "destroy the thing",
+  resolve: (i) => ({ ok: true, input: i, request: "destroy the thing", targets: [], effects: [], entities: [] }),
   execute: vi.fn((): ActionResult => ({ ok: true, summary: "destroyed" })),
 });
 
@@ -169,11 +170,19 @@ describe("every destructive tool is gated", () => {
     expect(destructive.sort()).toEqual(["clear_model", "remove_item", "remove_opening", "remove_room", "remove_wall"]);
   });
 
-  // each with arguments its schema accepts, so it is the gate that stops it, not validation
-  const validInput = (name: string) => (name === "clear_model" ? {} : { id: "anything" });
+  // each aimed at a real entity of the demo loft, so it is the gate that stops it, not
+  // validation or resolution
+  const TARGET: Record<string, Record<string, unknown>> = {
+    clear_model: {},
+    remove_wall: { id: "wall_n" },
+    remove_opening: { id: "door_main" },
+    remove_room: { id: "room_bed" },
+    remove_item: { id: "item_sofa" },
+  };
 
   it.each(destructive)("%s parks instead of running", async (name) => {
-    const call = executeWrapped(tool(name), input(validInput(name)));
+    actions.loadModel(seedLoft());
+    const call = executeWrapped(tool(name), input(TARGET[name]));
     await flush();
     expect(pending()).toHaveLength(1);
     actions.resolveApproval(pending()[0].id, false);

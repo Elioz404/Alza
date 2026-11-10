@@ -2,12 +2,15 @@
  * Composite furniture builders — each kind is a small THREE.Group of primitives
  * with calibrated PBR materials. Local frame: footprint centered at origin,
  * width along +x, depth along +z, front facing +z.
+ *
+ * Everything is built from a catalogue definition (model/catalog.ts), never from state kept
+ * here: a built-in kind gets its hand-modelled builder, an agent-defined one is assembled from
+ * the `parts` its definition carries, and anything else is blocked out from its footprint.
  */
 
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
-import { catalogByKind } from "../model/catalog";
-import { DEFAULT_ITEM_COLOR } from "../model/limits";
+import type { KindDef, PartSpec } from "../model/types";
 
 const mat = (color: string, roughness = 0.8, metalness = 0): THREE.MeshStandardMaterial =>
   new THREE.MeshStandardMaterial({ color, roughness, metalness });
@@ -535,43 +538,20 @@ export const FURNITURE_BUILDERS: Record<string, Builder> = {
   plant,
 };
 
+/** Surface of an agent-authored part: a definition carries shape and colour, not material. */
+const PART_ROUGHNESS = 0.7;
+
 /**
- * A part of an agent-authored piece. Local frame matches every other builder:
- * width along +x, depth along +z, y measured up from the floor, front facing +z.
+ * An agent-authored piece, from the parts its definition carries. Local frame matches every
+ * other builder: width along +x, depth along +z, y measured up from the floor, front facing +z.
  */
-export interface PartSpec {
-  shape?: "box" | "cylinder" | "sphere";
-  x?: number;
-  y?: number;
-  z?: number;
-  w?: number;
-  h?: number;
-  d?: number;
-  color?: string;
-  /** degrees about the vertical axis */
-  rotation?: number;
-  roughness?: number;
-  metalness?: number;
-}
-
-/** Kinds an agent modelled at runtime with define_item_kind. */
-const CUSTOM_PARTS = new Map<string, PartSpec[]>();
-
-export function defineCustomKind(kind: string, parts: PartSpec[]): void {
-  CUSTOM_PARTS.set(kind, parts);
-}
-
-export function hasCustomKind(kind: string): boolean {
-  return CUSTOM_PARTS.has(kind);
-}
-
-function buildCustom(parts: PartSpec[], fallbackColor: string): THREE.Group {
+function buildCustom(parts: readonly PartSpec[], fallbackColor: string): THREE.Group {
   const g = new THREE.Group();
   for (const p of parts) {
     const w = Math.max(0.01, p.w ?? 0.3);
     const h = Math.max(0.01, p.h ?? 0.3);
     const d = Math.max(0.01, p.d ?? 0.3);
-    const m = mat(p.color ?? fallbackColor, p.roughness ?? 0.7, p.metalness ?? 0);
+    const m = mat(p.color ?? fallbackColor, PART_ROUGHNESS);
     let mesh: THREE.Mesh;
     if (p.shape === "cylinder") {
       mesh = new THREE.Mesh(new THREE.CylinderGeometry(w / 2, w / 2, h, 24), m);
@@ -591,7 +571,7 @@ function buildCustom(parts: PartSpec[], fallbackColor: string): THREE.Group {
   return g;
 }
 
-/** Imported partner products have no hand-modelled builder: block them out from the catalogue box. */
+/** A kind with neither a builder nor parts (an imported partner product): blocked out from its box. */
 function genericPiece(w: number, d: number, h: number, color: string): THREE.Group {
   const g = new THREE.Group();
   const body = mat(color, 0.75);
@@ -608,11 +588,9 @@ function genericPiece(w: number, d: number, h: number, color: string): THREE.Gro
   return g;
 }
 
-export function buildFurniture(kind: string): THREE.Group | null {
-  const cat = catalogByKind(kind);
-  const custom = CUSTOM_PARTS.get(kind);
-  if (custom) return buildCustom(custom, cat?.color ?? DEFAULT_ITEM_COLOR);
-  const b = FURNITURE_BUILDERS[kind];
-  if (b) return b();
-  return cat ? genericPiece(cat.w, cat.d, cat.h, cat.color) : null;
+/** The 3D piece for one catalogue definition. */
+export function buildFurniture(def: KindDef): THREE.Group {
+  if (def.parts && def.parts.length > 0) return buildCustom(def.parts, def.color);
+  const builder = def.source === "builtin" ? FURNITURE_BUILDERS[def.kind] : undefined;
+  return builder ? builder() : genericPiece(def.w, def.d, def.h, def.color);
 }

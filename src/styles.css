@@ -185,6 +185,27 @@ textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 12
   color: #8a7a5e;
   margin-left: 8px;
 }
+/* the resolved entities and side effects sit on their own lines, apart from the request */
+.approval-targets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.approval-target {
+  font-size: 12px;
+  padding: 1px 7px;
+  border: 1px solid #ecd9b8;
+  border-radius: 4px;
+  background: #fff;
+}
+.approval-target-type { font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; }
+.approval-target-label {
+  margin-left: 4px;
+  color: #8a7a5e;
+  display: inline-block;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.approval-effect { display: block; font-size: 12px; color: #8a6a3e; margin-top: 3px; }
 .approval-actions { display: flex; gap: 6px; }
 .approval-actions button { font-size: 12px; padding: 5px 12px; }
 .approval-actions .approve { background: #2f7d5b; border-color: #2f7d5b; color: #fff; }
@@ -216,6 +237,8 @@ textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 12
 .supplier-actions { display: flex; align-items: center; gap: 10px; }
 .supplier-transport { font-size: 11px; opacity: 0.7; }
 .supplier-error { font-size: 12px; color: #b4462f; margin: 0; }
+/* a sidebar field that could not take what was given, e.g. an unreadable blueprint */
+.field-error { font-size: 12px; color: #b4462f; margin: 4px 0 0; }
 .supplier-list { display: flex; flex-direction: column; gap: 5px; }
 .supplier-row {
   display: grid;

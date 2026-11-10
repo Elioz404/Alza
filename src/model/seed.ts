@@ -67,5 +67,6 @@ export const seedLoft = (): PlanModel => ({
     { id: "item_night", kind: "nightstand", x: 5.8, y: 0.35, rotation: 0 },
     { id: "item_wardrobe", kind: "wardrobe", x: 6.7, y: 3.0, rotation: 180 },
   ],
+  kinds: [],
   underlay: null,
 });

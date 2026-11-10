@@ -202,19 +202,25 @@ regression test.
 
 ```
 src/
-  model/    types.ts · geometry.ts (snap, SAT, segment math) · issues.ts (checker)
-            catalog.ts (31 furniture kinds + runtime entries) · store.ts (shared actions, undo, activity) · seed.ts
+  model/    types.ts · geometry.ts (snap, SAT, segment math) · issues.ts (checker rules)
+            catalog.ts (31 built-in kinds + the plan's own kinds) · resolve.ts (id/name lookup)
+            store.ts (shared actions, undo, activity) · commands.ts (dispatch: the one change path)
+            sceneBus.ts · seed.ts
   editor/   Editor.tsx — SVG: chained walls, rooms, openings with door arcs,
             furniture drag, blueprint underlay, metric dimensions, 5 cm snap, pan/zoom
   three/    build.ts (extrusion with real openings, resolved joints, floors)
             furniture.ts (composite pieces + generic builder for imported products) · Scene3D.tsx (orbit/top/walk + WASD,
-            click-to-place, OBJ/PNG export) · exportBus.ts
+            click-to-place, OBJ/PNG export)
   mcp/      registry.ts (registration + uniform logging) · tools.ts (31 + 1 dynamic)
             bootstrap.ts (runtime detection, dynamic tool lifecycle, toolchange)
   ui/       App · Sidebar (Model/Check/Catalog/Supplier/Notes/Tools) · ToolRunner
             ActivityFeed · ApprovalBar (human-in-the-loop gate) · SupplierPanel (cross-origin)
-tests/      geometry, checker, store, approval gate and tool-surface suites
-            (incl. seed = 0 issues regression)
+            SupplierBridge (the partner frame the postMessage transport uses) · useAppStore · useGesture
+tests/      domain: geometry, checker (incl. seed = 0 issues regression), rules, catalog,
+            resolve, store, invariants, commands (dispatch, gestures, undo)
+            agent surface: tools, validation, approval gate, trust, untrusted partner text,
+            supplier, transport, underlay · page: derived (what the UI reads off the tools)
+            build and config: layering, config, sites, headers, production, serve-local
 scripts/
   e2e-full.mjs  Playwright: drives the real app in Chromium with --enable-features=WebMCP,
               runs every tool, asserts zero console errors — 56 checks

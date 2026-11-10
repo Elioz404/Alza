@@ -11,15 +11,52 @@
  * And one thing happens before all of them: the input is validated against the tool's zod
  * schema — the same schema its published `inputSchema` is derived from — so what an agent
  * is told it may send and what the page accepts cannot drift apart.
+ *
+ * Tools change the plan the way the UI does, through dispatch() (model/commands.ts): this
+ * module is the adapter that turns a tool call into commands attributed to its actor.
  */
 
 import { z } from "zod";
-import { actions, store, logActivity, type ActionResult } from "../model/store";
+import { actions, store, logActivity, type ActionResult, type AppState } from "../model/store";
+import { dispatch, type Actor, type Command } from "../model/commands";
 import { describeIssues } from "../model/schemas";
+import type { ApprovalTarget } from "../model/types";
 import { isAllowedOrigin } from "../../config/origins.js";
 
 /** A JSON Schema object, as published in a tool descriptor. */
 export type JsonSchema = Record<string, unknown>;
+
+/** The part of the page a tool's resolve step reads: the plan, and the notes it would erase. */
+export type PlanState = Pick<AppState, "model" | "notes">;
+
+/**
+ * What a destructive call will act on, found in the model before anyone is asked. Everything
+ * the human reads comes from here, and here comes from the model — never from the arguments.
+ */
+export interface Resolution<I> {
+  ok: true;
+  /** the input with every reference replaced by the exact id it resolved to */
+  input: I;
+  /** the sentence shown to the human, written from entity types and ids only */
+  request: string;
+  targets: ApprovalTarget[];
+  /** what else happens, e.g. "Also removes the 2 openings on it: door_main, win_n" */
+  effects: string[];
+  /**
+   * The model objects the call acts on, its side effects included. The model is immutable, so
+   * an entity that is still the same object when the call finally runs has not changed.
+   */
+  entities: readonly unknown[];
+}
+
+/** A resolve step answers with what it found, or with why it found nothing (or too much). */
+export type ResolveOutcome<I> = Resolution<I> | (ActionResult & { ok: false });
+
+/** What a running tool is handed besides its input. */
+export interface ToolContext {
+  /** change the plan as the caller's actor; the activity feed shows the change under the tool's name */
+  dispatch(command: Command): ActionResult;
+}
 
 export interface ToolDef<S extends z.ZodType = z.ZodType> {
   name: string;
@@ -45,14 +82,21 @@ export interface ToolDef<S extends z.ZodType = z.ZodType> {
   };
   /** secure origins this tool is shared with (WebMCP cross-origin exposure) */
   exposedTo?: string[];
-  /** plain-language sentence shown to the human when the approval gate stops this call */
-  confirm?(input: z.output<S>): string;
-  /** runs with input that has already passed `input`, typed accordingly */
-  execute(input: z.output<S>): ActionResult | Promise<ActionResult>;
+  /**
+   * Find what the call would act on — required of every destructive tool. It runs before the
+   * approval gate (so the human is asked about real entities), and again just before execute
+   * (so a call whose targets changed while it waited does not run).
+   */
+  resolve?(input: z.output<S>, state: PlanState): ResolveOutcome<z.output<S>>;
+  /**
+   * Runs with input that has already passed `input`, typed accordingly — and, for a tool with
+   * a resolve step, with every reference already replaced by the exact id it resolved to.
+   */
+  execute(input: z.output<S>, ctx: ToolContext): ActionResult | Promise<ActionResult>;
 }
 
 /**
- * Declare a tool. Only a helper for inference: `execute` and `confirm` get the parsed type of
+ * Declare a tool. Only a helper for inference: `execute` and `resolve` get the parsed type of
  * `input`, so a tool body never casts its arguments.
  */
 export const defineTool = <S extends z.ZodType>(def: ToolDef<S>): ToolDef<S> => def;
@@ -119,54 +163,104 @@ export function getModelContext(): ModelContextLike | null {
 /** Tool results travel as text: agents read JSON fine, and every runtime accepts a string. */
 const asText = (result: ActionResult): string => JSON.stringify(result);
 
+export interface CallContext {
+  signal?: AbortSignal;
+  /** who is calling: an agent over WebMCP (the default), or the human through the ToolRunner */
+  actor?: Actor;
+}
+
+/** Same entities, same objects, same order: nothing the call acts on has changed. */
+const sameEntities = (a: readonly unknown[], b: readonly unknown[]): boolean =>
+  a.length === b.length && a.every((entity, i) => entity === b[i]);
+
 /**
- * Run a tool the way WebMCP would: validation, approval gate, execution, activity log, text
- * result. The on-page ToolRunner uses this too, so the fallback path behaves identically.
+ * Run a tool the way WebMCP would: validation, resolution, approval gate, execution, activity
+ * log. The on-page ToolRunner uses this too, so the fallback path behaves identically — only
+ * the actor differs, so the feed says who pressed the button.
  *
  * Validation comes first: input that does not match the schema is answered with the list of
  * problems and never reaches the gate (no prompt for a call that could not run) or execute.
+ *
+ * A destructive call is then RESOLVED against the model: every reference must name exactly
+ * one entity, or the call is refused with the candidates. The human approves those entities,
+ * described by the page, and the call runs on their exact ids — after a last check that none
+ * of them changed or vanished while the request waited.
  */
 export async function executeWrapped<S extends z.ZodType>(
   def: ToolDef<S>,
   rawInput: unknown,
-  ctx: { signal?: AbortSignal } = {},
+  ctx: CallContext = {},
 ): Promise<ActionResult> {
+  const actor = ctx.actor ?? "agent";
+  const finish = (result: ActionResult): ActionResult => {
+    logActivity(actor, def.name, result.summary, result.ok);
+    return result;
+  };
+
   const parsed = def.input.safeParse(rawInput ?? {});
   if (!parsed.success) {
     // bounded (VALIDATION_REPORT): this text is echoed to the agent and kept in the feed
     const issues = describeIssues(parsed.error);
-    const invalid: ActionResult = {
+    return finish({
       ok: false,
       summary: `Invalid input for ${def.name}: ${issues.join("; ")}. Nothing was changed — fix the arguments and call it again.`,
       issues,
-    };
-    logActivity("agent", def.name, invalid.summary, false);
-    return invalid;
+    });
   }
-  const input = parsed.data;
-  if (def.annotations?.destructiveHint && store.getState().requireApproval) {
-    const request = def.confirm ? def.confirm(input) : `run ${def.name}`;
-    const outcome = await actions.requestApproval(def.name, request, input as Record<string, unknown>, ctx.signal);
+  let input = parsed.data;
+
+  const destructive = def.annotations?.destructiveHint === true;
+  const { resolve } = def;
+  if (destructive && !resolve) {
+    // fail closed: without a resolve step there is nothing true to show the human
+    return finish({ ok: false, summary: `${def.name} cannot say what it would act on, so it does not run.` });
+  }
+  let resolution: Resolution<z.output<S>> | undefined;
+  if (resolve) {
+    const found = resolve(input, store.getState());
+    if (!found.ok) return finish(found);
+    resolution = found;
+    input = found.input;
+  }
+
+  if (destructive && resolve && resolution && store.getState().requireApproval) {
+    const { request, targets, effects } = resolution;
+    const outcome = await actions.requestApproval({ tool: def.name, actor, request, targets, effects }, ctx.signal);
     if (outcome !== "approved") {
-      const denied: ActionResult = {
+      return finish({
         ok: false,
         summary:
           outcome === "queue_full"
             ? `Blocked: too many requests are already waiting for the human, so "${request}" was not queued. Nothing was changed — wait until they answer the pending ones, then ask again.`
             : `Blocked: the human declined "${request}". Nothing was changed — ask them what to do instead.`,
-      };
-      logActivity("agent", def.name, denied.summary, false);
-      return denied;
+      });
+    }
+    // The plan kept moving while the human read the request. What they approved is what runs,
+    // or nothing does.
+    const now = resolve(resolution.input, store.getState());
+    if (!now.ok || !sameEntities(now.entities, resolution.entities)) {
+      return finish({
+        ok: false,
+        summary: `Not done: what "${request}" acts on changed while it was waiting for approval, so the approval no longer describes it. Nothing was changed — read the plan again and ask again.`,
+      });
     }
   }
-  let result: ActionResult;
+
+  let dispatched = false;
+  const toolCtx: ToolContext = {
+    dispatch: (command) => {
+      dispatched = true;
+      return dispatch(command, { actor, as: def.name });
+    },
+  };
   try {
-    result = await def.execute(input);
+    const result = await def.execute(input, toolCtx);
+    // a change dispatch() made is already in the feed, attributed to `actor`; anything else
+    // (a read, a refusal before any change) is recorded here
+    return dispatched ? result : finish(result);
   } catch (err) {
-    result = { ok: false, summary: `Error: ${err instanceof Error ? err.message : String(err)}` };
+    return finish({ ok: false, summary: `Error: ${err instanceof Error ? err.message : String(err)}` });
   }
-  logActivity("agent", def.name, result.summary, result.ok);
-  return result;
 }
 
 /** Turn a ToolDef into the descriptor object WebMCP expects. */
@@ -177,7 +271,9 @@ export function wrapTool(def: ToolDef): Record<string, unknown> {
     description: def.description,
     inputSchema: inputSchemaOf(def),
     ...(def.annotations ? { annotations: def.annotations } : {}),
-    execute: async (input: unknown, ctx?: { signal?: AbortSignal }) => asText(await executeWrapped(def, input, ctx ?? {})),
+    // whatever reaches a tool through the runtime is an agent's call
+    execute: async (input: unknown, ctx?: { signal?: AbortSignal }) =>
+      asText(await executeWrapped(def, input, { signal: ctx?.signal, actor: "agent" })),
   };
 }
 

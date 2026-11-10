@@ -87,10 +87,32 @@ export type SupplierProduct = z.output<typeof supplierProductSchema>;
 const listAnswer = z.object({ products: z.array(z.unknown()).max(SUPPLIER.maxProducts) });
 const productAnswer = z.object({ product: z.unknown().nullable().optional() });
 
+/**
+ * What went wrong talking to the partner: it could not be reached, it refused the call, or it
+ * answered with something the studio will not accept.
+ */
+export type SupplierFailure = "unreachable" | "refused" | "invalid";
+
+/**
+ * A failed supplier call. `message` is written by the page and may be shown or relayed as the
+ * page's own words; anything the partner said about the failure — its error text, the problems
+ * found in its answer — is kept apart in `partnerText`, because it is third-party content.
+ */
+export class SupplierError extends Error {
+  readonly failure: SupplierFailure;
+  readonly partnerText?: string;
+  constructor(failure: SupplierFailure, message: string, partnerText?: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "SupplierError";
+    this.failure = failure;
+    if (partnerText !== undefined) this.partnerText = partnerText;
+  }
+}
+
 /** Raised when the partner answers with something the studio will not accept. */
-export class SupplierDataError extends Error {
-  constructor(message: string) {
-    super(message);
+export class SupplierDataError extends SupplierError {
+  constructor(message: string, partnerText?: string) {
+    super("invalid", message, partnerText);
     this.name = "SupplierDataError";
   }
 }
@@ -112,7 +134,8 @@ const replyEnvelope = z.object({
     .optional()
     .transform((e) => (e === undefined ? undefined : clip(e, TEXT.supplierError))),
 });
-type Reply = { ok: boolean; result?: unknown; error?: string };
+/** A reply as the transport hands it on; `malformed` lists what was wrong with one it refused. */
+type Reply = { ok: boolean; result?: unknown; error?: string; malformed?: string };
 
 /** Parse one raw answer: bounded in size, valid JSON, and matching `schema`. */
 function parseAnswer<S extends z.ZodType>(tool: string, raw: unknown, schema: S): z.output<S> {
@@ -128,12 +151,13 @@ function parseAnswer<S extends z.ZodType>(tool: string, raw: unknown, schema: S)
     }
   }
   const parsed = schema.safeParse(data);
-  if (!parsed.success) throw new SupplierDataError(`${tool} answered in an unexpected shape (${issuesOf(parsed.error)}).`);
+  if (!parsed.success) throw new SupplierDataError(`${tool} answered in an unexpected shape.`, issuesOf(parsed.error));
   return parsed.data;
 }
 
 let modelContext: ModelContextLike | null = null;
 let remoteTools: RemoteTool[] = [];
+/** The partner window the postMessage transport talks to, while its owner has one registered. */
 let frame: Window | null = null;
 
 /** postMessage fallback plumbing. */
@@ -150,24 +174,24 @@ window.addEventListener("message", (e: MessageEvent) => {
   if (!settle || (data as Record<string, unknown>)[RESULT_TAG] !== true) return;
   pending.delete(id);
   const reply = replyEnvelope.safeParse(data);
-  settle(reply.success ? reply.data : { ok: false, error: `${SUPPLIER_ORIGIN} sent a malformed reply (${issuesOf(reply.error)}).` });
+  settle(reply.success ? reply.data : { ok: false, malformed: issuesOf(reply.error) });
 });
 
-/** Called by the bridge component once its iframe is live. */
-export function attachSupplierFrame(win: Window | null): void {
-  frame = win;
-}
-
 /**
- * Resolve the partner frame at call time. Caching the Window is not safe: React remounts and
- * tab switches detach the element underneath it, and postMessage on a detached frame throws.
- * The live DOM is the source of truth; the cached handle is only a fallback.
+ * Hand the postMessage transport the partner window to talk to. Its owner — the always-mounted
+ * SupplierBridge — registers its frame once the partner page has loaded in it, and calls the
+ * returned function when the frame goes away (an unmount, a remount), so the transport never
+ * posts to a window that is no longer on the page. The owner holds the lifecycle; the
+ * transport does not go looking for frames in the DOM.
+ *
+ * Unregistering only clears the frame if it is still the one registered, so a stale cleanup
+ * that runs after a newer frame registered does not take the transport away from it.
  */
-function supplierFrame(): Window | null {
-  const el =
-    document.querySelector<HTMLIFrameElement>("iframe.supplier-bridge") ??
-    document.querySelector<HTMLIFrameElement>("iframe.supplier-frame");
-  return el?.contentWindow ?? frame;
+export function registerSupplierFrame(win: Window): () => void {
+  frame = win;
+  return () => {
+    if (frame === win) frame = null;
+  };
 }
 
 export function supplierToolNames(): string[] {
@@ -206,25 +230,28 @@ export async function connectSupplier(mc: ModelContextLike | null): Promise<void
 }
 
 async function viaPostMessage(tool: string, args: Record<string, unknown>): Promise<unknown> {
-  const target = supplierFrame();
-  if (!target) throw new Error(`The partner origin (${SUPPLIER_ORIGIN}) is not loaded on this page.`);
+  const target = frame;
+  if (!target) throw new SupplierError("unreachable", `The partner origin (${SUPPLIER_ORIGIN}) is not loaded on this page.`);
   const id = `sup_${++msgSeq}`;
   const reply = new Promise<Reply>((resolve, reject) => {
     pending.set(id, resolve);
     setTimeout(() => {
-      if (pending.delete(id)) reject(new Error(`Supplier did not answer "${tool}" within ${REPLY_TIMEOUT_MS} ms.`));
+      if (pending.delete(id)) {
+        reject(new SupplierError("unreachable", `${SUPPLIER_ORIGIN} did not answer "${tool}" within ${REPLY_TIMEOUT_MS} ms.`));
+      }
     }, REPLY_TIMEOUT_MS);
   });
   try {
     target.postMessage({ [REQUEST_TAG]: true, id, tool, args }, SUPPLIER_ORIGIN);
   } catch (err) {
     pending.delete(id);
-    throw new Error(`Could not reach ${SUPPLIER_ORIGIN}: ${err instanceof Error ? err.message : String(err)}`, {
-      cause: err,
-    });
+    // the browser's own account of why the post failed, so the page may repeat it
+    const why = err instanceof Error ? err.message : String(err);
+    throw new SupplierError("unreachable", `Could not reach ${SUPPLIER_ORIGIN}: ${why}`, undefined, { cause: err });
   }
   const out = await reply;
-  if (!out.ok) throw new Error(out.error ?? "Supplier call failed.");
+  if (out.malformed !== undefined) throw new SupplierDataError(`${SUPPLIER_ORIGIN} sent a malformed reply.`, out.malformed);
+  if (!out.ok) throw new SupplierError("refused", `${SUPPLIER_ORIGIN} refused "${tool}".`, out.error);
   return out.result;
 }
 
@@ -294,9 +321,9 @@ export async function getProduct(sku: string) {
   const { data, transport } = await callSupplier(tool, { sku }, productAnswer);
   if (data.product == null) return { product: null, transport };
   const p = supplierProductSchema.safeParse(data.product);
-  if (!p.success) throw new SupplierDataError(`${SUPPLIER_ORIGIN} sent an invalid product for "${sku}" (${issuesOf(p.error)}).`);
+  if (!p.success) throw new SupplierDataError(`${SUPPLIER_ORIGIN} sent an invalid product for "${sku}".`, issuesOf(p.error));
   if (p.data.sku.toUpperCase() !== sku.toUpperCase()) {
-    throw new SupplierDataError(`${SUPPLIER_ORIGIN} answered "${sku}" with a different product ("${p.data.sku}").`);
+    throw new SupplierDataError(`${SUPPLIER_ORIGIN} answered "${sku}" with a different product.`, `sku: ${p.data.sku}`);
   }
   return { product: p.data, transport };
 }

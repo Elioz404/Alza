@@ -5,13 +5,18 @@
  * angle and hands back a data URL, cached by kind. Agent-defined and supplier-imported kinds
  * come out of the same pipeline, so a piece an agent models at runtime appears in the catalogue
  * looking like itself rather than as a coloured rectangle.
+ *
+ * The cache is keyed by kind and checked against the whole definition, so a kind an agent
+ * redefines (or an undo restores) gets the thumbnail of what it is now, and the cache holds one
+ * image per kind however often that happens.
  */
 
 import * as THREE from "three";
 import { buildFurniture } from "./furniture";
+import type { KindDef } from "../model/types";
 
 const SIZE = 176;
-const cache = new Map<string, string>();
+const cache = new Map<string, { definition: string; url: string }>();
 let renderer: THREE.WebGLRenderer | null = null;
 let scene: THREE.Scene | null = null;
 let camera: THREE.PerspectiveCamera | null = null;
@@ -50,16 +55,13 @@ function dispose(group: THREE.Object3D): void {
 }
 
 /** Render one catalogue kind to a PNG data URL (cached). Returns null if WebGL is unavailable. */
-export function thumbnailFor(kind: string): string | null {
-  const hit = cache.get(kind);
-  if (hit !== undefined) return hit;
+export function thumbnailFor(def: KindDef): string | null {
+  const definition = JSON.stringify(def);
+  const hit = cache.get(def.kind);
+  if (hit?.definition === definition) return hit.url;
   if (!init() || !renderer || !scene || !camera) return null;
 
-  const piece = buildFurniture(kind);
-  if (!piece) {
-    cache.set(kind, "");
-    return null;
-  }
+  const piece = buildFurniture(def);
   scene.add(piece);
 
   // frame the piece: three-quarter view, fitted to its bounding sphere
@@ -76,11 +78,6 @@ export function thumbnailFor(kind: string): string | null {
 
   scene.remove(piece);
   dispose(piece);
-  cache.set(kind, url);
+  cache.set(def.kind, { definition, url });
   return url;
-}
-
-/** Drop a cached thumbnail — used when an agent redefines a kind it already created. */
-export function invalidateThumbnail(kind: string): void {
-  cache.delete(kind);
 }

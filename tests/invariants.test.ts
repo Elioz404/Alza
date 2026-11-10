@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { actions, store, type ActionResult, type RoomPatch, type WallPatch } from "../src/model/store";
 import { executeWrapped, type ToolDef } from "../src/mcp/registry";
 import { TOOLS } from "../src/mcp/tools";
-import { CATALOG, SUPPLIER_KIND_PREFIX, catalogByKind, customKindCount, supplierKind } from "../src/model/catalog";
+import { SUPPLIER_KIND_PREFIX, catalogOf, customKindCount, supplierKind } from "../src/model/catalog";
 import { snap } from "../src/model/geometry";
 import {
   COORD,
@@ -34,7 +34,7 @@ import {
 } from "../src/model/limits";
 import { checkModel } from "../src/model/issues";
 import { z } from "zod";
-import { flush, resetStore } from "./support/store";
+import { flush, kindOf, resetStore } from "./support/store";
 
 beforeEach(resetStore);
 
@@ -209,13 +209,13 @@ describe("furniture", () => {
     const parts = Array.from({ length: MAX_PARTS + 1 }, () => ({ shape: "box" as const }));
     expect(actions.defineItemKind({ ...base, parts }).ok).toBe(false);
     expect(actions.defineItemKind({ ...base, parts: [{ w: Infinity }] }).ok).toBe(false);
-    expect(catalogByKind("test_piano")).toBeUndefined();
+    expect(kindOf("test_piano")).toBeUndefined();
   });
 
   it("defineItemKind still accepts a well-formed piece", () => {
     const r = actions.defineItemKind({ kind: "test_island", label: "Island", w: 2, d: 1, h: 0.9, parts: [{ shape: "box", w: 2, h: 0.9, d: 1 }] });
     expect(r.ok).toBe(true);
-    expect(catalogByKind("test_island")).toMatchObject({ w: 2, d: 1, h: 0.9 });
+    expect(kindOf("test_island")).toMatchObject({ w: 2, d: 1, h: 0.9 });
   });
 });
 
@@ -264,7 +264,7 @@ describe("text and resource limits", () => {
       description: "test double",
       input: z.strictObject({}),
       annotations: { destructiveHint: true },
-      confirm: () => "destroy the thing",
+      resolve: (input) => ({ ok: true, input, request: "destroy the thing", targets: [], effects: [], entities: [] }),
       execute: () => {
         ran++;
         return { ok: true, summary: "destroyed" };
@@ -336,7 +336,7 @@ describe("custom kinds", () => {
     const spec = { label: "Fake", w: 1, d: 1, h: 1 };
     expect(actions.defineItemKind({ ...spec, kind: `${SUPPLIER_KIND_PREFIX}nk-sof-3s` }).ok).toBe(false);
     expect(actions.defineItemKind({ ...spec, kind: `${SUPPLIER_KIND_PREFIX.toUpperCase()}NK-SOF-3S` }).ok).toBe(false);
-    expect(CATALOG.some((c) => c.kind.startsWith(SUPPLIER_KIND_PREFIX))).toBe(false);
+    expect(catalogOf(store.getState().model).entries.some((c) => c.kind.startsWith(SUPPLIER_KIND_PREFIX))).toBe(false);
   });
 
   it("maps a supplier sku to one kind whatever its case", () => {
@@ -345,16 +345,16 @@ describe("custom kinds", () => {
 
   it(`adds at most ${MAX_CUSTOM_KINDS} kinds, but still lets an existing one be redefined`, () => {
     const spec = { label: "Block", w: 1, d: 1, h: 1 };
-    for (let i = customKindCount(); i < MAX_CUSTOM_KINDS; i++) {
+    for (let i = customKindCount(store.getState().model); i < MAX_CUSTOM_KINDS; i++) {
       expect(actions.defineItemKind({ ...spec, kind: `cap_${i}` }).ok).toBe(true);
     }
-    expect(customKindCount()).toBe(MAX_CUSTOM_KINDS);
+    expect(customKindCount(store.getState().model)).toBe(MAX_CUSTOM_KINDS);
     const r = actions.defineItemKind({ ...spec, kind: "one_too_many" });
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(new RegExp(`${MAX_CUSTOM_KINDS} custom kinds`));
-    expect(catalogByKind("one_too_many")).toBeUndefined();
-    const last = CATALOG[CATALOG.length - 1].kind;
+    expect(kindOf("one_too_many")).toBeUndefined();
+    const last = catalogOf(store.getState().model).entries.at(-1)!.kind;
     expect(actions.defineItemKind({ ...spec, kind: last, w: 2 }).ok).toBe(true);
-    expect(catalogByKind(last)?.w).toBe(2);
+    expect(kindOf(last)?.w).toBe(2);
   });
 });

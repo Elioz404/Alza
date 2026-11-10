@@ -1,13 +1,22 @@
 /**
- * Single source of truth. The UI buttons and the WebMCP tools call THE SAME actions,
- * so human and agent truly co-edit one model. Vanilla zustand store (usable outside React).
+ * Single source of truth. The UI and the WebMCP tools change the plan through THE SAME actions,
+ * so human and agent truly co-edit one model. Vanilla zustand store: React reads it through
+ * ui/useAppStore.ts, and nothing here depends on React.
+ *
+ * Plan changes are reached through dispatch() in commands.ts, which attributes each one to its
+ * actor in the activity feed and records it as one undo step; `actions` holds the operations
+ * dispatch runs, each of which checks its own arguments. `pageActions` is the part of the
+ * surface that only moves the page around the plan — view, selection, draw mode, the approval
+ * bar — and is what the UI may call directly.
  */
 
 import { createStore } from "zustand/vanilla";
-import { useStore } from "zustand";
 import type {
   ActivityEntry,
+  ActivitySource,
+  ApprovalTarget,
   Item,
+  KindDef,
   Note,
   Opening,
   OpeningKind,
@@ -18,11 +27,19 @@ import type {
   Wall,
 } from "./types";
 import { emptyModel } from "./types";
-import { clampOpeningT, checkModel } from "./issues";
+import { clampOpeningT } from "./issues";
 import { segLen, snap } from "./geometry";
-import { catalogByKind, customKindCount, isBuiltInKind, isSupplierKind, registerCatalogEntry, supplierKind } from "./catalog";
-import { defineCustomKind, FURNITURE_BUILDERS } from "../three/furniture";
-import { describeIssues, partList, type PartInput } from "./schemas";
+import {
+  catalogOf,
+  customKindCount,
+  freezeKind,
+  isSupplierKind,
+  kindName,
+  supplierKind,
+  type SupplierProductData,
+} from "./catalog";
+import { lookupItem, lookupOpening, lookupRoom, lookupWall, type Lookup } from "./resolve";
+import { clip, describeIssues, partList, type PartInput } from "./schemas";
 import {
   CALIBRATION_METERS,
   CAMERA_MODES,
@@ -42,6 +59,7 @@ import {
   MAX_PARTS,
   MAX_PENDING_APPROVALS,
   NOTE_AUTHORS,
+  NOTE_EXCERPT_CHARS,
   OPACITY,
   OPENING_HEIGHT,
   OPENING_SILL,
@@ -62,10 +80,10 @@ import {
   WINDOW_DEFAULTS,
   firstError,
   rangeError,
+  type Actor,
   type CameraMode,
   type Hinge,
   type ItemCategory,
-  type NoteAuthor,
   type Range,
   type SwingSide,
 } from "./limits";
@@ -78,6 +96,16 @@ export interface ActionResult {
 
 export type { CameraMode };
 export type ViewMode = "2d" | "3d";
+
+/**
+ * One undo step: the plan and the notes as they were before a change. Both are replaced, never
+ * edited in place, so a step holds the very objects the page had — kinds stay frozen, and an
+ * entity an undo brings back is the same object a pending approval was shown.
+ */
+export interface UndoStep {
+  readonly model: PlanModel;
+  readonly notes: Note[];
+}
 
 /** How a parked destructive call ended. "queue_full" means it was never parked at all. */
 export type ApprovalOutcome = "approved" | "rejected" | "queue_full";
@@ -98,7 +126,7 @@ export interface AppState {
   notes: Note[];
   activity: ActivityEntry[];
   editor: EditorState;
-  undoStack: PlanModel[];
+  undoStack: UndoStep[];
   webmcpStatus: "off" | "live";
   lastChangeAt: number;
   /** destructive agent calls waiting for a human decision */
@@ -107,11 +135,9 @@ export interface AppState {
   requireApproval: boolean;
   /** cross-origin tools discovered on partner origins, by tool name */
   supplierTools: string[];
-  /** bumped whenever a kind is added to the catalogue at runtime, so the UI re-renders */
-  catalogRev: number;
 }
 
-/** How many plan snapshots undo keeps; the oldest falls off beyond this. */
+/** How many undo steps are kept; the oldest falls off beyond this. */
 export const UNDO_DEPTH = 50;
 /** How many entries the on-page activity feed keeps. */
 export const ACTIVITY_LIMIT = 200;
@@ -142,10 +168,7 @@ export const store = createStore<AppState>(() => ({
   approvals: [],
   requireApproval: true,
   supplierTools: [],
-  catalogRev: 0,
 }));
-
-export const useAppStore = <T>(selector: (s: AppState) => T): T => useStore(store, selector);
 
 // ---------------------------------------------------------------------------
 // Activity log
@@ -160,8 +183,32 @@ export function logActivity(source: ActivityEntry["source"], tool: string, summa
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * How snapshot requests are treated right now: "each" (an action called on its own records its
+ * step), "once" (the first request inside withUndo records, the rest fold into it) or "none".
+ */
+let undoMode: "each" | "once" | "none" = "each";
+
 function pushUndo() {
-  store.setState((s) => ({ undoStack: [...s.undoStack.slice(-(UNDO_DEPTH - 1)), structuredClone(s.model)] }));
+  if (undoMode === "none") return;
+  if (undoMode === "once") undoMode = "none";
+  store.setState((s) => ({ undoStack: [...s.undoStack.slice(-(UNDO_DEPTH - 1)), { model: s.model, notes: s.notes }] }));
+}
+
+/**
+ * Run `fn` recording at most one undo step for everything it changes — or none, when `record`
+ * is false. This is how a command that runs several actions (place a supplier product: adopt
+ * its kind, then place it) and a gesture that runs one per frame (a drag) each come out as a
+ * single step. Synchronous on purpose: nothing else can run while the mode is changed.
+ */
+export function withUndo<T>(record: boolean, fn: () => T): T {
+  const previous = undoMode;
+  undoMode = record ? "once" : "none";
+  try {
+    return fn();
+  } finally {
+    undoMode = previous;
+  }
 }
 
 function setModel(model: PlanModel) {
@@ -170,8 +217,6 @@ function setModel(model: PlanModel) {
 
 /** id -> settle(granted); kept out of the store because promises are not serialisable state. */
 const approvalResolvers = new Map<string, (granted: boolean) => void>();
-
-const bumpCatalog = () => store.setState((s) => ({ catalogRev: s.catalogRev + 1 }));
 
 const ok = (summary: string, extra: Record<string, unknown> = {}): ActionResult => ({ ok: true, summary, ...extra });
 const fail = (summary: string, extra: Record<string, unknown> = {}): ActionResult => ({ ok: false, summary, ...extra });
@@ -241,32 +286,31 @@ const ROOM_PATCH_KEYS = ["x", "y", "w", "h", "label", "floor"] as const;
 export type WallPatch = Partial<Pick<Wall, (typeof WALL_PATCH_KEYS)[number]>>;
 export type RoomPatch = Partial<Pick<Room, (typeof ROOM_PATCH_KEYS)[number]>>;
 
-/** A wall by exact id, or else by a fragment of one. Every tool that addresses a wall resolves it here. */
-export function findWall(idOrHint: string): Wall | undefined {
-  const { walls } = store.getState().model;
-  return walls.find((w) => w.id === idOrHint) ?? walls.find((w) => w.id.includes(idOrHint));
+/** A piece of furniture as define_item_kind describes it, before it is checked and frozen. */
+export interface ItemKindSpec {
+  kind: string;
+  label: string;
+  w: number;
+  d: number;
+  h: number;
+  color?: string;
+  category?: string;
+  parts?: PartInput[];
 }
 
-function findRoom(idOrLabel: string): Room | undefined {
-  const { rooms } = store.getState().model;
-  const q = idOrLabel.toLowerCase();
-  return rooms.find((r) => r.id === idOrLabel) ?? rooms.find((r) => r.label.toLowerCase().includes(q));
-}
+/** A failed lookup as an action result: nothing changed, and the candidates travel with it. */
+const lookupFailed = (found: Extract<Lookup<unknown>, { ok: false }>): ActionResult =>
+  fail(found.summary, found.candidates.length > 0 ? { candidates: found.candidates } : {});
 
-function findItem(idOrKind: string): Item | undefined {
-  const { items } = store.getState().model;
-  const q = idOrKind.toLowerCase();
-  return (
-    items.find((i) => i.id === idOrKind) ??
-    items.find((i) => i.kind.toLowerCase().includes(q) || (catalogByKind(i.kind)?.label.toLowerCase().includes(q) ?? false))
-  );
-}
+/** The plan's kinds with `def` in place of the kind of the same id, or appended when it is new. */
+const withKind = (kinds: readonly KindDef[], def: KindDef): KindDef[] =>
+  kinds.some((k) => k.kind === def.kind) ? kinds.map((k) => (k.kind === def.kind ? def : k)) : [...kinds, def];
 
 // ---------------------------------------------------------------------------
-// Shared actions (UI + WebMCP tools)
+// Plan actions — what dispatch() runs, for either actor
 // ---------------------------------------------------------------------------
 
-export const actions = {
+const planActions = {
   // ---- structure ----
   addWall(
     ax: number,
@@ -301,8 +345,9 @@ export const actions = {
       ),
     );
     if (bad) return fail(bad);
-    const wall = findWall(id);
-    if (!wall) return fail(`Wall "${id}" not found.`);
+    const found = lookupWall(store.getState().model, id);
+    if (!found.ok) return lookupFailed(found);
+    const wall = found.entity;
     // Built key by key from the allowed list, so nothing else in `patch` (an id, say) can land.
     const next: Wall = { ...wall };
     for (const k of WALL_PATCH_KEYS) {
@@ -324,8 +369,9 @@ export const actions = {
   removeWall(id: string): ActionResult {
     const bad = textError("id", id, TEXT.ref);
     if (bad) return fail(bad);
-    const wall = findWall(id);
-    if (!wall) return fail(`Wall "${id}" not found.`);
+    const found = lookupWall(store.getState().model, id);
+    if (!found.ok) return lookupFailed(found);
+    const wall = found.entity;
     pushUndo();
     const model = store.getState().model;
     setModel({
@@ -358,8 +404,9 @@ export const actions = {
       oneOfError("side", swing?.side, SWING_SIDES),
     );
     if (bad) return fail(bad);
-    const wall = findWall(wallId);
-    if (!wall) return fail(`Wall "${wallId}" not found.`);
+    const found = lookupWall(store.getState().model, wallId);
+    if (!found.ok) return lookupFailed(found);
+    const wall = found.entity;
     const clamped = clampOpeningT(wall, w, t);
     if (clamped === null) {
       const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
@@ -384,9 +431,10 @@ export const actions = {
   setDoorSwing(id: string, hinge?: Hinge, side?: SwingSide): ActionResult {
     const bad = firstError(textError("id", id, TEXT.ref), oneOfError("hinge", hinge, HINGES), oneOfError("side", side, SWING_SIDES));
     if (bad) return fail(bad);
-    const { openings } = store.getState().model;
-    const o = openings.find((x) => x.id === id) ?? openings.find((x) => x.id.includes(id));
-    if (!o) return fail(`Opening "${id}" not found.`);
+    const model = store.getState().model;
+    const found = lookupOpening(model, id);
+    if (!found.ok) return lookupFailed(found);
+    const o = found.entity;
     if (o.kind !== "door") return fail(`${o.id} is a window — only doors swing.`);
     const next = {
       ...o,
@@ -394,38 +442,36 @@ export const actions = {
       side: side ?? o.side ?? DOOR_SWING_DEFAULTS.side,
     };
     pushUndo();
-    setModel({
-      ...store.getState().model,
-      openings: openings.map((x) => (x.id === o.id ? next : x)),
-    });
+    setModel({ ...model, openings: model.openings.map((x) => (x.id === o.id ? next : x)) });
     return ok(`Door ${o.id} hinges on "${next.hinge}" and swings to the "${next.side}".`, { id: o.id });
   },
 
   moveOpening(id: string, t: number): ActionResult {
     const bad = firstError(textError("id", id, TEXT.ref), numbersError(["t", t, OPENING_T]));
     if (bad) return fail(bad);
-    const { openings } = store.getState().model;
-    const o = openings.find((x) => x.id === id) ?? openings.find((x) => x.id.includes(id));
-    if (!o) return fail(`Opening "${id}" not found.`);
-    const wall = findWall(o.wallId)!;
+    const model = store.getState().model;
+    const found = lookupOpening(model, id);
+    if (!found.ok) return lookupFailed(found);
+    const o = found.entity;
+    // the host by its exact id: an opening's wallId is a reference the model holds, not a name
+    const wall = model.walls.find((w) => w.id === o.wallId);
+    if (!wall) return fail(`${o.kind} ${o.id} is on wall ${o.wallId}, which no longer exists.`);
     const clamped = clampOpeningT(wall, o.width, t);
     if (clamped === null) return fail("Opening does not fit on its wall.");
     pushUndo();
-    setModel({
-      ...store.getState().model,
-      openings: openings.map((x) => (x.id === o.id ? { ...x, t: clamped } : x)),
-    });
+    setModel({ ...model, openings: model.openings.map((x) => (x.id === o.id ? { ...x, t: clamped } : x)) });
     return ok(`${o.kind} ${o.id} moved to t=${clamped.toFixed(2)}.`, { id: o.id, t: clamped });
   },
 
   removeOpening(id: string): ActionResult {
     const bad = textError("id", id, TEXT.ref);
     if (bad) return fail(bad);
-    const { openings } = store.getState().model;
-    const o = openings.find((x) => x.id === id) ?? openings.find((x) => x.id.includes(id));
-    if (!o) return fail(`Opening "${id}" not found.`);
+    const model = store.getState().model;
+    const found = lookupOpening(model, id);
+    if (!found.ok) return lookupFailed(found);
+    const o = found.entity;
     pushUndo();
-    setModel({ ...store.getState().model, openings: openings.filter((x) => x.id !== o.id) });
+    setModel({ ...model, openings: model.openings.filter((x) => x.id !== o.id) });
     return ok(`${o.kind} ${o.id} removed.`, { id: o.id });
   },
 
@@ -454,8 +500,9 @@ export const actions = {
       oneOfError("floor", patch.floor, FLOOR_FINISHES),
     );
     if (bad) return fail(bad);
-    const room = findRoom(idOrLabel);
-    if (!room) return fail(`Room "${idOrLabel}" not found.`);
+    const found = lookupRoom(store.getState().model, idOrLabel);
+    if (!found.ok) return lookupFailed(found);
+    const room = found.entity;
     // Only the patchable fields are copied. Spreading the whole patch let the lookup key in
     // it replace the room's real id: update_room { id: "bedroom" } renamed the id to "bedroom".
     const next: Room = { ...room };
@@ -474,8 +521,9 @@ export const actions = {
   removeRoom(idOrLabel: string): ActionResult {
     const bad = textError("id", idOrLabel, TEXT.ref);
     if (bad) return fail(bad);
-    const room = findRoom(idOrLabel);
-    if (!room) return fail(`Room "${idOrLabel}" not found.`);
+    const found = lookupRoom(store.getState().model, idOrLabel);
+    if (!found.ok) return lookupFailed(found);
+    const room = found.entity;
     pushUndo();
     setModel({ ...store.getState().model, rooms: store.getState().model.rooms.filter((r) => r.id !== room.id) });
     return ok(`Room "${room.label}" removed.`, { id: room.id });
@@ -488,12 +536,13 @@ export const actions = {
       numbersError(["x", x, COORD], ["y", y, COORD], ["rotation", rotation, ROTATION]),
     );
     if (bad) return fail(bad);
-    const cat = catalogByKind(kind);
-    if (!cat) return fail(`Unknown furniture kind "${kind}". Use get_item_catalog.`);
+    const model = store.getState().model;
+    const cat = catalogOf(model).get(kind);
+    if (!cat) return fail(`Unknown furniture kind ${JSON.stringify(kind)}. Use get_item_catalog.`);
     const item: Item = { id: uid("item"), kind: cat.kind, x: snap(x), y: snap(y), rotation };
     pushUndo();
-    setModel({ ...store.getState().model, items: [...store.getState().model.items, item] });
-    return ok(`${cat.label} placed at (${item.x.toFixed(2)}, ${item.y.toFixed(2)}).`, { id: item.id });
+    setModel({ ...model, items: [...model.items, item] });
+    return ok(`${kindName(cat)} placed at (${item.x.toFixed(2)}, ${item.y.toFixed(2)}).`, { id: item.id });
   },
 
   moveItem(idOrKind: string, x?: number, y?: number, rotation?: number): ActionResult {
@@ -502,8 +551,9 @@ export const actions = {
       numbersError(["x", x, COORD], ["y", y, COORD], ["rotation", rotation, ROTATION]),
     );
     if (bad) return fail(bad);
-    const item = findItem(idOrKind);
-    if (!item) return fail(`Item "${idOrKind}" not found.`);
+    const found = lookupItem(store.getState().model, idOrKind);
+    if (!found.ok) return lookupFailed(found);
+    const item = found.entity;
     const next: Item = {
       ...item,
       x: x !== undefined ? snap(x) : item.x,
@@ -521,8 +571,9 @@ export const actions = {
   removeItem(idOrKind: string): ActionResult {
     const bad = textError("id", idOrKind, TEXT.ref);
     if (bad) return fail(bad);
-    const item = findItem(idOrKind);
-    if (!item) return fail(`Item "${idOrKind}" not found.`);
+    const found = lookupItem(store.getState().model, idOrKind);
+    if (!found.ok) return lookupFailed(found);
+    const item = found.entity;
     pushUndo();
     setModel({ ...store.getState().model, items: store.getState().model.items.filter((i) => i.id !== item.id) });
     return ok(`Item ${item.id} removed.`, { id: item.id });
@@ -545,33 +596,29 @@ export const actions = {
     return ok("Model cleared. Blank canvas ready.");
   },
 
-  build3d(): ActionResult {
-    const m = store.getState().model;
-    if (m.walls.length === 0) return fail("Nothing to build: the plan has no walls yet.");
-    store.setState((s) => ({ editor: { ...s.editor, view: "3d" } }));
-    return ok(`3D model built: ${m.walls.length} walls, ${m.openings.length} openings, ${m.items.length} items.`);
-  },
-
-  setCamera(mode: CameraMode): ActionResult {
-    if (!isOneOf(mode, CAMERA_MODES)) return fail(`Unknown camera "${String(mode)}". Use ${CAMERA_MODES.join(" | ")}.`);
-    store.setState((s) => ({ editor: { ...s.editor, view: "3d", camera: mode } }));
-    return ok(`Camera set to ${mode}.`);
-  },
-
-  setView(view: ViewMode) {
-    store.setState((s) => ({ editor: { ...s.editor, view } }));
+  /**
+   * Replace the whole plan, e.g. with the demo loft. Undoable like any other edit. A plan that
+   * arrives as data (parsed JSON) has its kinds frozen on the way in, like every kind it holds.
+   */
+  loadModel(model: PlanModel): ActionResult {
+    pushUndo();
+    setModel({ ...model, kinds: model.kinds.map(freezeKind) });
+    return ok(`Plan "${model.name}" loaded: ${model.walls.length} walls, ${model.rooms.length} rooms, ${model.items.length} items.`);
   },
 
   // ---- collaboration ----
-  leaveNote(author: NoteAuthor, text: string): ActionResult {
-    const bad = firstError(memberError("author", author, NOTE_AUTHORS), textError("text", text, TEXT.note));
+  /** Notes are signed by one of the two actors; the page itself does not write them. */
+  leaveNote(author: ActivitySource, text: string): ActionResult {
+    if (!isOneOf(author, NOTE_AUTHORS)) return fail(notOneOf("author", NOTE_AUTHORS));
+    const bad = textError("text", text, TEXT.note);
     if (bad) return fail(bad);
     if (store.getState().notes.length >= MAX_NOTES) {
       return fail(`The plan already holds ${MAX_NOTES} notes, the most it keeps — ask the human to clear some first.`);
     }
     const note: Note = { id: uid("note"), author, text, at: Date.now() };
+    pushUndo();
     store.setState((s) => ({ notes: [...s.notes, note] }));
-    return ok(`Note saved (${author}): "${text.slice(0, 60)}${text.length > 60 ? "…" : ""}"`, { id: note.id });
+    return ok(`Note saved (${author}): "${clip(text, NOTE_EXCERPT_CHARS)}"`, { id: note.id });
   },
 
   // ---- underlay ----
@@ -580,8 +627,11 @@ export const actions = {
       const bad = underlayError(underlay);
       if (bad) return fail(bad);
     }
+    pushUndo();
     setModel({ ...store.getState().model, underlay });
-    return ok(underlay ? "Underlay set." : "Underlay removed.");
+    if (!underlay) return ok("Underlay removed.");
+    const size = underlay.pw && underlay.ph ? ` (${underlay.pw}×${underlay.ph})` : "";
+    return ok(`Blueprint set${size}, opacity ${Math.round(underlay.opacity * 100)}%. Trace walls over it.`);
   },
 
   calibrateUnderlay(u1: number, v1: number, u2: number, v2: number, meters: number, opacity?: number): ActionResult {
@@ -608,6 +658,7 @@ export const actions = {
     // it (the opacity slider's included) is refused.
     const badNext = underlayError(next);
     if (badNext) return fail(`Calibration rejected: the calibrated underlay would be invalid (${badNext})`);
+    pushUndo();
     setModel({ ...m, underlay: next });
     return ok(
       `Underlay calibrated: ${u.w.toFixed(2)} → ${newW.toFixed(2)} m wide (×${scale.toFixed(3)}). Image point (${u1}, ${v1}) stays at world (${p1x.toFixed(2)}, ${p1y.toFixed(2)}).`,
@@ -615,59 +666,17 @@ export const actions = {
     );
   },
 
-  // ---- human-in-the-loop approval ----
-  setRequireApproval(on: boolean) {
-    store.setState({ requireApproval: on });
-    logActivity("human", "approval_policy", on ? "Destructive agent actions now need your approval." : "Approval gate switched off.", true);
-  },
-
-  /**
-   * Park a destructive agent call until the human decides. Resolves "approved" or "rejected" —
-   * or "queue_full" at once, without parking anything, when MAX_PENDING_APPROVALS requests are
-   * already waiting: an agent must not be able to bury the page in prompts.
-   * Honours the AbortSignal WebMCP hands to execute(), so an agent that gives up
-   * releases the request instead of leaving it hanging on the page.
-   */
-  requestApproval(tool: string, request: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ApprovalOutcome> {
-    if (store.getState().approvals.length >= MAX_PENDING_APPROVALS) return Promise.resolve("queue_full");
-    const entry: PendingApproval = { id: uid("appr"), tool, request, args, at: Date.now() };
-    store.setState((s) => ({ approvals: [...s.approvals, entry] }));
-    logActivity("agent", tool, `Waiting for your approval: ${request}`, true);
-    return new Promise<ApprovalOutcome>((resolve) => {
-      const settle = (granted: boolean) => {
-        if (!approvalResolvers.has(entry.id)) return;
-        approvalResolvers.delete(entry.id);
-        store.setState((s) => ({ approvals: s.approvals.filter((a) => a.id !== entry.id) }));
-        resolve(granted ? "approved" : "rejected");
-      };
-      approvalResolvers.set(entry.id, settle);
-      signal?.addEventListener("abort", () => settle(false), { once: true });
-    });
-  },
-
-  resolveApproval(id: string, granted: boolean): ActionResult {
-    const entry = store.getState().approvals.find((a) => a.id === id);
-    const settle = approvalResolvers.get(id);
-    if (!entry || !settle) return fail("That request is no longer pending.");
-    settle(granted);
-    logActivity("human", entry.tool, granted ? `Approved: ${entry.request}` : `Rejected: ${entry.request}`, granted);
-    return ok(granted ? "Approved." : "Rejected.");
-  },
+  // ---- catalogue (the plan's own kinds) ----
 
   /**
    * Adopt a product from the partner origin into this plan's catalogue, keeping the
    * supplier's real dimensions so the constraint checker judges it like anything else.
    * The supplier boundary has already validated it; the checks here hold for any caller.
+   * A product the plan already holds keeps its first definition, so its kind stays stable.
+   *
+   * The summary names the product by sku: its name is the partner's text, not the page's.
    */
-  importSupplierProduct(p: {
-    sku: string;
-    name: string;
-    category: string;
-    w: number;
-    d: number;
-    h: number;
-    color: string;
-  }): ActionResult {
+  importSupplierProduct(p: SupplierProductData): ActionResult {
     const bad = firstError(
       typeof p.sku === "string" && SUPPLIER.sku.test(p.sku) ? null : "sku is not a valid supplier sku.",
       textError("name", p.name, TEXT.label),
@@ -677,27 +686,22 @@ export const actions = {
     );
     if (bad) return fail(`Supplier product rejected: ${bad}`);
     const kind = supplierKind(p.sku);
+    const model = store.getState().model;
+    if (catalogOf(model).get(kind)) return ok(`Supplier product ${kind} is already in this plan's catalogue.`, { kind });
     const category = isCategory(p.category) ? p.category : p.category === "dining" ? "kitchen" : "decor";
-    registerCatalogEntry({ kind, label: p.name, w: p.w, d: p.d, h: p.h, color: p.color, category });
-    bumpCatalog();
-    return ok(`${p.name} imported from the supplier (${p.w} × ${p.d} m).`, { kind });
+    const def = freezeKind({ kind, label: p.name, w: p.w, d: p.d, h: p.h, color: p.color, category, source: "supplier" });
+    pushUndo();
+    setModel({ ...model, kinds: withKind(model.kinds, def) });
+    return ok(`Supplier product ${kind} added to this plan's catalogue (${p.w} × ${p.d} m).`, { kind });
   },
 
   /**
    * Register a piece of furniture that is not in the catalogue — the escape hatch that lets an
    * agent match what a plan actually draws instead of approximating with the nearest stock item.
-   * `parts` is optional: without it the piece is blocked out from its footprint.
+   * `parts` is optional: without it the piece is blocked out from its footprint. Redefining a
+   * kind replaces its whole definition, parts included.
    */
-  defineItemKind(spec: {
-    kind: string;
-    label: string;
-    w: number;
-    d: number;
-    h: number;
-    color?: string;
-    category?: string;
-    parts?: PartInput[];
-  }): ActionResult {
+  defineItemKind(spec: ItemKindSpec): ActionResult {
     const bad = firstError(
       textError("kind", spec.kind, TEXT.kind),
       textError("label", spec.label, TEXT.label),
@@ -713,43 +717,80 @@ export const actions = {
     if (parts && !parts.success) return fail(describeIssues(parts.error, { under: "parts" }).join("; "));
     const kind = spec.kind.trim().toLowerCase().replace(/[^a-z0-9_:-]+/g, "_");
     if (!kind) return fail("A kind id is required.");
-    if (isBuiltInKind(kind) || FURNITURE_BUILDERS[kind]) {
+    const model = store.getState().model;
+    const existing = catalogOf(model).get(kind);
+    if (existing?.source === "builtin") {
       return fail(`"${kind}" is a built-in kind — pick another id or use place_item.`);
     }
     // the supplier's namespace is the supplier's: an agent kind there would shadow a product
     if (isSupplierKind(kind)) {
       return fail(`"${kind}" is reserved for supplier products — pick another id, or use place_supplier_product.`);
     }
-    const existing = catalogByKind(kind);
-    if (!existing && customKindCount() >= MAX_CUSTOM_KINDS) {
+    if (!existing && customKindCount(model) >= MAX_CUSTOM_KINDS) {
       return fail(`The catalogue already holds ${MAX_CUSTOM_KINDS} custom kinds, the most it keeps — redefine one of them instead.`);
     }
-    const category = isCategory(spec.category) ? spec.category : "decor";
-    const color = spec.color ?? DEFAULT_ITEM_COLOR;
-    if (existing) {
-      existing.label = spec.label;
-      existing.w = spec.w;
-      existing.d = spec.d;
-      existing.h = spec.h;
-      existing.color = color;
-      existing.category = category;
-    } else {
-      registerCatalogEntry({ kind, label: spec.label, w: spec.w, d: spec.d, h: spec.h, color, category });
-    }
     const partCount = parts?.data.length ?? 0;
-    if (parts && partCount > 0) defineCustomKind(kind, parts.data);
-    bumpCatalog();
+    const def = freezeKind({
+      kind,
+      label: spec.label,
+      w: spec.w,
+      d: spec.d,
+      h: spec.h,
+      color: spec.color ?? DEFAULT_ITEM_COLOR,
+      category: isCategory(spec.category) ? spec.category : "decor",
+      source: "custom",
+      ...(parts && partCount > 0 ? { parts: parts.data } : {}),
+    });
+    pushUndo();
+    setModel({ ...model, kinds: withKind(model.kinds, def) });
     return ok(
       `"${spec.label}" defined as ${kind} (${spec.w} × ${spec.d} × ${spec.h} m${partCount ? `, ${partCount} parts` : ", blocked out from its footprint"}). Place it with place_item.`,
       { kind },
     );
   },
 
-  setSupplierTools(names: string[]) {
-    store.setState({ supplierTools: names });
+  undo(): ActionResult {
+    const { undoStack } = store.getState();
+    if (undoStack.length === 0) return fail("Nothing to undo.");
+    const prev = undoStack[undoStack.length - 1];
+    store.setState({ undoStack: undoStack.slice(0, -1), notes: prev.notes });
+    setModel(prev.model);
+    return ok("Undone.");
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Page actions — the view, the selection and the approval bar. None of them changes the plan,
+// so the UI calls them directly.
+// ---------------------------------------------------------------------------
+
+/** What a destructive call asks the human, written by the page from the entities it resolved. */
+export interface ApprovalRequest {
+  tool: string;
+  actor: Actor;
+  request: string;
+  targets: ApprovalTarget[];
+  effects: string[];
+}
+
+export const pageActions = {
+  build3d(): ActionResult {
+    const m = store.getState().model;
+    if (m.walls.length === 0) return fail("Nothing to build: the plan has no walls yet.");
+    store.setState((s) => ({ editor: { ...s.editor, view: "3d" } }));
+    return ok(`3D model built: ${m.walls.length} walls, ${m.openings.length} openings, ${m.items.length} items.`);
   },
 
-  // ---- selection / editor ----
+  setCamera(mode: CameraMode): ActionResult {
+    if (!isOneOf(mode, CAMERA_MODES)) return fail(`Unknown camera "${String(mode)}". Use ${CAMERA_MODES.join(" | ")}.`);
+    store.setState((s) => ({ editor: { ...s.editor, view: "3d", camera: mode } }));
+    return ok(`Camera set to ${mode}.`);
+  },
+
+  setView(view: ViewMode) {
+    store.setState((s) => ({ editor: { ...s.editor, view } }));
+  },
+
   selectWall(id: string | null) {
     store.setState((s) => ({ editor: { ...s.editor, selectedWallId: id, selectedItemId: null, selectedRoomId: null } }));
   },
@@ -766,25 +807,58 @@ export const actions = {
     store.setState((s) => ({ editor: { ...s.editor, pendingWallStart: p } }));
   },
 
-  undo(): ActionResult {
-    const { undoStack } = store.getState();
-    if (undoStack.length === 0) return fail("Nothing to undo.");
-    const prev = undoStack[undoStack.length - 1];
-    store.setState({ undoStack: undoStack.slice(0, -1) });
-    setModel(prev);
-    return ok("Undone.");
+  // ---- human-in-the-loop approval ----
+  setRequireApproval(on: boolean) {
+    store.setState({ requireApproval: on });
+    logActivity("human", "approval_policy", on ? "Destructive agent actions now need your approval." : "Approval gate switched off.", true);
   },
 
-  loadModel(model: PlanModel) {
-    pushUndo();
-    setModel(model);
+  resolveApproval(id: string, granted: boolean): ActionResult {
+    const entry = store.getState().approvals.find((a) => a.id === id);
+    const settle = approvalResolvers.get(id);
+    if (!entry || !settle) return fail("That request is no longer pending.");
+    settle(granted);
+    logActivity("human", entry.tool, granted ? `Approved: ${entry.request}` : `Rejected: ${entry.request}`, granted);
+    return ok(granted ? "Approved." : "Rejected.");
   },
+};
 
+/**
+ * Park a destructive call until the human decides. Resolves "approved" or "rejected" — or
+ * "queue_full" at once, without parking anything, when MAX_PENDING_APPROVALS requests are
+ * already waiting: an agent must not be able to bury the page in prompts.
+ * Honours the AbortSignal WebMCP hands to execute(), so an agent that gives up
+ * releases the request instead of leaving it hanging on the page.
+ */
+function requestApproval(ask: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalOutcome> {
+  if (store.getState().approvals.length >= MAX_PENDING_APPROVALS) return Promise.resolve("queue_full");
+  const entry: PendingApproval = { id: uid("appr"), ...ask, at: Date.now() };
+  store.setState((s) => ({ approvals: [...s.approvals, entry] }));
+  logActivity(ask.actor, ask.tool, `Waiting for your approval: ${ask.request}`, true);
+  return new Promise<ApprovalOutcome>((resolve) => {
+    const settle = (granted: boolean) => {
+      if (!approvalResolvers.has(entry.id)) return;
+      approvalResolvers.delete(entry.id);
+      store.setState((s) => ({ approvals: s.approvals.filter((a) => a.id !== entry.id) }));
+      resolve(granted ? "approved" : "rejected");
+    };
+    approvalResolvers.set(entry.id, settle);
+    signal?.addEventListener("abort", () => settle(false), { once: true });
+  });
+}
+
+/**
+ * Every action. The tool layer, the command dispatcher and the scripts' test hook hold this;
+ * the UI holds pageActions and changes the plan through dispatch (eslint.config.js enforces it).
+ */
+export const actions = {
+  ...planActions,
+  ...pageActions,
+  requestApproval,
+  setSupplierTools(names: string[]) {
+    store.setState({ supplierTools: names });
+  },
   setWebmcpStatus(status: "off" | "live") {
     store.setState({ webmcpStatus: status });
   },
 };
-
-// Convenience re-exports for tools
-export { checkModel };
-export const getModel = (): PlanModel => store.getState().model;

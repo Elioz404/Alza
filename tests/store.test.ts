@@ -149,17 +149,17 @@ describe("undo", () => {
     expect(model()).toEqual(before);
   });
 
-  it("snapshots are copies, not live references to the model", () => {
-    // addWall installs a fresh model object either way, so comparing the snapshot with the
-    // model after the edit proves nothing; compare it with the object it was taken from.
+  it("a step holds the plan object it was taken from, which later edits never change", () => {
+    // the model is replaced, never edited in place, so the step can keep the object itself
     actions.addWall(0, 0, 4, 0);
     const before = model();
+    const asItWas = structuredClone(before);
     actions.addWall(4, 0, 4, 3);
-    const snapshot = store.getState().undoStack.at(-1)!;
-    expect(snapshot).toEqual(before);
-    expect(snapshot).not.toBe(before);
-    expect(snapshot.walls).not.toBe(before.walls);
-    expect(snapshot.walls[0]).not.toBe(before.walls[0]);
+    const step = store.getState().undoStack.at(-1)!;
+    expect(step.model).toBe(before);
+    actions.editWall(before.walls[0].id, { ax: 1 });
+    actions.removeWall(before.walls[0].id);
+    expect(step.model).toEqual(asItWas);
   });
 
   it(`keeps at most ${UNDO_DEPTH} steps, dropping the oldest`, () => {
