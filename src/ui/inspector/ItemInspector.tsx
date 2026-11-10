@@ -11,7 +11,8 @@ import type { Item } from "../../model/types";
 import { useAppStore } from "../useAppStore";
 import { useNotify } from "../shell/useNotify";
 import { Badge, Button, IconFurniture, IconTrash, Section } from "../primitives";
-import { EntityHead, InspectorFoot, MeasureField, PointFields, Stats, useCommit } from "./parts";
+import { EntityHead, InspectorFoot, Stats, useCommit } from "./parts";
+import { MeasureField, PointFields } from "./measure";
 import { degrees, itemName, metres, roomAt } from "./entities";
 
 /** A quarter turn, the step of the Turn button. */

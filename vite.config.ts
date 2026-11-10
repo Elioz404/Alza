@@ -4,13 +4,15 @@ import react from "@vitejs/plugin-react";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import { STUDIO_DEV_ORIGIN, STUDIO_DEV_PORT, resolveOrigins } from "./config/origins.js";
 import { HEADERS_FILE, headerRules, renderHeadersFile } from "./config/headers.js";
 import { TEST_HOOK_ENV, assertTestHookOrigins, readFlag } from "./config/flags.js";
 import { SITES, SITE_PAGES, outputDirFor, type Site } from "./config/sites.js";
-import { renderTokenCss } from "./src/ui/theme/tokens";
+import { renderTokenCss } from "./src/ui/theme/tokenSheet";
 import { TOUCH_ACTION_RULE_MODULE, touchActionCss, touchActionRuleSource } from "./config/astryxTouchAction.js";
-import { atomicClassesIn, purgeAtomicCss } from "./config/purgeAtomicCss.js";
+import { atomicClassesIn, purgeAtomicCss, splitAtomicCss } from "./config/purgeAtomicCss.js";
+import { checkBudgets, firstLoadFiles, type BundleLike } from "./config/budgets.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -65,22 +67,61 @@ function alzaStyles(): Plugin {
   };
 }
 
+/** The name of the stylesheet that holds the Astryx rules only lazily fetched code can use. */
+const LATER_ATOMIC_CSS = "astryx-later.css";
+
 /**
  * Leave out the Astryx rules no element can match (config/purgeAtomicCss.js): every component's
  * atomic classes ship in astryx.css, and the page uses a dozen components. A rule stays when
  * every atomic class it needs is named in some chunk of the bundle, lazy ones included.
+ *
+ * The stylesheets of a site's first load (config/budgets.js, firstLoadFiles) block its first
+ * paint, so they keep only the rules the first load's own chunks can use. The rules only
+ * deferred chunks can use (src/ui/deferred.tsx: menus, notices, dialogs, number fields…) move to
+ * one stylesheet of their own, attached to every deferred chunk that names one of their classes:
+ * Vite's preload helper links it, and waits for it, when such a chunk is fetched. The split keeps
+ * the rules' order (splitAtomicCss), so a lazily styled element looks exactly as before.
  */
 function purgeUnusedAtomicCss(): Plugin {
   return {
     name: "alza-purge-atomic-css",
     apply: "build",
     generateBundle(_options, bundle) {
-      const used = new Set<string>();
-      for (const output of Object.values(bundle)) if (output.type === "chunk") for (const name of atomicClassesIn(output.code)) used.add(name);
-      for (const output of Object.values(bundle)) {
-        if (output.type === "asset" && output.fileName.endsWith(".css") && typeof output.source === "string") {
-          output.source = purgeAtomicCss(output.source, used);
+      const chunks = Object.values(bundle).filter((output): output is Rollup.OutputChunk => output.type === "chunk");
+      const classesOf = new Map(chunks.map((chunk) => [chunk.fileName, atomicClassesIn(chunk.code)]));
+      const firstJs = new Set<string>();
+      const firstCss = new Set<string>();
+      for (const site of SITES) {
+        const files = firstLoadFiles(bundle as unknown as BundleLike, site);
+        for (const file of files?.js ?? []) firstJs.add(file);
+        for (const file of files?.css ?? []) firstCss.add(file);
+      }
+      const all = new Set<string>();
+      const first = new Set<string>();
+      for (const [fileName, classes] of classesOf) {
+        for (const name of classes) {
+          all.add(name);
+          if (firstJs.has(fileName)) first.add(name);
         }
+      }
+
+      let later = "";
+      for (const output of Object.values(bundle)) {
+        if (output.type !== "asset" || !output.fileName.endsWith(".css") || typeof output.source !== "string") continue;
+        if (!firstCss.has(output.fileName)) {
+          output.source = purgeAtomicCss(output.source, all);
+          continue;
+        }
+        const sheets = splitAtomicCss(output.source, first, all);
+        output.source = sheets.now;
+        later += sheets.later;
+      }
+      if (!later) return;
+      const fileName = this.getFileName(this.emitFile({ type: "asset", name: LATER_ATOMIC_CSS, source: later }));
+      const needed = new Set([...atomicClassesIn(later)].filter((name) => !first.has(name)));
+      for (const chunk of chunks) {
+        if (firstJs.has(chunk.fileName)) continue;
+        if ([...classesOf.get(chunk.fileName)!].some((name) => needed.has(name))) chunk.viteMetadata?.importedCss.add(fileName);
       }
     },
   };
@@ -131,18 +172,29 @@ function reachableFrom(bundle: Rollup.OutputBundle, site: Site): Set<string> {
  * and re-files the finished output rather than building twice. public/ is copied here too
  * (copyPublicDir is off below), so nothing lands outside a site's directory. A page that
  * belongs to no site fails the build: it would otherwise ship with no headers of its own.
+ *
+ * Before re-filing, each site's first load (its entry chunk, the chunks that one imports
+ * statically, and their stylesheets) is measured against its budget in config/budgets.js, after
+ * every other plugin has finished with the output; a build over any budget fails, naming the
+ * site, the size, the budget and the files.
  */
 function perSiteOutput(origins: { studio: string; supplier: string }): Plugin {
   let publicDir = "";
+  let logger: { info(message: string): void } = console;
   return {
     name: "alza-per-site-output",
     apply: "build",
     configResolved(config) {
       publicDir = config.publicDir;
+      logger = config.logger;
     },
     generateBundle: {
       order: "post",
       handler(_options, bundle) {
+        const budgets = checkBudgets(bundle as unknown as BundleLike, (bytes) => gzipSync(bytes).length);
+        for (const line of budgets.report) logger.info(line);
+        if (budgets.violations.length > 0) this.error(`over budget:\n${budgets.violations.join("\n")}`);
+
         // Each site ships only what its own entry point can reach — static and dynamic imports,
         // and the CSS and assets Vite attached to those chunks — so the partner host never
         // carries the studio's bundle (or three.js) and vice versa.

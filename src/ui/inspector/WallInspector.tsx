@@ -22,7 +22,8 @@ import {
   SegmentedControl,
   SegmentedControlItem,
 } from "../primitives";
-import { AgentCallout, EntityHead, InspectorFoot, MeasureField, PointFields, useCommit, useOpenRow } from "./parts";
+import { AgentCallout, EntityHead, InspectorFoot, useCommit, useOpenRow } from "./parts";
+import { MeasureField, PointFields } from "./measure";
 import {
   metres,
   openingName,

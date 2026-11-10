@@ -22,6 +22,7 @@ import { useAppStore } from "../useAppStore";
 import { decodeUnderlay } from "../underlay";
 import { Button, IconAgent, IconRoom, IconWall, ariaShortcut } from "../primitives";
 import { useNotify } from "../shell/useNotify";
+import { useShowsFirstRun } from "./shows";
 import { toolsFor } from "../shell/tools";
 import "./firstRun.css";
 
@@ -29,16 +30,6 @@ import "./firstRun.css";
 const shortcutOf = (id: string): string | undefined => toolsFor("2d").find((t) => t.id === id)?.shortcut;
 const ROOM_KEY = shortcutOf("room");
 const WALL_KEY = shortcutOf("wall");
-
-/** Is the sheet empty enough for the first-run state? */
-const useShowsFirstRun = (): boolean =>
-  useAppStore(
-    (s) =>
-      s.editor.view === "2d" &&
-      s.editor.drawMode === "select" &&
-      s.model.walls.length + s.model.rooms.length + s.model.openings.length + s.model.items.length === 0 &&
-      !s.model.underlay,
-  );
 
 /** The ghost room: a 4.00 × 2.60 m rectangle in the selection's colour, dimensioned. */
 function GhostRoom() {

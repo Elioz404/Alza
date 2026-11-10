@@ -10,6 +10,7 @@ import { pageActions, store } from "../src/model/store";
 import { dispatch } from "../src/model/commands";
 import { seedLoft } from "../src/model/seed";
 import { resetStore } from "./support/store";
+import { loadDeferred } from "./support/deferred";
 
 vi.mock("../src/ui/SupplierBridge", () => ({ SupplierBridge: () => null }));
 
@@ -35,6 +36,8 @@ beforeEach(async () => {
   root = createRoot(host);
   const { App } = await import("../src/ui/App");
   await act(async () => root.render(createElement(App)));
+  // the first-run state is not in the first chunk: it arrives after the first paint
+  await loadDeferred();
 });
 afterEach(async () => {
   await act(async () => root.unmount());

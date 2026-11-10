@@ -21,7 +21,7 @@ import { PlanElements } from "./PlanElements";
 import { lazyLayer } from "../LazyLayer";
 
 /** The Clear-plan confirmation, fetched the first time it opens. */
-const ClearPlanDialog = lazyLayer(() => import("./ClearPlanDialog").then((m) => m.ClearPlanDialog));
+const ClearPlanDialog = lazyLayer("the Clear-plan confirmation", () => import("./ClearPlanDialog").then((m) => m.ClearPlanDialog));
 import { metres, squareMetres, roomArea } from "./entities";
 import { APPROVAL_POLICY_SECTION_ID, approvalPolicySentence, GATED_TOOLS, POLICY_SWITCH_LABEL } from "./policy";
 

@@ -8,7 +8,8 @@ import { COORD, FLOOR_FINISHES, ROOM_SIZE, SNAP, TEXT, type FloorFinish } from "
 import type { Room } from "../../model/types";
 import { useNotify } from "../shell/useNotify";
 import { Button, IconRoom, IconTrash, Section, SegmentedControl, SegmentedControlItem } from "../primitives";
-import { EntityHead, InspectorFoot, MeasureField, PlanTextField, PointFields, Stats, useCommit } from "./parts";
+import { EntityHead, InspectorFoot, PlanTextField, Stats, useCommit } from "./parts";
+import { MeasureField, PointFields } from "./measure";
 import { metres, squareMetres, roomArea } from "./entities";
 
 const FINISH_LABEL: Record<FloorFinish, string> = { oak: "Oak", tile: "Tile", carpet: "Carpet", concrete: "Concrete" };

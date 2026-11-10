@@ -7,7 +7,10 @@
  * class appears in none of the bundle's code can be left out.
  *
  * The build calls `purgeAtomicCss` on each stylesheet with the atomic classes its chunks name.
- * It keeps everything it does not understand: at-rules other than the grouping ones are kept
+ * A stylesheet the page needs before it can paint goes through `splitAtomicCss` instead, with
+ * the classes the first load's own code names: the rules only lazily fetched code can use leave
+ * it for a second sheet, linked when that code is fetched, so they do not hold up the first
+ * paint. It keeps everything it does not understand: at-rules other than the grouping ones are kept
  * whole, and only classes outside parentheses decide (a class in `:not(...)` may be absent and
  * the rule still match). tests/purge.test.ts holds it to that.
  *
@@ -127,6 +130,164 @@ function requiredClasses(selector) {
 }
 
 /**
+ * The prefix of the sub-layers `splitAtomicCss` orders a layer's rules with: `o0`, `o1`…
+ * inside the layer whose rules it splits.
+ */
+export const ORDER_LAYER = "o";
+
+/**
+ * What a layer's full name (`@layer b` inside `a` is `a.b`) starts with when the layer, or one
+ * it sits in, has no name: a rule there can never be put in a named sub-layer.
+ */
+const ANONYMOUS = "\0anonymous";
+
+/**
+ * @typedef {{ segment: number, last: "now" | "later" | null, moved: boolean, nested: boolean }} LayerState
+ * @typedef {{ first: Set<string>, all: Set<string>, layers: Map<string, LayerState>, order: Map<string, number> | null, declared: Set<string> }} SplitContext
+ */
+
+/** @param {SplitContext} ctx @param {string} name */
+function layerState(ctx, name) {
+  let state = ctx.layers.get(name);
+  if (!state) ctx.layers.set(name, (state = { segment: 0, last: null, moved: false, nested: false }));
+  return state;
+}
+
+/**
+ * The run a rule belongs to: a layer's rules are numbered in runs, a new run starting each time
+ * the rules switch between the two sheets, so the runs in source order are the sub-layers.
+ * @param {LayerState} state
+ * @param {"now" | "later"} sheet
+ */
+function segmentOf(state, sheet) {
+  if (state.last !== null && state.last !== sheet) state.segment++;
+  state.last = sheet;
+  return state.segment;
+}
+
+/**
+ * Both sheets' text for the block content between `from` and `to`, inside the layer `layer`.
+ * @param {string} css
+ * @param {number} from
+ * @param {number} to
+ * @param {string | null} layer the full name of the innermost enclosing layer, or null outside any
+ * @param {SplitContext} ctx
+ * @returns {{ now: string, later: string }}
+ */
+function splitRules(css, from, to, layer, ctx) {
+  const wrapped = layer !== null && ctx.order?.has(layer) === true;
+  const state = layer !== null && !layer.startsWith(ANONYMOUS) ? layerState(ctx, layer) : null;
+  let now = "";
+  let later = "";
+  if (wrapped && !ctx.declared.has(/** @type {string} */ (layer))) {
+    // the first block of the layer fixes the runs' order, before any of them is used
+    ctx.declared.add(/** @type {string} */ (layer));
+    const count = /** @type {number} */ (ctx.order?.get(/** @type {string} */ (layer)));
+    now += `@layer ${Array.from({ length: count }, (_, n) => `${ORDER_LAYER}${n}`).join(",")};`;
+  }
+  // consecutive rules of one run share one sub-layer block
+  const runs = { now: { text: "", segment: -1 }, later: { text: "", segment: -1 } };
+  const flush = () => {
+    if (runs.now.text) now += `@layer ${ORDER_LAYER}${runs.now.segment}{${runs.now.text}}`;
+    if (runs.later.text) later += `@layer ${ORDER_LAYER}${runs.later.segment}{${runs.later.text}}`;
+    runs.now.text = runs.later.text = "";
+  };
+  /** @param {"now" | "later"} sheet @param {number} segment @param {string} rule */
+  const add = (sheet, segment, rule) => {
+    const run = runs[sheet];
+    if (run.text && run.segment !== segment) flush();
+    run.segment = segment;
+    run.text += rule;
+  };
+  let i = from;
+  while (i < to) {
+    const end = preludeEnd(css, i);
+    if (end >= to) {
+      flush();
+      now += css.slice(i, to);
+      break;
+    }
+    const prelude = css.slice(i, end);
+    const head = prelude.trim();
+    if (css[end] !== "{") {
+      // a statement (`@layer a, b;`, `@import …;`) or a stray `}`: kept as it is
+      flush();
+      now += css.slice(i, end + 1);
+      i = end + 1;
+      continue;
+    }
+    const close = blockEnd(css, end);
+    if (head.startsWith("@")) {
+      flush();
+      if (GROUPING.test(head)) {
+        const isLayer = /^@layer\b/i.test(head);
+        let inner = layer;
+        if (isLayer) {
+          const name = head.slice("@layer".length).trim();
+          const parent = layer ?? "";
+          inner = !name || parent.startsWith(ANONYMOUS) ? ANONYMOUS + parent + name : parent ? `${parent}.${name}` : name;
+          if (state) state.nested = true;
+        }
+        const sheets = splitRules(css, end + 1, close - 1, inner, ctx);
+        // an empty @layer block still declares the layer's place in the order
+        if (sheets.now.trim() || isLayer) now += `${prelude}{${sheets.now}}`;
+        if (sheets.later.trim()) later += `${prelude}{${sheets.later}}`;
+      } else now += css.slice(i, close);
+    } else {
+      const body = css.slice(end, close);
+      const selectors = selectorsOf(prelude).map((s) => ({ s, needs: requiredClasses(s) }));
+      const kept = selectors.filter((x) => x.needs.every((c) => ctx.first.has(c))).map((x) => x.s);
+      const deferred = selectors.filter((x) => !x.needs.every((c) => ctx.first.has(c)) && x.needs.every((c) => ctx.all.has(c))).map((x) => x.s);
+      if (state && kept.length > 0) {
+        const segment = segmentOf(state, "now");
+        if (wrapped) add("now", segment, `${kept.join(",")}${body}`);
+      }
+      if (state && deferred.length > 0) {
+        state.moved = true;
+        const segment = segmentOf(state, "later");
+        if (wrapped) add("later", segment, `${deferred.join(",")}${body}`);
+      }
+      if (!wrapped) {
+        // outside a layer the split could reorder: every rule that can match stays in the first sheet
+        const all = selectors.filter((x) => x.needs.every((c) => ctx.all.has(c))).map((x) => x.s);
+        flush();
+        if (all.length > 0) now += `${all.join(",")}${body}`;
+      }
+    }
+    i = close;
+  }
+  flush();
+  return { now, later };
+}
+
+/**
+ * The stylesheet split in two: `now`, the rules the first load's code can use, and `later`, the
+ * rules only code fetched afterwards can use (rules nothing can match are in neither).
+ *
+ * `later` is linked after `now`, so its rules would come after every rule of `now` and win
+ * where they used to lose: StyleX orders its rules (a shorthand before its longhands, a base
+ * style before its media queries) and the order decides. So the rules of each layer that has
+ * any rule moved are numbered in runs, in source order, and each run becomes a sub-layer of
+ * that layer (`o0`, `o1`…), declared in `now` in that order before any is used. A
+ * rule then ranks by its run, whichever sheet it arrived in, exactly as it did by its place.
+ * Rules outside any layer, or in a layer that has layers of its own, are never moved: no
+ * sub-layer could keep their order.
+ *
+ * @param {string} css
+ * @param {Set<string>} first the atomic classes the first load's code names
+ * @param {Set<string>} all the atomic classes any code names (a superset of `first`)
+ * @returns {{ now: string, later: string }}
+ */
+export function splitAtomicCss(css, first, all) {
+  /** @type {SplitContext} */
+  const survey = { first, all, layers: new Map(), order: null, declared: new Set() };
+  splitRules(css, 0, css.length, null, survey);
+  const order = new Map();
+  for (const [name, state] of survey.layers) if (state.moved && !state.nested) order.set(name, state.segment + 1);
+  return splitRules(css, 0, css.length, null, { first, all, layers: new Map(), order, declared: new Set() });
+}
+
+/**
  * The stylesheet without the rules no element can match: each selector that needs an atomic
  * class `used` does not have is dropped, and a rule left with none goes.
  * @param {string} css
@@ -134,38 +295,5 @@ function requiredClasses(selector) {
  * @returns {string}
  */
 export function purgeAtomicCss(css, used) {
-  /** @param {number} from @param {number} to */
-  const rules = (from, to) => {
-    let out = "";
-    let i = from;
-    while (i < to) {
-      const end = preludeEnd(css, i);
-      if (end >= to) {
-        out += css.slice(i, to);
-        break;
-      }
-      const prelude = css.slice(i, end);
-      const head = prelude.trim();
-      if (css[end] !== "{") {
-        // a statement (`@layer a, b;`, `@import …;`) or a stray `}`: kept as it is
-        out += css.slice(i, end + 1);
-        i = end + 1;
-        continue;
-      }
-      const close = blockEnd(css, end);
-      if (head.startsWith("@")) {
-        if (GROUPING.test(head)) {
-          const inner = rules(end + 1, close - 1);
-          // an empty @layer block still declares the layer's place in the order
-          if (inner.trim() || /^@layer\b/i.test(head)) out += `${prelude}{${inner}}`;
-        } else out += css.slice(i, close);
-      } else {
-        const kept = selectorsOf(prelude).filter((s) => requiredClasses(s).every((c) => used.has(c)));
-        if (kept.length > 0) out += `${kept.join(",")}${css.slice(end, close)}`;
-      }
-      i = close;
-    }
-    return out;
-  };
-  return rules(0, css.length);
+  return splitAtomicCss(css, used, used).now;
 }

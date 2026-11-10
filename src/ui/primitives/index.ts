@@ -15,17 +15,8 @@ import "./primitives.css";
 export { Button, type ButtonProps, type ButtonVariant, type ButtonSize } from "./Button";
 export { IconButton, ariaShortcut, type IconButtonProps } from "./IconButton";
 export { Tip, type TipProps } from "./Tip";
-export {
-  Field,
-  TextInput,
-  TextArea,
-  NumberField,
-  type FieldProps,
-  type FieldControlProps,
-  type TextInputProps,
-  type TextAreaProps,
-  type NumberFieldProps,
-} from "./Field";
+export { Field, TextInput, TextArea, type FieldProps, type FieldControlProps, type TextInputProps, type TextAreaProps } from "./Field";
+export { NumberField, type NumberFieldProps } from "./NumberField";
 export { Panel, Section, Badge, EmptyState, type SectionProps, type BadgeProps, type BadgeTone, type EmptyStateProps } from "./Layout";
 export * from "./icons";
 export { Kbd, type KbdProps } from "./Kbd";

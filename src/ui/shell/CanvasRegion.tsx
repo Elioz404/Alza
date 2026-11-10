@@ -15,9 +15,35 @@ import { SceneLoadFailed, SceneLoading } from "../../three/overlays/SceneStates"
 import { HintBar } from "../canvas/HintBar";
 import { ZoomControl } from "../canvas/ZoomControl";
 import { Legend } from "../canvas/Legend";
-import { FirstRun } from "../firstRun/FirstRun";
-import { PlanMarks } from "../approvals/PlanMarks";
+import { deferred, overlayPlaceholder } from "../deferred";
+import { useShowsFirstRun } from "../firstRun/shows";
+import { useReview } from "../approvals/review";
 import { CANVAS_REGION_ID } from "./ids";
+
+/**
+ * While any request waits for an answer, a value that changes with each request that arrives
+ * and each Review pressed (null when nothing waits): each one asks again for a card that could
+ * not be fetched.
+ */
+function useReviewNeeded(): string | null {
+  const ids = useAppStore((s) => s.approvals.map((a) => a.id).join(" "));
+  const { focusToken } = useReview();
+  return ids ? `${ids}#${focusToken}` : null;
+}
+
+// The page opens on the demo plan with nothing waiting, so neither the first-run state nor the
+// approval marks and card show at first paint; they arrive with the idle prefetch. If either
+// could not be fetched, it asks again and says so once it has something to show.
+const FirstRun = deferred(
+  "the first-run state",
+  () => import("../firstRun/FirstRun").then((m) => m.FirstRun),
+  overlayPlaceholder("The empty-plan guide", useShowsFirstRun),
+);
+const PlanMarks = deferred(
+  "the approval marks",
+  () => import("../approvals/PlanMarks").then((m) => m.PlanMarks),
+  overlayPlaceholder("The agent's request card", useReviewNeeded),
+);
 
 const loadScene3D: ViewLoader = () => import("../../three/Scene3D").then((m) => ({ default: m.Scene3D }));
 

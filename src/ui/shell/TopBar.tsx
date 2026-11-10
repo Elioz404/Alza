@@ -5,25 +5,18 @@
  * screens the panel toggle.
  */
 
+import { useState } from "react";
 import { pageActions } from "../../model/store";
 import { dispatch } from "../../model/commands";
-import { seedLoft } from "../../model/seed";
-import { bus, EVENTS } from "../../model/sceneBus";
 import { useAppStore } from "../useAppStore";
 import {
   BrandMark,
   IconButton,
-  IconCamera,
-  IconChevronDown,
   IconCube,
-  IconDownload,
   IconHelp,
   IconPanel,
   IconPlan,
   IconUndo,
-  Menu,
-  MenuDivider,
-  MenuItem,
   SegmentedControl,
   SegmentedControlItem,
   Tip,
@@ -31,62 +24,15 @@ import {
 import { useBreakpoint } from "../theme/media";
 import { useShell } from "./ShellContext";
 import { useNotify } from "./useNotify";
-import { PLAN_NAME_FIELD_ID, SIDE_PANEL_ID } from "./ids";
+import { SIDE_PANEL_ID } from "./ids";
 import { AgentStatus } from "../approvals/AgentStatus";
+import { deferred } from "../deferred";
+import { createHandoff, ExportTrigger, PlanNameTrigger, standInTriggerProps } from "./menuTriggers";
+import type { MenuSlotProps } from "./PlanMenus";
 
 /** Why the 3D view cannot open, or null when it can. */
 export const noThreeDReason = (wallCount: number): string | null =>
   wallCount === 0 ? "Add a wall to see the plan in 3D" : null;
-
-function PlanMenu() {
-  const name = useAppStore((s) => s.model.name);
-  const isEmpty = useAppStore((s) => s.model.walls.length + s.model.rooms.length + s.model.items.length + s.model.openings.length === 0);
-  const shell = useShell();
-  const notify = useNotify();
-  // the Export button gives way at phone width; its entries move here
-  const phone = useBreakpoint("phone");
-
-  const rename = () => {
-    shell.openPanel("properties");
-    requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(PLAN_NAME_FIELD_ID)?.focus()));
-  };
-  const loadDemo = () => {
-    const r = dispatch({ type: "load_model", model: seedLoft() }, { actor: "human" });
-    if (r.ok) notify({ body: "Sunset Loft demo loaded", undoable: true });
-  };
-  const clear = () => {
-    const r = dispatch({ type: "clear_model" }, { actor: "human" });
-    if (r.ok) notify({ body: "Plan cleared", undoable: true });
-  };
-
-  return (
-    <Menu
-      renderTrigger={(props) => (
-        <button {...props} type="button" className="plan-name" aria-label={`Plan: ${name}`}>
-          <span className="plan-name__text">{name}</span>
-          <IconChevronDown size="sm" />
-        </button>
-      )}
-    >
-      <MenuItem label="Rename" onClick={rename} />
-      <MenuDivider />
-      <MenuItem label="Load Sunset Loft demo" description="Replaces this plan; Undo brings it back" onClick={loadDemo} />
-      <MenuItem
-        label="Clear plan"
-        variant="destructive"
-        isDisabled={isEmpty}
-        description={isEmpty ? "The plan is already empty" : "Removes everything; Undo brings it back"}
-        onClick={clear}
-      />
-      {phone ? (
-        <>
-          <MenuDivider />
-          <ExportItems />
-        </>
-      ) : null}
-    </Menu>
-  );
-}
 
 function ViewSwitch() {
   const view = useAppStore((s) => s.editor.view);
@@ -111,33 +57,22 @@ function ViewSwitch() {
   );
 }
 
-/** The export entries, shared by the Export menu and, at phone width, the plan menu. */
-function ExportItems() {
-  const in3d = useAppStore((s) => s.editor.view === "3d");
-  const why = in3d ? undefined : "Open the 3D view to export";
-  return (
-    <>
-      <MenuItem label="3D model (OBJ)" description={why} isDisabled={!in3d} icon={<IconDownload size="sm" />} onClick={() => bus.emit(EVENTS.EXPORT_OBJ)} />
-      <MenuItem label="Snapshot (PNG)" description={why} isDisabled={!in3d} icon={<IconCamera size="sm" />} onClick={() => bus.emit(EVENTS.EXPORT_PNG)} />
-    </>
-  );
+/** The plan menu and Export, fetched after the first paint; their triggers stand in until then. */
+const LazyPlanMenu = deferred("the plan menu", () => import("./PlanMenus").then((m) => m.PlanMenu), ({ handoff }: MenuSlotProps) => (
+  <PlanNameTrigger {...standInTriggerProps(handoff)} />
+));
+const LazyExportMenu = deferred("the export menu", () => import("./PlanMenus").then((m) => m.ExportMenu), ({ handoff }: MenuSlotProps) => (
+  <ExportTrigger {...standInTriggerProps(handoff)} />
+));
+
+function PlanMenu() {
+  const [handoff] = useState(createHandoff);
+  return <LazyPlanMenu handoff={handoff} />;
 }
 
 function ExportMenu() {
-  return (
-    <Menu
-      renderTrigger={(props) => (
-        <button {...props} type="button" className="btn btn--ghost topbar__export">
-          <IconDownload />
-          <span className="btn__label">Export</span>
-          <IconChevronDown size="sm" className="btn__end" />
-        </button>
-      )}
-      alignment="end"
-    >
-      <ExportItems />
-    </Menu>
-  );
+  const [handoff] = useState(createHandoff);
+  return <LazyExportMenu handoff={handoff} />;
 }
 
 export function TopBar() {

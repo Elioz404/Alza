@@ -150,5 +150,3 @@ export function Issues() {
   );
 }
 
-/** The number the Issues tab shows (issuesOf is memoised per plan object). */
-export const useIssueCount = (): number => useAppStore((s) => issuesOf(s.model).length);

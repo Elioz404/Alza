@@ -59,5 +59,4 @@ export function Notes() {
     </div>
   );
 }
-
-export const useNoteCount = (): number => useAppStore((s) => s.notes.length);
+

@@ -13,17 +13,21 @@ import { useEffect, useId, type ReactNode } from "react";
 import { Badge, IconButton, IconChevronDown, IconClose, Tab, Tabs } from "../primitives";
 import { useBreakpoint } from "../theme/media";
 import { Inspector } from "../inspector/Inspector";
-import { Library } from "../library/Library";
-import { Issues, useIssueCount } from "../issues/Issues";
-import { Notes, useNoteCount } from "../notes/Notes";
+import { useIssueCount } from "../issues/count";
+import { useNoteCount } from "../notes/count";
 import { NoteComposer } from "../notes/NoteComposer";
-import { ActivityList } from "../activity/Activity";
-import { DeveloperTools } from "../activity/DeveloperTools";
-import { ApprovalQueue } from "../approvals/ApprovalQueue";
-import { ApprovalPolicy } from "../approvals/ApprovalPolicy";
+import { deferred, regionPlaceholder } from "../deferred";
 import { useAppStore } from "../useAppStore";
 import { PANEL_TABS, useShell, type PanelTab } from "./ShellContext";
 import { SIDE_PANEL_ID, panelBodyId, panelTabId } from "./ids";
+
+// The page opens on Properties: the other tabs' bodies and Activity's details arrive with the
+// idle prefetch after the first paint (src/ui/deferred.tsx), each in a box the panel already
+// sizes, so nothing moves when they land.
+const Library = deferred("the Library tab", () => import("../library/Library").then((m) => m.Library), regionPlaceholder);
+const Issues = deferred("the Issues tab", () => import("../issues/Issues").then((m) => m.Issues), regionPlaceholder);
+const Notes = deferred("the Notes tab", () => import("../notes/Notes").then((m) => m.Notes), regionPlaceholder);
+const ActivityDetails = deferred("Activity's details", () => import("../activity/ActivityDetails").then((m) => m.ActivityDetails), regionPlaceholder);
 
 const TAB_LABEL: Record<PanelTab, string> = {
   properties: "Properties",
@@ -62,10 +66,7 @@ function Activity() {
         </button>
       </h2>
       <div id={listId} className="activity__body" hidden={!activityOpen}>
-        <ApprovalQueue />
-        <ApprovalPolicy />
-        <ActivityList />
-        <DeveloperTools />
+        <ActivityDetails />
       </div>
       <div className="activity__compose">
         <NoteComposer />

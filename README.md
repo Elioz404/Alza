@@ -237,16 +237,24 @@ tests/      domain: geometry, checker (incl. seed = 0 issues regression), rules,
             3D: planScene (reconciliation, GPU memory), frames, scene3d, thumbnails · editorKeys
             agent surface: tools, validation, approval gate, trust, untrusted partner text,
             supplier, transport, discovery, underlay · page: derived (what the UI reads off the tools),
-            theme, shell, panels, canvas, provenance, activityApprovals, firstRun, lazyView
-            build and config: layering, config, sites, headers, production, serve-local, purge
+            theme, shell, panels, canvas, provenance, activityApprovals, firstRun, lazyView,
+            deferred (what loads after the first paint)
+            build and config: layering, config, sites, headers, production, serve-local, purge,
+            budgets (each site's first-load size)
 scripts/
   e2e-full.mjs  Playwright: drives the real app in Chromium with --enable-features=WebMCP,
-              runs every tool, asserts zero console errors — 56 checks
-              (2 skip on Chrome builds without navigator.modelContextTesting)
+              by mouse and keyboard: drawing, selection from "On the plan", shortcuts, every
+              tool, the approval card (buttons, Ctrl+Enter, Esc), the drawer and bottom-sheet
+              layouts; asserts zero console errors — 115 checks (2 skip on Chrome builds
+              without navigator.modelContextTesting, 3 when the partner origin does not
+              answer; with either one there, a failure is a FAIL, never a skip)
   trace.mjs   the demo plan as data: walls, openings, rooms, furniture, and the kinds the
               agent defines for itself. Shared by the video and the screenshot gallery.
-  record6.mjs records the film's eight beats as real 60 fps screen capture (ffmpeg ddagrab)
+  record6.mjs records the film's eight beats as real 60 fps screen capture (ffmpeg ddagrab;
+              ffmpeg from PATH, or ALZA_FFMPEG_PATH)
   shots.mjs   rebuilds the screenshot gallery from trace.mjs
+  browser.mjs   starts Chromium for the three scripts above (see below)
+  studio.mjs    finds the interface for them by role and accessible name, not by class
   serve-local.mjs  serves dist-local/studio and dist-local/partner on two origins with the
               production headers, for local demos (headers from config/headers.js, the
               module the build writes each site's _headers from)
@@ -254,17 +262,40 @@ scripts/
   paths.mjs   resolves dist/, shots/ and plan-source.jpeg from the repo root, not the cwd
 ```
 
+The Playwright scripts run against `npm run dev` (and `npm run partner` for the cross-origin
+checks), or `npm run build:local -- --test-hook` then `npm run serve:local`. They launch
+Playwright's own Chromium (`npx playwright install chromium`). When that exact build is not
+installed, set `ALZA_CHROMIUM_PATH` to any Chromium or Chrome executable already on the
+machine and every script launches that instead; nothing is downloaded. A headless-shell build
+is enough for `npm run e2e` and `npm run shots`; `record6.mjs` opens a real window and needs a
+full Chromium or Chrome.
+
+```
+ALZA_CHROMIUM_PATH=/path/to/chrome npm run e2e
+```
+
 Stack: Vite 7 · React 19 · TypeScript (strict) · zustand · Three.js (ACES tone mapping,
 PCF soft shadows) · SVG 2D · Astryx (dialogs, menus, tooltips, tabs, switches) · vitest ·
 Playwright. Deploys as a fully static site.
 
-First load, measured on `npm run build:local`: the studio's entry script is about 1.11 MB
-minified (360 KB gzip) and its stylesheet 291 KB (43 KB gzip). Before the Astryx-based
-interface the entry script was 383 KB; most of the difference is Astryx's shared runtime
-(gestures, motion, anchored layers), which the tooltips, menus and switches need on first
-paint. The build drops every Astryx style rule no chunk can use, and the shortcut sheet and
-the Clear-plan confirmation load the first time they open; three.js still arrives only with
-the 3D view.
+First load, measured on `npm run build:local`: the studio's first-load script (its entry
+chunk and the small transport chunk it shares with the partner) is 924 KB minified (301 KB
+gzip), and its stylesheet 210 KB (32 KB gzip). First paint needs only the shell, the plan and
+the plan's Properties; the other tabs, the selection inspectors, Activity's details and
+Developer tools, the plan and Export menus, notices, the first-run state, the approval card
+and the two dialogs are chunks of their own, fetched once the browser is idle after the first
+paint (`src/ui/deferred.tsx`), so the first click on any of them finds its code already here.
+three.js still arrives only with the 3D view. Of what the first load holds, about 180 KB is
+React DOM, 110 KB zod (the model's and the tools' schemas), 200 KB the studio's own code, and
+most of the rest the Astryx runtime the first-paint controls need (tabs, the Plan/3D switch,
+switches, tooltips); before the Astryx-based interface the entry script was 383 KB, and with
+every surface loaded eagerly it was 1.11 MB (360 KB gzip). The build drops every Astryx style
+rule no chunk can use, and keeps in the render-blocking stylesheet only the rules the first
+load's own code can use: the rest (about 73 KB, 12 KB gzip: menus, notices, dialogs, number
+fields) is a stylesheet of its own that Vite links when the first chunk needing it is fetched,
+with each rule in an ordered sub-layer so the cascade is exactly what it was
+(`config/purgeAtomicCss.js`). It fails when a site's first load goes over its budget in
+`config/budgets.js`: what the site shipped, plus 2% (script and stylesheet, minified and gzip).
 
 ## What building this taught me about the spec
 
@@ -303,7 +334,7 @@ procedure" rather than "this is a tool".
 
 **Testing.** `navigator.modelContextTesting` is the difference between guessing and knowing —
 the E2E battery drives real tool execution through it. It only exists in Chrome dev and canary
-builds, so 2 of the 56 checks skip on a stable build.
+builds, so 2 of the 115 checks skip on a stable build.
 
 **One thing that simply worked:** unregistering by aborting the registration signal.
 `extend_selected_wall` appears when a human selects a wall and disappears when they deselect it,
@@ -326,7 +357,7 @@ npm run typecheck  # tsc -b over the app, the tests and vite.config.ts
 npm run lint       # ESLint (typescript-eslint + react-hooks)
 npm test           # unit tests (vitest, happy-dom)
 npm run build      # production build — dist/studio and dist/partner, one directory per host
-npm run e2e        # 56-check Playwright battery (run both servers first)
+npm run e2e        # 115-check Playwright battery (run both servers first)
 npm run build:local  # production build aimed at the two local origins below, into dist-local/
 npm run serve:local  # serve dist-local/ on two origins with the production headers
 npm run shots      # rebuild the screenshot gallery (against the dev servers, or serve:local

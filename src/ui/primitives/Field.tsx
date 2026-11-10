@@ -7,12 +7,10 @@
  *     {(ids) => <TextInput {...ids} value={name} onChange={…} />}
  *   </Field>
  *
- * `NumberField` is Astryx's NumberInput (keyboard stepping, parsing, min/max, commit on Enter
- * and blur) with the unit after the value and the drawing face for the figures.
+ * The number field, on Astryx's NumberInput, is in NumberField.tsx.
  */
 
 import { useId, type InputHTMLAttributes, type ReactNode, type Ref, type TextareaHTMLAttributes } from "react";
-import { NumberInput, type NumberInputProps } from "@astryxdesign/core/NumberInput";
 
 /** What a Field hands its control. Spread it onto the input. */
 export interface FieldControlProps {
@@ -68,19 +66,4 @@ export interface TextAreaProps extends TextareaHTMLAttributes<HTMLTextAreaElemen
 /** A multi-line text box on the page's field recipe (body face, never monospace). */
 export function TextArea({ ref, className, ...rest }: TextAreaProps) {
   return <textarea ref={ref} className={`input input--area${className ? ` ${className}` : ""}`} {...rest} />;
-}
-
-export type NumberFieldProps = Omit<NumberInputProps, "units" | "size" | "hasClear" | "onChange"> & {
-  /** the unit shown after the value: "m", "cm", "°", "m²" */
-  unit?: string;
-  onChange: (value: number) => void;
-};
-
-/** A number with its unit, in the drawing face. Metres everywhere a length is shown. */
-export function NumberField({ unit, onChange, ...rest }: NumberFieldProps) {
-  return (
-    <div className="number-field">
-      <NumberInput {...rest} onChange={onChange} units={unit ?? null} size="md" />
-    </div>
-  );
 }

@@ -21,6 +21,7 @@ import { Library } from "../src/ui/library/Library";
 import { ToolRunner } from "../src/ui/activity/ToolRunner";
 import { PLAN_NAME_FIELD_ID } from "../src/ui/shell/ids";
 import { resetStore, flush } from "./support/store";
+import { loadDeferred } from "./support/deferred";
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
@@ -49,6 +50,8 @@ async function render(node: ReactNode) {
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () => root!.render(createElement(ThemeRoot, null, createElement(ShellProvider, null, node))));
+  // a selection's inspector is fetched after the first paint, as the page's idle prefetch does
+  await loadDeferred();
   return host;
 }
 const click = async (el: Element) => act(async () => el.dispatchEvent(new MouseEvent("click", { bubbles: true })));

@@ -6,16 +6,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { contrast, oklch, oklchToHex, srgb } from "../src/ui/theme/color";
-import {
-  BREAKPOINT,
-  DARK_TOKENS,
-  FLOOR_FILL,
-  LIGHT_TOKENS,
-  MATERIAL,
-  PLAN_HEX,
-  mediaQuery,
-  renderTokenCss,
-} from "../src/ui/theme/tokens";
+import { BREAKPOINT, FLOOR_FILL, MATERIAL, PLAN_HEX, mediaQuery } from "../src/ui/theme/tokens";
+import { DARK_TOKENS, LIGHT_TOKENS, renderTokenCss } from "../src/ui/theme/tokenSheet";
 import { FLOOR_FINISHES } from "../src/model/limits";
 import indexHtml from "../index.html?raw";
 import slideRulesSource from "../node_modules/@astryxdesign/core/dist/Layer/layerSlideRules.js?raw";

@@ -3,6 +3,31 @@
  * or duration below. Transitions name their properties; nothing transitions `all`.
  */
 @layer alza-components {
+  /* ------------------------------------------------- deferred regions (src/ui/deferred.tsx) */
+  /* fills the room its region already has, so nothing moves when the content lands */
+  .deferred { min-block-size: 100%; }
+  .deferred__failed {
+    display: grid;
+    justify-items: start;
+    gap: var(--spacing-2);
+    padding: var(--spacing-4);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+  }
+  .deferred__failed p { margin: 0; }
+  /* an overlay whose code could not be fetched says so where the overlay would have been */
+  .deferred-overlay {
+    position: absolute;
+    z-index: var(--z-raised);
+    max-width: calc(100% - 2 * var(--spacing-4));
+    border-radius: var(--radius-container);
+    background: var(--color-background-card);
+    box-shadow: var(--shadow-high);
+    pointer-events: auto;
+  }
+  .deferred-overlay--canvas { top: var(--spacing-4); left: 50%; translate: -50% 0; }
+  .deferred-overlay--page { position: fixed; right: var(--spacing-4); bottom: var(--spacing-4); z-index: var(--z-toast); }
+
   /* ---------------------------------------------------------------- icons */
   .icon {
     flex: none;

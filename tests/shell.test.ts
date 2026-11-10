@@ -17,6 +17,7 @@ import { Kbd } from "../src/ui/primitives/Kbd";
 import { noThreeDReason } from "../src/ui/shell/TopBar";
 import type { ShellState } from "../src/ui/shell/ShellContext";
 import { resetStore } from "./support/store";
+import { loadDeferred } from "./support/deferred";
 import indexHtml from "../index.html?raw";
 
 vi.mock("../src/ui/SupplierBridge", () => ({ SupplierBridge: () => null }));
@@ -158,6 +159,8 @@ describe("the rendered shell", () => {
     document.head.innerHTML = /<head>([\s\S]*)<\/head>/.exec(indexHtml)![1];
     const { App } = await import("../src/ui/App");
     await act(async () => root.render(createElement(App)));
+    // Activity's details (with Developer tools) arrive after the first paint
+    await loadDeferred();
     expect(host.querySelector(".topbar")).not.toBeNull();
     expect(host.querySelector('.rail[role="toolbar"]')).not.toBeNull();
     expect(host.querySelector(".editor-svg")).not.toBeNull();

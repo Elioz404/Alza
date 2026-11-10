@@ -9,9 +9,13 @@
 import "./inspector.css";
 import { useAppStore } from "../useAppStore";
 import { PlanInspector } from "./PlanInspector";
-import { WallInspector } from "./WallInspector";
-import { RoomInspector } from "./RoomInspector";
-import { ItemInspector } from "./ItemInspector";
+import { deferred, regionPlaceholder } from "../deferred";
+
+// Nothing is selected when the page opens, so only the plan's inspector is in the first chunk;
+// the others arrive with the idle prefetch, well before the first click on the plan.
+const WallInspector = deferred("the wall inspector", () => import("./WallInspector").then((m) => m.WallInspector), regionPlaceholder);
+const RoomInspector = deferred("the room inspector", () => import("./RoomInspector").then((m) => m.RoomInspector), regionPlaceholder);
+const ItemInspector = deferred("the item inspector", () => import("./ItemInspector").then((m) => m.ItemInspector), regionPlaceholder);
 
 export function Inspector() {
   const wall = useAppStore((s) => (s.editor.selectedWallId ? s.model.walls.find((w) => w.id === s.editor.selectedWallId) : undefined));

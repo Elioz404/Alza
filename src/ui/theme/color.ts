@@ -46,7 +46,12 @@ export function oklchToHex({ l, c, h }: Oklch): string {
   return `#${hex2(toByte(r))}${hex2(toByte(g))}${hex2(toByte(bl))}`;
 }
 
-/** A palette colour from OKLCH numbers: `oklch(97.7, 0.007, 85)` is `oklch(97.7% 0.007 85)`. */
+/**
+ * A palette colour from OKLCH numbers: `oklch(97.7, 0.007, 85)` is `oklch(97.7% 0.007 85)`.
+ * Free of side effects (the annotation tells the bundler so), so a palette entry no shipped code
+ * reads is left out of the bundle rather than computed on every page load.
+ */
+/* @__NO_SIDE_EFFECTS__ */
 export function oklch(l: number, c: number, h: number, alpha?: number): Swatch {
   const a = alpha === undefined ? "" : ` / ${alpha}`;
   return Object.freeze({ css: `oklch(${l}% ${c} ${h}${a})`, hex: oklchToHex({ l, c, h }), alpha: alpha ?? 1 });
@@ -54,8 +59,10 @@ export function oklch(l: number, c: number, h: number, alpha?: number): Swatch {
 
 /**
  * A palette colour given as sRGB hex (the 3D surfaces, whose albedos were picked as hex), with
- * an optional alpha for strokes painted onto a texture canvas.
+ * an optional alpha for strokes painted onto a texture canvas. Free of side effects for the
+ * bundler, like oklch() (a malformed hex is a typo in tokens.ts, which the tests read).
  */
+/* @__NO_SIDE_EFFECTS__ */
 export function srgb(hex: string, alpha?: number): Swatch {
   if (!/^#[0-9a-f]{6}$/i.test(hex)) throw new Error(`Not a #rrggbb colour: ${hex}`);
   const h = hex.toLowerCase();
