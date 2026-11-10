@@ -5,22 +5,18 @@
  * on the GPU is exactly what is reachable from the scene and not yet disposed — which is what
  * the tracker below counts, the way renderer.info.memory does.
  */
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { PlanScene } from "../src/three/planScene";
 import { MaterialCache, disposeObject, isStatic, materialsOf, texturesOf } from "../src/three/materials";
 import { buildFurniture } from "../src/three/furniture";
+import { PATTERN_NAMES } from "../src/three/surfaces";
 import { BUILT_IN_KINDS } from "../src/model/catalog";
 import { seedLoft } from "../src/model/seed";
 import { emptyModel, type Item, type PlanModel } from "../src/model/types";
 
-// happy-dom has no 2D canvas. The floor finishes paint one, so stand a do-nothing context in
-// for it: the textures (and their disposal) are then real, which is what is being tested.
-const noop2d = new Proxy({}, { get: () => () => undefined, set: () => true });
-beforeAll(() => {
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => noop2d as never);
-});
-afterAll(() => vi.restoreAllMocks());
+// No canvas is needed either: the surfaces' patterns are computed texel by texel (surfaces.ts),
+// so the textures (and what is and is not disposed) are real here.
 
 /**
  * GPU memory as renderer.info.memory would count it: every geometry and texture that has been
@@ -143,6 +139,19 @@ describe("PlanScene.update", () => {
     expect(scene.stepDoors(0.016)).toBe(false);
     scene.dispose();
   });
+
+  it("puts a door where it is going at once under reduced motion, with no swing to draw", () => {
+    const scene = new PlanScene();
+    scene.update(seedLoft());
+    expect(scene.setDoors({ state: "open" }, true)).toBe(true);
+    for (const leaf of scene.doors) expect(leaf.hinge.rotation.y).toBeCloseTo(leaf.swing);
+    expect(scene.stepDoors(0.016)).toBe(false);
+    for (const leaf of scene.doors) expect(scene.openness(leaf.doorId)).toBe(1);
+    expect(scene.setDoors({ state: "toggle" }, true)).toBe(true);
+    for (const leaf of scene.doors) expect(leaf.hinge.rotation.y).toBeCloseTo(0);
+    expect(scene.stepDoors(0.016)).toBe(false);
+    scene.dispose();
+  });
 });
 
 describe("GPU resources", () => {
@@ -153,9 +162,11 @@ describe("GPU resources", () => {
     const baseline = tracker.sample();
     const seed = seedLoft();
     let loaded = { geometries: 0, textures: 0, materials: 0 };
+    const sampled = new Set<THREE.Texture>();
     for (let cycle = 0; cycle < 5; cycle++) {
       scene.update(seed);
       loaded = tracker.sample();
+      for (const m of materialsOf(scene.root)) for (const t of texturesOf(m)) sampled.add(t);
       // move every piece and re-floor every room: rebuilds and moves, not just adds
       scene.update({
         ...seed,
@@ -168,12 +179,16 @@ describe("GPU resources", () => {
       expect(scene.materials.size).toBe(0);
     }
     expect(loaded.geometries).toBeGreaterThan(baseline.geometries + 100);
-    expect(loaded.textures).toBeGreaterThan(baseline.textures);
+    // textures are the shared patterns (surfaces.ts): drawn with, but never made per entity
+    expect(loaded.textures).toBe(baseline.textures);
+    expect(sampled.size).toBeGreaterThan(0);
+    expect(sampled.size).toBeLessThanOrEqual(PATTERN_NAMES.length + 1); // + the contact shadow's
+    expect([...sampled].every(isStatic)).toBe(true);
     scene.dispose();
     expect(tracker.sample()).toEqual({ geometries: 0, textures: 0, materials: 0 });
   });
 
-  it("frees a removed piece's geometries, its owned materials and cloned textures", () => {
+  it("frees a removed floor's geometries and its shared material, never the shared pattern", () => {
     const scene = new PlanScene();
     const room = { id: "r", x: 0, y: 0, w: 3, h: 3, label: "R", floor: "oak" as const };
     scene.update({ ...emptyModel(), rooms: [room] });
@@ -184,7 +199,12 @@ describe("GPU resources", () => {
     material.addEventListener("dispose", () => (disposed.material = true));
     material.map!.addEventListener("dispose", () => (disposed.texture = true));
     scene.update(emptyModel());
-    expect(disposed).toEqual({ geometry: true, material: true, texture: true });
+    expect(disposed).toEqual({ geometry: true, material: true, texture: false });
+    // the next oak floor samples the very same texture
+    scene.update({ ...emptyModel(), rooms: [{ ...room, id: "r2" }] });
+    const next = scene.root.children.find((o) => (o as THREE.Mesh).isMesh && o.name !== "ground") as THREE.Mesh;
+    expect((next.material as THREE.MeshStandardMaterial).map).toBe(material.map);
+    scene.dispose();
   });
 });
 

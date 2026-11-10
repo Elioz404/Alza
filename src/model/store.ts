@@ -45,6 +45,7 @@ import {
   CALIBRATION_METERS,
   CAMERA_MODES,
   COORD,
+  CUT_HEIGHT,
   DEFAULT_FLOOR,
   DEFAULT_ITEM_COLOR,
   DOOR_DEFAULTS,
@@ -68,6 +69,7 @@ import {
   OPENING_WIDTH,
   ROOM_SIZE,
   ROTATION,
+  SCENE_STYLE_DEFAULTS,
   SUPPLIER,
   SWING_SIDES,
   TEXT,
@@ -85,6 +87,7 @@ import {
   type Hinge,
   type ItemCategory,
   type Range,
+  type SceneStyle,
   type SwingSide,
 } from "./limits";
 
@@ -94,7 +97,7 @@ export interface ActionResult {
   [key: string]: unknown;
 }
 
-export type { CameraMode };
+export type { CameraMode, SceneStyle };
 export type ViewMode = "2d" | "3d";
 
 /**
@@ -119,6 +122,8 @@ export interface EditorState {
   drawMode: "select" | "wall" | "room" | "place";
   placingKind: string | null;
   pendingWallStart: { x: number; y: number } | null;
+  /** how the 3D view draws the model (edges, cutaway): the tab's view settings, not the plan's */
+  scene: SceneStyle;
 }
 
 export interface AppState {
@@ -155,6 +160,7 @@ const initialEditor: EditorState = {
   drawMode: "select",
   placingKind: null,
   pendingWallStart: null,
+  scene: SCENE_STYLE_DEFAULTS,
 };
 
 export const store = createStore<AppState>(() => ({
@@ -274,6 +280,9 @@ function textError(name: string, value: unknown, max: number, allowEmpty = false
 
 const colorError = (name: string, value: unknown): string | null =>
   typeof value === "string" && HEX_COLOR.test(value) ? null : `${name} must be a #rrggbb hex colour.`;
+
+/** The 3D view's drawing style as it stands. */
+const currentSceneStyle = (): SceneStyle => store.getState().editor.scene;
 
 /** True when `value` is one of `allowed`; narrows it to that union. */
 const isOneOf = <T extends string>(value: unknown, allowed: readonly T[]): value is T => allowed.includes(value as T);
@@ -816,6 +825,17 @@ export const pageActions = {
     if (!isOneOf(mode, CAMERA_MODES)) return fail(`Unknown camera "${String(mode)}". Use ${CAMERA_MODES.join(" | ")}.`);
     store.setState((s) => ({ editor: { ...s.editor, view: "3d", camera: mode } }));
     return ok(`Camera set to ${mode}.`);
+  },
+
+  /** Change how the 3D view draws the model; what is left out stays as it is. */
+  setSceneStyle(patch: Partial<SceneStyle>): ActionResult {
+    const bad = patch.cutHeight === undefined ? null : rangeError("cutHeight", patch.cutHeight, CUT_HEIGHT);
+    if (bad) return fail(bad);
+    if ([patch.edges, patch.cutaway].some((v) => v !== undefined && typeof v !== "boolean")) return fail("edges and cutaway must be true or false.");
+    const { edges = currentSceneStyle().edges, cutaway = currentSceneStyle().cutaway, cutHeight = currentSceneStyle().cutHeight } = patch;
+    const scene: SceneStyle = { edges, cutaway, cutHeight };
+    store.setState((s) => ({ editor: { ...s.editor, scene } }));
+    return ok(`3D style: edges ${edges ? "on" : "off"}, ${cutaway ? `cut at ${cutHeight} m` : "no cutaway"}.`, { scene });
   },
 
   setView(view: ViewMode) {

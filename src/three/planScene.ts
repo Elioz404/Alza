@@ -27,13 +27,18 @@ import {
   buildPendant,
   buildWall,
   ceilingOf,
+  CURTAINS,
+  wallCutCap,
   curtainedWindows,
   jointExtensions,
   openingsByWall,
 } from "./build";
 import { buildFurniture } from "./furniture";
 import { MaterialCache, disposeObject } from "./materials";
-import { DOORS, FLOOR_TOP } from "./config";
+import { contactShadow } from "./surfaces";
+import { addInkEdges, removeInkEdges } from "./edges";
+import { CUT_CAP } from "./cutaway";
+import { CUTAWAY, DOORS, FLOOR_TOP } from "./config";
 
 /** What one update did, by entity: for tests and the development probe. */
 export interface ReconcileStats {
@@ -54,7 +59,18 @@ export interface DoorLeaf {
 interface Entity {
   signature: string;
   object: THREE.Object3D;
+  /** a wall's cap at the cutaway's level, built from what the wall was */
+  capAt?: (level: number) => THREE.Mesh | null;
 }
+
+/** What a click on the model picked: the plan entity a mesh belongs to, as the store selects it. */
+export interface Picked {
+  type: "wall" | "room" | "item";
+  id: string;
+}
+
+/** An entity's key, by the store's selection: a floor and its pendant are the room's. */
+const PICK_TYPE: Readonly<Record<string, Picked["type"]>> = Object.freeze({ wall: "wall", floor: "room", pendant: "room", item: "item" });
 
 /** Bounds the camera frames when the plan has no walls yet. */
 const EMPTY_PLAN_BOUNDS = new THREE.Box3(new THREE.Vector3(-4, 0, -3), new THREE.Vector3(4, 3, 3));
@@ -84,6 +100,11 @@ export class PlanScene {
   /** per door id: where its leaves are going (0 shut, 1 open) and where they are */
   private readonly doorState = new Map<string, { target: number; current: number }>();
   private hasWalls = false;
+  private edges = false;
+  /** the cutaway's level, metres above the ground; null while there is none */
+  private cut: number | null = null;
+  /** whether the pendants' fixtures are shown (only from inside, walking: see setFixtures) */
+  private fixtures = false;
 
   constructor(materials = new MaterialCache()) {
     this.materials = materials;
@@ -96,7 +117,7 @@ export class PlanScene {
   update(model: PlanModel): ReconcileStats {
     const stats: ReconcileStats = { added: 0, rebuilt: 0, moved: 0, removed: 0, kept: 0 };
     const seen = new Set<string>();
-    const put = (key: string, signature: string, build: () => THREE.Object3D): THREE.Object3D => {
+    const put = (key: string, signature: string, build: () => THREE.Object3D, capAt?: Entity["capAt"]): THREE.Object3D => {
       seen.add(key);
       const current = this.entities.get(key);
       if (current?.signature === signature) {
@@ -108,22 +129,29 @@ export class PlanScene {
         stats.rebuilt++;
       } else stats.added++;
       const object = build();
+      object.userData.entity = key;
+      const entity: Entity = { signature, object, capAt };
+      this.style(key, entity);
       this.materials.retain(object);
       this.root.add(object);
-      this.entities.set(key, { signature, object });
+      this.entities.set(key, entity);
       return object;
     };
 
+    const before = { ...stats };
     const byWall = openingsByWall(model);
     const curtained = curtainedWindows(model, byWall);
     for (const w of model.walls) {
       const openings = byWall.get(w.id) ?? [];
       const ext = jointExtensions(w, model.walls);
-      put(`wall:${w.id}`, wallSignature(w, openings, ext, curtained), () => buildWall(w, openings, ext, curtained));
+      put(`wall:${w.id}`, wallSignature(w, openings, ext, curtained), () => buildWall(w, openings, ext, curtained), (level) =>
+        wallCutCap(w, openings, ext, level),
+      );
     }
+    const wallsChanged = stats.added + stats.rebuilt > before.added + before.rebuilt || this.walls.length !== model.walls.length;
     const ceiling = ceilingOf(model);
     for (const r of model.rooms) {
-      put(`floor:${r.id}`, JSON.stringify([r.x, r.y, r.w, r.h, r.floor]), () => buildFloor(r));
+      put(`floor:${r.id}`, JSON.stringify([r.x, r.y, r.w, r.h, r.floor]), () => buildFloor(r, this.materials));
       put(`pendant:${r.id}`, JSON.stringify([r.x, r.y, r.w, r.h, ceiling]), () => buildPendant(r, ceiling));
     }
     const catalog = catalogOf(model);
@@ -132,7 +160,12 @@ export class PlanScene {
       if (!def) continue;
       const key = `item:${it.id}`;
       const before = this.entities.get(key);
-      const piece = put(key, String(defId(def)), () => buildFurniture(def, this.materials));
+      const piece = put(key, String(defId(def)), () => {
+        const built = buildFurniture(def, this.materials);
+        // what an occlusion pass used to darken: the floor the piece stands on (a rug lies flat)
+        if (!def.isRug) built.add(contactShadow(def.w, def.d));
+        return built;
+      });
       // where a piece stands is not part of what it is built from: moving it moves it
       const x = it.x;
       const z = it.y;
@@ -152,9 +185,118 @@ export class PlanScene {
       stats.removed++;
     }
     this.materials.sweep();
+    if (this.edges && (wallsChanged || stats.removed > 0)) this.reink();
     this.collectLeaves(model);
     this.hasWalls = model.walls.length > 0;
     return stats;
+  }
+
+  /** Give a newly built entity the drawing style the scene is in. */
+  private style(key: string, entity: Entity): void {
+    // a wall's ink depends on the walls it meets: drawn once they are all built (reink)
+    if (this.edges && !key.startsWith("wall:")) addInkEdges(entity.object);
+    this.capWall(entity);
+    if (key.startsWith("pendant:")) this.showPendant(entity.object);
+  }
+
+  /**
+   * A pendant hangs from a ceiling the model does not draw: its fixture is shown only from
+   * inside (setFixtures), and never while the cutaway has taken the ceiling's walls away. Its
+   * light is kept whatever shows.
+   */
+  private showPendant(object: THREE.Object3D): void {
+    const shown = this.fixtures && !(this.cut !== null && CUTAWAY.hidePendants);
+    for (const c of object.children) if (!(c as THREE.Light).isLight) c.visible = shown;
+  }
+
+  /**
+   * Show the pendants' fixtures, or hide them. From outside — orbiting, or looking down from the
+   * top — a cord hanging from no ceiling is noise over the rooms and their names; walking, it is
+   * the room's light. Returns whether anything changed.
+   */
+  setFixtures(shown: boolean): boolean {
+    if (shown === this.fixtures) return false;
+    this.fixtures = shown;
+    for (const [key, { object }] of this.entities) if (key.startsWith("pendant:")) this.showPendant(object);
+    return true;
+  }
+
+  /**
+   * Close a wall at the cut with its cap (and take an old one away). Its curtains go while the
+   * wall is cut: they are cloth, with no section to show, and would stand sliced beside the poché.
+   */
+  private capWall(entity: Entity): void {
+    if (!entity.capAt) return;
+    const curtains = entity.object.getObjectByName(CURTAINS);
+    if (curtains) curtains.visible = !(this.cut !== null && CUTAWAY.hideCurtains);
+    const old = entity.object.getObjectByName(CUT_CAP);
+    if (old) {
+      entity.object.remove(old);
+      (old as THREE.Mesh).geometry.dispose();
+    }
+    const cap = this.cut === null ? null : entity.capAt(this.cut);
+    if (cap) entity.object.add(cap);
+  }
+
+  /** Draw every entity with ink edges, or take them off. Returns whether anything changed. */
+  setEdges(on: boolean): boolean {
+    if (on === this.edges) return false;
+    this.edges = on;
+    for (const [key, { object }] of this.entities) {
+      if (on && !key.startsWith("wall:")) addInkEdges(object);
+      else removeInkEdges(object);
+      if (key.startsWith("pendant:")) this.showPendant(object);
+    }
+    if (on) this.reink();
+    return true;
+  }
+
+  /** Ink every wall afresh, against the walls it meets now. */
+  private reink(): void {
+    const walls = this.walls;
+    for (const wall of walls) {
+      removeInkEdges(wall);
+      addInkEdges(wall, true, walls);
+    }
+  }
+
+  /**
+   * Where the cutaway slices the walls, metres above the ground (cutaway.ts cutLevel), or null:
+   * every wall is capped at it, and the pendants' fixtures go with the ceiling. Returns whether
+   * anything changed.
+   */
+  setCut(level: number | null): boolean {
+    if (level === this.cut) return false;
+    this.cut = level;
+    for (const [key, entity] of this.entities) {
+      this.capWall(entity);
+      if (key.startsWith("pendant:")) this.showPendant(entity.object);
+    }
+    return true;
+  }
+
+  /** The plan entity a picked object is part of, as the store selects it; null for the ground. */
+  entityOf(object: THREE.Object3D): Picked | null {
+    for (let n: THREE.Object3D | null = object; n && n !== this.root; n = n.parent) {
+      const key = n.userData?.entity as string | undefined;
+      if (!key) continue;
+      const colon = key.indexOf(":");
+      const type = PICK_TYPE[key.slice(0, colon)];
+      return type ? { type, id: key.slice(colon + 1) } : null;
+    }
+    return null;
+  }
+
+  /** The entities' objects, for picking: walls, floors, pendants and pieces. */
+  get objects(): THREE.Object3D[] {
+    return [...this.entities.values()].map((e) => e.object);
+  }
+
+  /** The walls' objects: what can stand between the camera and a room. */
+  get walls(): THREE.Object3D[] {
+    const walls: THREE.Object3D[] = [];
+    for (const [key, { object }] of this.entities) if (key.startsWith("wall:")) walls.push(object);
+    return walls;
   }
 
   private drop(entity: Entity): void {
@@ -191,8 +333,12 @@ export class PlanScene {
     return null;
   }
 
-  /** Set where doors are going: one by id, or all of them. Returns whether any leaf now has somewhere to go. */
-  setDoors(payload: SetDoorsPayload): boolean {
+  /**
+   * Set where doors are going: one by id, or all of them; `instant` (prefers-reduced-motion)
+   * puts each leaf there at once instead of swinging it. Returns whether any leaf now has
+   * somewhere to go, or (instant) went there.
+   */
+  setDoors(payload: SetDoorsPayload, instant = false): boolean {
     let moving = false;
     // by door, not by leaf: the two leaves of a double door are one door, toggled once
     const ids = new Set(this.leaves.map((l) => l.doorId).filter((id) => !payload.id || id === payload.id));
@@ -201,7 +347,9 @@ export class PlanScene {
       if (!state) this.doorState.set(id, (state = { target: 0, current: 0 }));
       state.target = payload.state === "toggle" ? (state.target > 0.5 ? 0 : 1) : payload.state === "open" ? 1 : 0;
       if (Math.abs(state.target - state.current) > DOORS.settleEpsilon) moving = true;
+      if (instant) state.current = state.target;
     }
+    if (instant && moving) for (const leaf of this.leaves) leaf.hinge.rotation.y = (this.doorState.get(leaf.doorId)?.current ?? 0) * leaf.swing;
     return moving;
   }
 

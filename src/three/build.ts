@@ -9,8 +9,10 @@
  * room for curtains — is computed here too, from the whole plan, and handed to the builder.
  *
  * The materials below are static (materials.ts): every wall shares them and they are never
- * disposed with a piece. A floor owns its material, because each room repeats its texture to
- * its own size.
+ * disposed with a piece. They are named surfaces (surfaces.ts) in the tokens' colours, so a
+ * door frame has the same wood grain as a bookshelf. A floor draws with its finish's shared
+ * surface from the scene's cache; its texture coordinates are plan metres, so every room's
+ * planks and tiles continue one pattern, the plan's.
  */
 
 import * as THREE from "three";
@@ -19,145 +21,69 @@ import { catalogOf, type Catalog } from "../model/catalog";
 import { segLen } from "../model/geometry";
 import { openingSpan } from "../model/issues";
 import { DOUBLE_DOOR_CLEAR, WALL_DEFAULTS, type FloorFinish } from "../model/limits";
-import { keepStatic } from "./materials";
-import { FLOOR_TOP } from "./config";
-// every surface colour comes from the design tokens (src/ui/theme/tokens.ts → MATERIAL)
-import { MATERIAL } from "../ui/theme/tokens";
-
-const standard = (params: THREE.MeshStandardMaterialParameters) => keepStatic(new THREE.MeshStandardMaterial(params));
-
-export const wallMaterial = standard({ color: MATERIAL.wall.hex, roughness: 0.93, metalness: 0.0 });
-export const wallTopMaterial = standard({ color: MATERIAL.wallTop.hex, roughness: 0.9 });
-export const glassMaterial = keepStatic(
-  new THREE.MeshPhysicalMaterial({
-    color: MATERIAL.glass.hex,
-    roughness: 0.05,
-    metalness: 0,
-    transparent: true,
-    opacity: 0.28,
-    side: THREE.DoubleSide,
-  }),
-);
-export const frameMaterial = standard({ color: MATERIAL.frame.hex, roughness: 0.6 });
-
-export const doorLeafMaterial = standard({ color: MATERIAL.doorLeaf.hex, roughness: 0.5 });
-export const doorPanelMaterial = standard({ color: MATERIAL.doorPanel.hex, roughness: 0.55 });
-export const skirtingMaterial = standard({ color: MATERIAL.skirting.hex, roughness: 0.55 });
-export const handleMaterial = standard({ color: MATERIAL.handle.hex, roughness: 0.3, metalness: 0.8 });
-
-export const sillMaterial = standard({ color: MATERIAL.sill.hex, roughness: 0.6 });
-export const curtainMaterial = standard({ color: MATERIAL.curtain.hex, roughness: 0.97 });
-// double-sided: the shade is an open cone, seen from below as well as from above
-export const lampShadeMaterial = standard({
-  color: MATERIAL.lampShade.hex,
-  roughness: 0.6,
-  emissive: new THREE.Color(MATERIAL.lampGlow.hex),
-  emissiveIntensity: 0.9,
-  side: THREE.DoubleSide,
-});
-export const cableMaterial = standard({ color: MATERIAL.cable.hex, roughness: 0.8 });
-
-const SKIRTING_H = 0.09;
-const DOOR_SWING = (82 * Math.PI) / 180;
+import { keepStatic, type MaterialCache } from "./materials";
+import { CONTACT, CUTAWAY, FLOOR_TOP, LIGHTS, PENDANT, SCENE } from "./config";
+import { createSurfaceMaterial, ninePatch, projectSurfaceUVs, staticSurface, surface, type SurfaceName } from "./surfaces";
+import { CUT_CAP, POCHE, clipToCut } from "./cutaway";
+// every surface colour comes from the design tokens (src/ui/theme/sceneTokens.ts → MATERIAL)
+import { MATERIAL } from "../ui/theme/sceneTokens";
 
 /**
- * Procedural floor finishes — one canvas per finish, cloned per room so each gets its own
- * repeat. The canvases are static: a clone shares its canvas and its upload, and only the
- * clone is the room's to dispose.
+ * A wall's own surface: a named surface in its token's colour, made for the walls alone (not
+ * the static one a piece of furniture in the same finish shares), since the cutaway slices
+ * every wall material and must slice nothing else.
  */
-const texCache = new Map<FloorFinish, THREE.CanvasTexture>();
-function floorTexture(kind: FloorFinish): THREE.CanvasTexture | null {
-  if (typeof document === "undefined") return null;
-  const hit = texCache.get(kind);
-  if (hit) return hit;
-  const S = 512;
-  const c = document.createElement("canvas");
-  c.width = S;
-  c.height = S;
-  const x = c.getContext("2d");
-  if (!x) return null;
-  const jitter = (base: string, amt: number) => {
-    const n = Math.round((Math.random() - 0.5) * amt);
-    const r = parseInt(base.slice(1, 3), 16) + n;
-    const g = parseInt(base.slice(3, 5), 16) + n;
-    const b = parseInt(base.slice(5, 7), 16) + n;
-    const cl = (v: number) => Math.max(0, Math.min(255, v));
-    return "rgb(" + cl(r) + "," + cl(g) + "," + cl(b) + ")";
-  };
-  if (kind === "oak") {
-    x.fillStyle = MATERIAL.floor.oak.hex;
-    x.fillRect(0, 0, S, S);
-    const rows = 8;
-    const rh = S / rows;
-    for (let i = 0; i < rows; i++) {
-      let px = -Math.random() * 180;
-      while (px < S) {
-        const pw = 130 + Math.random() * 190;
-        x.fillStyle = jitter(MATERIAL.floor.oak.hex, 26);
-        x.fillRect(px, i * rh, pw, rh - 1.5);
-        x.strokeStyle = MATERIAL.oakSeam.css;
-        x.lineWidth = 1.5;
-        x.strokeRect(px, i * rh, pw, rh - 1.5);
-        for (let gi = 0; gi < 5; gi++) {
-          x.strokeStyle = MATERIAL.oakGrain.css;
-          x.lineWidth = 1;
-          const gy = i * rh + 4 + Math.random() * (rh - 10);
-          x.beginPath();
-          x.moveTo(px + 4, gy);
-          x.bezierCurveTo(px + pw * 0.3, gy + 3, px + pw * 0.7, gy - 3, px + pw - 4, gy);
-          x.stroke();
-        }
-        px += pw;
-      }
-    }
-  } else if (kind === "tile") {
-    x.fillStyle = MATERIAL.tileGrout.hex;
-    x.fillRect(0, 0, S, S);
-    const n = 4;
-    const t = S / n;
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) {
-        x.fillStyle = jitter(MATERIAL.floor.tile.hex, 14);
-        x.fillRect(i * t + 3, j * t + 3, t - 6, t - 6);
-      }
-    }
-  } else if (kind === "carpet") {
-    x.fillStyle = MATERIAL.floor.carpet.hex;
-    x.fillRect(0, 0, S, S);
-    for (let i = 0; i < 26000; i++) {
-      const w = Math.random() > 0.5 ? "255,255,255" : "0,0,0";
-      x.fillStyle = "rgba(" + w + "," + Math.random() * 0.08 + ")";
-      x.fillRect(Math.random() * S, Math.random() * S, 2, 2);
-    }
-  } else {
-    x.fillStyle = MATERIAL.floor.concrete.hex;
-    x.fillRect(0, 0, S, S);
-    for (let i = 0; i < 220; i++) {
-      const w = Math.random() > 0.5 ? "255,255,255" : "0,0,0";
-      x.fillStyle = "rgba(" + w + ",0.05)";
-      x.beginPath();
-      x.arc(Math.random() * S, Math.random() * S, 6 + Math.random() * 34, 0, Math.PI * 2);
-      x.fill();
-    }
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  keepStatic(tex);
-  texCache.set(kind, tex);
-  return tex;
-}
+const wallSurface = (name: SurfaceName, tint: string) => keepStatic(clipToCut(createSurfaceMaterial(name, tint)));
 
-/** Metres of floor covered by one texture tile, per finish. */
-const FLOOR_SCALE: Record<FloorFinish, number> = { oak: 2.4, tile: 1.2, carpet: 2, concrete: 3 };
+export const wallMaterial = wallSurface("plaster", MATERIAL.wall.hex);
+export const wallTopMaterial = wallSurface("plaster", MATERIAL.wallTop.hex);
+export const glassMaterial = wallSurface("glass", MATERIAL.glass.hex);
+export const frameMaterial = wallSurface("darkWood", MATERIAL.frame.hex);
 
-const FLOOR_COLORS: Record<FloorFinish, string> = {
-  oak: MATERIAL.floor.oak.hex,
-  tile: MATERIAL.floor.tile.hex,
-  carpet: MATERIAL.floor.carpet.hex,
-  concrete: MATERIAL.floor.concrete.hex,
+export const doorLeafMaterial = wallSurface("lacquer", MATERIAL.doorLeaf.hex);
+export const doorPanelMaterial = wallSurface("lacquer", MATERIAL.doorPanel.hex);
+export const skirtingMaterial = wallSurface("lacquer", MATERIAL.skirting.hex);
+export const handleMaterial = wallSurface("brass", MATERIAL.handle.hex);
+
+export const sillMaterial = wallSurface("stone", MATERIAL.sill.hex);
+
+/**
+ * A wall box's ends, in its own surface drawn a little deeper than they are (CUTAWAY.endOffset):
+ * where a lintel or a sill overlaps the full-height stretch beside it, each one's end meets the
+ * other's face edge-on, and pushed back it never shows through that face as a seam.
+ */
+const endsOf = (material: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial => {
+  const ends = keepStatic(clipToCut(material.clone()));
+  ends.name = `${material.name}:ends`;
+  ends.polygonOffset = true;
+  ends.polygonOffsetFactor = CUTAWAY.endOffset;
+  ends.polygonOffsetUnits = CUTAWAY.endOffset;
+  return ends;
 };
+const wallEndMaterial = endsOf(wallMaterial);
+const skirtingEndMaterial = endsOf(skirtingMaterial);
+export const curtainMaterial = wallSurface("linen", MATERIAL.curtain.hex);
+// the pendant's shade and bulb: an open cone seen from below as well as from above, glowing
+export const lampShadeMaterial = staticSurface("lampShade", MATERIAL.lampShade.hex);
+export const cableMaterial = staticSurface("rubber", MATERIAL.cable.hex);
+
+const SKIRTING_H = 0.09;
+/** the width of a window's frame and of a door's, and how far either stands proud of the wall */
+const WINDOW_FRAME = 0.05;
+const DOOR_FRAME = 0.06;
+const FRAME_PROUD = 0.02;
+const DOOR_SWING = (82 * Math.PI) / 180;
+
+/** The group a wall's curtains hang in: lined in ink on their own, and put away while the wall is cut. */
+export const CURTAINS = "curtains";
+
+/** The surface each floor finish is drawn with: its pattern is the plan's, at the plan's scale. */
+export const FLOOR_SURFACE: Readonly<Record<FloorFinish, SurfaceName>> = Object.freeze({
+  oak: "floorOak",
+  tile: "floorTile",
+  carpet: "floorCarpet",
+  concrete: "floorConcrete",
+});
 
 /**
  * How far a wall's two ends reach past its endpoints: an end that touches another wall is
@@ -190,8 +116,12 @@ export function jointExtensions(wall: Wall, walls: readonly Wall[]): [number, nu
       const t = Math.max(0, Math.min(1, ((p.x - o.ax) * dx + (p.y - o.ay) * dy) / l2));
       return Math.hypot(p.x - (o.ax + t * dx), p.y - (o.ay + t * dy));
     };
-    if (pSeg(a) < 0.09) extA = Math.max(extA, o.thickness / 2);
-    if (pSeg(b) < 0.09) extB = Math.max(extB, o.thickness / 2);
+    // ...reaching on to the partner's middle, not through it: an end at its far face would lie in
+    // that face's plane, and its sides would show through it as a seam on the far side
+    const dA = pSeg(a);
+    const dB = pSeg(b);
+    if (dA < 0.09) extA = Math.max(extA, dA);
+    if (dB < 0.09) extB = Math.max(extB, dB);
   }
   return [extA, extB];
 }
@@ -206,8 +136,19 @@ function box(
   z: number,
   rotY: number,
   castShadow = true,
+  ends?: THREE.Material,
 ): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  const geometry = new THREE.BoxGeometry(w, h, d);
+  if (ends) {
+    // BoxGeometry's six groups run +x, -x (its ends, along the wall), then +y, -y, +z, -z. Every
+    // group is a draw call of its own, so the faces are regrouped into two runs: the ends, then
+    // the rest, for two draws per box instead of six.
+    const faces = geometry.groups[0].count;
+    geometry.clearGroups();
+    geometry.addGroup(0, faces * 2, 0);
+    geometry.addGroup(faces * 2, faces * 4, 1);
+  }
+  const m = new THREE.Mesh(geometry, ends ? [ends, mat] : mat);
   m.position.set(x, y, z);
   m.rotation.y = rotY;
   m.castShadow = castShadow;
@@ -227,7 +168,7 @@ export function buildWall(
 ): THREE.Group {
   const g = new THREE.Group();
   const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
-  const [extA, extB] = ext;
+  const [extA, extB] = insetJoints(ext);
   const total = len + extA + extB;
   const angle = Math.atan2(wall.by - wall.ay, wall.bx - wall.ax);
   // local frame: origin at wall start (extended), x along the wall
@@ -243,16 +184,33 @@ export function buildWall(
   // full-height segments between openings (in extended coords: opening t is relative to original len)
   const toX = (t: number) => extA + t * len;
   let cursor = 0;
-  const addSeg = (x0: number, x1: number, y0: number, y1: number, mat = wallMaterial) => {
+  /**
+   * One box of the wall. Neighbouring boxes overlap by a hair, so no hairline crack opens between
+   * them onto the wall's inside (which the cutaway draws in the poché). Where they overlap, one
+   * box's end meets the other's face edge-on, in its plane: the ends are drawn a little deeper
+   * than they are (wallEndMaterial), so they never show through as a seam.
+   */
+  const addSeg = (x0: number, x1: number, y0: number, y1: number) => {
     if (x1 - x0 < 0.005 || y1 - y0 < 0.005) return;
+    x0 -= CUTAWAY.seam;
+    x1 += CUTAWAY.seam;
+    const depth = wall.thickness;
     // local coords: group origin is the CENTER of the extended wall
-    g.add(box(x1 - x0, y1 - y0, wall.thickness, mat, (x0 + x1) / 2 - total / 2, (y0 + y1) / 2, 0, 0));
+    g.add(box(x1 - x0, y1 - y0, depth, wallMaterial, (x0 + x1) / 2 - total / 2, (y0 + y1) / 2, 0, 0, true, wallEndMaterial));
     // skirting board wherever the wall meets the floor
     if (y0 < 0.001 && y1 > SKIRTING_H) {
-      g.add(
-        box(x1 - x0, SKIRTING_H, wall.thickness + 0.024, skirtingMaterial, (x0 + x1) / 2 - total / 2, SKIRTING_H / 2, 0, 0, false),
-      );
+      g.add(box(x1 - x0, SKIRTING_H, depth + 0.024, skirtingMaterial, (x0 + x1) / 2 - total / 2, SKIRTING_H / 2, 0, 0, false, skirtingEndMaterial));
     }
+  };
+  /** the wall's curtains, in one group of their own (made with the first) */
+  let curtains: THREE.Group | null = null;
+  const curtainGroup = (): THREE.Group => {
+    if (curtains) return curtains;
+    curtains = new THREE.Group();
+    curtains.name = CURTAINS;
+    curtains.userData.inkAnchor = true;
+    g.add(curtains);
+    return curtains;
   };
 
   /**
@@ -303,7 +261,7 @@ export function buildWall(
       // frame
       const fw = x1 - x0;
       const fh = o.height;
-      const fT = 0.05;
+      const fT = WINDOW_FRAME;
       const cy = o.sill + fh / 2;
       const cx = (x0 + x1) / 2 - total / 2;
       for (const [bw, bh, px, py] of [
@@ -312,7 +270,7 @@ export function buildWall(
         [fT, fh, x0 - total / 2 + fT / 2, cy],
         [fT, fh, x1 - total / 2 - fT / 2, cy],
       ] as const) {
-        g.add(box(bw, bh, wall.thickness + 0.02, frameMaterial, px, py, 0, 0, false));
+        g.add(box(bw, bh, wall.thickness + FRAME_PROUD, frameMaterial, px, py, 0, 0, false));
       }
       // stone sill, proud of both faces
       g.add(box(fw + 0.14, 0.045, wall.thickness + 0.16, sillMaterial, cx, o.sill - 0.022, 0, 0, false));
@@ -322,7 +280,7 @@ export function buildWall(
         const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, fw + 0.44, 10), frameMaterial);
         rod.rotation.z = Math.PI / 2;
         rod.position.set(cx, rodY, wall.thickness / 2 + 0.11);
-        g.add(rod);
+        curtainGroup().add(rod);
         const top = rodY - 0.05;
         const bottom = 0.06;
         const ph = top - bottom;
@@ -332,7 +290,7 @@ export function buildWall(
           for (let k = 0; k < 4; k++) {
             const px2 = outer - edge * k * 0.082;
             const z = wall.thickness / 2 + (k % 2 === 0 ? 0.075 : 0.135);
-            g.add(box(0.085, ph, 0.055, curtainMaterial, px2, bottom + ph / 2, z, 0, false));
+            curtainGroup().add(box(0.085, ph, 0.055, curtainMaterial, px2, bottom + ph / 2, z, 0, false));
           }
         }
       }
@@ -350,13 +308,13 @@ export function buildWall(
         addLeaf(x0 + 0.02, 1, clear, o.height, o.id, left);
       }
       // door frame (two posts + header)
-      const fT = 0.06;
+      const fT = DOOR_FRAME;
       for (const [bw, bh, px, py] of [
         [fT, o.height, x0 - total / 2 + fT / 2, o.height / 2],
         [fT, o.height, x1 - total / 2 - fT / 2, o.height / 2],
         [x1 - x0, fT, (x0 + x1) / 2 - total / 2, o.height + fT / 2],
       ] as const) {
-        g.add(box(bw, bh, wall.thickness + 0.02, frameMaterial, px, py, 0, 0, false));
+        g.add(box(bw, bh, wall.thickness + FRAME_PROUD, frameMaterial, px, py, 0, 0, false));
       }
     }
     cursor = x1;
@@ -369,51 +327,166 @@ export function buildWall(
   cap.castShadow = true;
   g.add(cap);
 
+  // grain on the frames and sills in metres, along the wall
+  projectSurfaceUVs(g);
+
   // place group: center of extended wall, rotated
   g.position.set(ox + (dirX * total) / 2, 0, oy + (dirY * total) / 2);
   g.rotation.y = -angle;
   return g;
 }
 
-/** A room's floor slab, textured with its finish. The material and its texture repeat are the floor's own. */
-export function buildFloor(room: Room): THREE.Mesh {
-  const color = FLOOR_COLORS[room.floor];
-  const mat = new THREE.MeshStandardMaterial({ color, roughness: room.floor === "carpet" ? 1 : 0.72 });
-  const base = floorTexture(room.floor);
-  if (base) {
-    const tex = base.clone();
-    tex.needsUpdate = true;
-    const sc = FLOOR_SCALE[room.floor];
-    tex.repeat.set(room.w / sc, room.h / sc);
-    mat.map = tex;
-    mat.color.set(MATERIAL.untinted.hex);
-    if (room.floor === "tile") mat.roughness = 0.4;
+/**
+ * A wall's cap at the cutaway's `level` (metres above the ground), in the wall's own frame (as
+ * buildWall places it): flat poché over what the cut passes through — the wall's solid
+ * stretches, a lintel or a sill where the cut is above or below an opening, and the frames'
+ * jambs beside an opening it crosses — so a cut wall reads as the plan's solid wall, with its
+ * doorways and windows open. Null when the cut passes over the wall.
+ */
+export function wallCutCap(wall: Wall, openings: readonly Opening[], ext: readonly [number, number], level: number): THREE.Mesh | null {
+  if (level >= wall.height || level <= 0) return null;
+  const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
+  const [extA, extB] = insetJoints(ext);
+  const total = len + extA + extB;
+  const toX = (t: number) => extA + t * len;
+  /** the stretches of the wall's length the cut passes through, and how deep each is */
+  const solid: [number, number, number][] = [];
+  let cursor = 0;
+  const spans = openings.map((o) => ({ o, span: openingSpan(wall, o) })).sort((p, q) => p.span[0] - q.span[0]);
+  for (const { o, span } of spans) {
+    const x0 = toX(span[0]);
+    const x1 = toX(span[1]);
+    if (level > o.sill && level < o.sill + o.height) {
+      // the cut crosses the opening: masonry up to it, then the frame's two jambs
+      solid.push([cursor, x0, wall.thickness]);
+      const jamb = o.kind === "door" ? DOOR_FRAME : WINDOW_FRAME;
+      solid.push([x0, x0 + jamb, wall.thickness + FRAME_PROUD], [x1 - jamb, x1, wall.thickness + FRAME_PROUD]);
+      cursor = x1;
+    }
   }
-  const geo = new THREE.BoxGeometry(room.w, FLOOR_TOP, room.h);
-  const m = new THREE.Mesh(geo, mat);
-  m.position.set(room.x + room.w / 2, FLOOR_TOP / 2, room.y + room.h / 2);
-  m.receiveShadow = true;
-  return m;
+  solid.push([cursor, total, wall.thickness]);
+  const positions: number[] = [];
+  for (const [a, b, depth] of solid) {
+    if (b - a < 0.005) continue;
+    const [x0, x1] = [a - total / 2 - CUTAWAY.seam, b - total / 2 + CUTAWAY.seam];
+    const [z0, z1] = [-depth / 2, depth / 2];
+    // two triangles facing up
+    positions.push(x0, level, z0, x0, level, z1, x1, level, z1, x0, level, z0, x1, level, z1, x1, level, z0);
+  }
+  if (positions.length === 0) return null;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(positions.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+  const cap = new THREE.Mesh(geometry, POCHE);
+  cap.name = CUT_CAP;
+  cap.castShadow = false;
+  cap.receiveShadow = false;
+  return cap;
 }
 
-/** A pendant fixture plus the point light it stands for, hung over a room's centre. */
+/**
+ * The four sides of a floor slab, from the ground up to its top, unshaded: a slab only shows
+ * them where a room stands clear of the walls.
+ */
+function slabSides(x0: number, z0: number, x1: number, z1: number, uv: (x: number, z: number, y: number) => [number, number]): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const index: number[] = [];
+  const side = (ax: number, az: number, bx: number, bz: number, nx: number, nz: number) => {
+    const base = positions.length / 3;
+    for (const [x, z, y] of [
+      [ax, az, 0],
+      [bx, bz, 0],
+      [ax, az, FLOOR_TOP],
+      [bx, bz, FLOOR_TOP],
+    ] as const) {
+      positions.push(x, y, z);
+      normals.push(nx, 0, nz);
+      uvs.push(...uv(x, z, y));
+    }
+    index.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+  };
+  side(x0, z1, x1, z1, 0, 1); // south, seen from +z
+  side(x1, z0, x0, z0, 0, -1); // north
+  side(x1, z1, x1, z0, 1, 0); // east
+  side(x0, z0, x0, z1, -1, 0); // west
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(new Array(positions.length).fill(1), 3));
+  geometry.setIndex(index);
+  return geometry;
+}
+
+/**
+ * A room's floor: a slab in its finish, whose top darkens toward its edges, where it meets the
+ * walls (CONTACT.floorEdge: the contact shading an occlusion pass used to add). Its texture
+ * coordinates are plan metres over the pattern's repeat, so the planks and tiles line up with
+ * the plan's drawing of them, and with the next room's. With `materials`, the finish is the
+ * scene's shared one.
+ */
+export function buildFloor(room: Room, materials?: MaterialCache): THREE.Mesh {
+  const material = surface(FLOOR_SURFACE[room.floor], undefined, materials);
+  const [mu, mv] = (material.userData.metres as readonly [number, number] | undefined) ?? [1, 1];
+  const cx = room.x + room.w / 2;
+  const cz = room.y + room.h / 2;
+  const hw = room.w / 2;
+  const hd = room.h / 2;
+  // the edge band, never wider than half the room
+  const band = Math.min(CONTACT.floorEdge.width, hw, hd);
+  const xs = [-hw, -hw + band, hw - band, hw];
+  const zs = [-hd, -hd + band, hd - band, hd];
+  const rim = (k: number) => k === 0 || k === 3;
+  const top = ninePatch(
+    xs,
+    zs,
+    FLOOR_TOP,
+    (x, z) => [(x + cx) / mu, (z + cz) / mv],
+    (i, j) => (rim(i) || rim(j) ? CONTACT.floorEdge.shade : 1),
+  );
+  const floor = new THREE.Mesh(top, material);
+  floor.receiveShadow = true;
+  const sides = new THREE.Mesh(
+    slabSides(-hw, -hd, hw, hd, (x, z, y) => [(x + cx + z + cz) / mu, y / mv]),
+    material,
+  );
+  sides.receiveShadow = true;
+  floor.add(sides);
+  floor.position.set(cx, 0, cz);
+  return floor;
+}
+
+/**
+ * A pendant fixture plus the point light it stands for, hung over a room's centre: a cord, an
+ * open shade, and the bulb inside it (round enough that no facet of it takes the ink).
+ */
 export function buildPendant(room: Room, ceiling: number): THREE.Group {
   const g = new THREE.Group();
-  const drop = Math.min(0.55, ceiling * 0.22);
+  const p = PENDANT;
+  const drop = Math.min(p.maxDrop, ceiling * p.dropFraction);
   const shadeY = ceiling - drop;
-  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, drop, 6), cableMaterial);
+  const cable = new THREE.Mesh(new THREE.CylinderGeometry(p.cord, p.cord, drop, p.cordSegments), cableMaterial);
   cable.position.set(0, ceiling - drop / 2, 0);
   g.add(cable);
-  const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.19, 0.17, 20, 1, true), lampShadeMaterial);
+  const shade = new THREE.Mesh(new THREE.CylinderGeometry(p.shadeTop, p.shadeBottom, p.shadeHeight, p.shadeSegments, 1, true), lampShadeMaterial);
   shade.position.set(0, shadeY, 0);
   g.add(shade);
-  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), lampShadeMaterial);
-  bulb.position.set(0, shadeY - 0.09, 0);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(p.bulb, p.bulbSegments, p.bulbRings), lampShadeMaterial);
+  // inside the shade: its bottom just above the shade's rim
+  bulb.position.set(0, shadeY - p.shadeHeight / 2 + p.bulbInset + p.bulb, 0);
   g.add(bulb);
   // brightness scaled to the room so a corridor is not lit like a living room
-  const area = Math.max(4, room.w * room.h);
-  const light = new THREE.PointLight(MATERIAL.pendantLight.hex, Math.min(8, 2.2 + area * 0.26), Math.max(5, room.w + room.h), 2);
-  light.position.set(0, shadeY - 0.12, 0);
+  const { base, perSquareMetre, max, minArea, minRange, decay } = LIGHTS.pendant;
+  const area = Math.max(minArea, room.w * room.h);
+  const light = new THREE.PointLight(
+    MATERIAL.pendantLight.hex,
+    Math.min(max, base + area * perSquareMetre),
+    Math.max(minRange, room.w + room.h),
+    decay,
+  );
+  light.position.set(0, shadeY - p.lightBelow, 0);
   g.add(light);
   g.position.set(room.x + room.w / 2, 0, room.y + room.h / 2);
   return g;
@@ -467,18 +540,31 @@ export function curtainedWindows(model: PlanModel, byWall = openingsByWall(model
   return curtained;
 }
 
+/**
+ * A wall's two ends as built: each joint's reach (jointExtensions) stops a hair inside the wall
+ * it runs into, so the end face lies behind that wall's face, not in its plane — two faces in
+ * one plane fight for depth, and draw the corner as a dashed seam.
+ */
+function insetJoints([extA, extB]: readonly [number, number]): [number, number] {
+  const inset = (e: number) => (e > 0 ? Math.max(0, e - CUTAWAY.faceInset) : 0);
+  return [inset(extA), inset(extB)];
+}
+
 /** The ceiling the pendants hang from: the plan's first wall, or a standard wall's height. */
 export const ceilingOf = (model: PlanModel): number => model.walls[0]?.height ?? WALL_DEFAULTS.height;
 
-/** The ground around the plan. It has nothing to do with the plan's content, so it is built once per scene. */
+/**
+ * The ground around the plan: the studio's paper, a step deeper than the backdrop it fades into
+ * (the fog). It has nothing to do with the plan's content, so it is built once per scene.
+ */
 export function buildGround(): THREE.Mesh {
   const ground = new THREE.Mesh(
-    new THREE.CircleGeometry(40, 64),
-    new THREE.MeshStandardMaterial({ color: MATERIAL.ground.hex, roughness: 1 }),
+    new THREE.CircleGeometry(SCENE.groundRadius, SCENE.groundSegments),
+    new THREE.MeshStandardMaterial({ color: MATERIAL.ground.hex, roughness: SCENE.groundRoughness }),
   );
   ground.name = "ground";
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.02;
+  ground.position.y = -SCENE.groundDrop;
   ground.receiveShadow = true;
   return ground;
 }

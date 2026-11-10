@@ -12,7 +12,7 @@ import { SITES, SITE_PAGES, outputDirFor, type Site } from "./config/sites.js";
 import { renderTokenCss } from "./src/ui/theme/tokenSheet";
 import { TOUCH_ACTION_RULE_MODULE, touchActionCss, touchActionRuleSource } from "./config/astryxTouchAction.js";
 import { atomicClassesIn, purgeAtomicCss, splitAtomicCss } from "./config/purgeAtomicCss.js";
-import { checkBudgets, firstLoadFiles, type BundleLike } from "./config/budgets.js";
+import { checkBudgets, checkLazyBudgets, firstLoadFiles, type BundleLike } from "./config/budgets.js";
 import { checkFirstLoad, staticImportChains, type BundleWithModules } from "./config/firstLoad.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -179,7 +179,8 @@ function reachableFrom(bundle: Rollup.OutputBundle, site: Site): Set<string> {
  * Before re-filing, each site's first load (its entry chunk, the chunks that one imports
  * statically, and their stylesheets) is checked, after every other plugin has finished with the
  * output: it may hold none of the modules config/firstLoad.js forbids (Astryx's runtime, which
- * only deferred code may bring), and it must be within its budget in config/budgets.js. Either
+ * only deferred code may bring), and it must be within its budget in config/budgets.js; the 3D
+ * view's lazy chunks (three.js and the studio's own 3D code) are held to theirs too. Either
  * failure stops the build, naming the site and what is wrong: the modules and the chain of
  * project files, from the entry point, that brought each in, or the size, the budget and the files.
  */
@@ -217,9 +218,13 @@ function perSiteOutput(origins: { studio: string; supplier: string }): Plugin {
         const forbidden = checkFirstLoad(bundle as unknown as BundleWithModules, SITES, chainOf);
         if (forbidden.length > 0) this.error(`forbidden in the first load:\n${forbidden.join("\n")}`);
 
-        const budgets = checkBudgets(bundle as unknown as BundleLike, (bytes) => gzipSync(bytes).length);
-        for (const line of budgets.report) logger.info(line);
-        if (budgets.violations.length > 0) this.error(`over budget:\n${budgets.violations.join("\n")}`);
+        const gzipSize = (bytes: Uint8Array) => gzipSync(bytes).length;
+        const budgets = checkBudgets(bundle as unknown as BundleLike, gzipSize);
+        // the 3D view's lazy chunks are not first load, but have budgets of their own
+        const lazy = checkLazyBudgets(bundle as unknown as BundleLike, gzipSize, SITES);
+        for (const line of [...budgets.report, ...lazy.report]) logger.info(line);
+        const over = [...budgets.violations, ...lazy.violations];
+        if (over.length > 0) this.error(`over budget:\n${over.join("\n")}`);
 
         // Each site ships only what its own entry point can reach — static and dynamic imports,
         // and the CSS and assets Vite attached to those chunks — so the partner host never

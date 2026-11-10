@@ -18,7 +18,7 @@
 import type { Opening, PlanModel } from "../model/types";
 import { catalogOf } from "../model/catalog";
 import { openingsByWall } from "./build";
-import { DOORS, WALK } from "./config";
+import { DOORS, WALK, WALK_ENTRY } from "./config";
 import { isInsideOverlay, isTypingTarget } from "../ui/keys";
 
 interface WallBlocker {
@@ -130,6 +130,50 @@ export function slide(
     out[1] = 0; // cornered
   }
   return out;
+}
+
+/** Where a walker is set down, in plan metres, and the way it faces (a unit vector on the plan). */
+export interface WalkSpot {
+  x: number;
+  z: number;
+  dirX: number;
+  dirZ: number;
+}
+
+/**
+ * Where Walk puts the walker: inside the plan's largest room, toward one end of its longer
+ * side (WALK_ENTRY.back of the way from the centre), facing into the room through its centre,
+ * on a spot where nothing stands — preferably one at least WALK_ENTRY.pendantClear from the
+ * centre, where the room's pendant hangs, so the first view is not of a lampshade at the top of
+ * the frame. Null for a plan without rooms, or one whose rooms are full.
+ */
+export function walkEntry(model: PlanModel, b: Blockers, openness: (doorId: string) => number): WalkSpot | null {
+  const room = model.rooms.reduce<PlanModel["rooms"][number] | null>((best, r) => (!best || r.w * r.h > best.w * best.h ? r : best), null);
+  if (!room) return null;
+  const cx = room.x + room.w / 2;
+  const cz = room.y + room.h / 2;
+  // stand toward the south end of a deep room, the east end of a wide one, and look across it
+  const deep = room.h >= room.w;
+  const ax = deep ? 0 : 1;
+  const az = deep ? 1 : 0;
+  const reach = ((deep ? room.h : room.w) / 2) * WALK_ENTRY.back;
+  const side = deep ? room.w / 2 : room.h / 2;
+  // first clear of the pendant if the room allows it, then anywhere free
+  for (const clear of [WALK_ENTRY.pendantClear, 0]) {
+    for (let i = 0; i <= WALK_ENTRY.tries; i++) {
+      const back = reach * (1 - i / (WALK_ENTRY.tries + 1));
+      for (const lateral of [0, 1, -1, 2, -2]) {
+        const offset = lateral * WALK_ENTRY.sideStep;
+        if (Math.abs(offset) > side - WALK.personRadius) continue;
+        if (Math.hypot(back, offset) < clear) continue;
+        const x = cx + ax * back + az * offset;
+        const z = cz + az * back + ax * offset;
+        if (blocked(b, x, z, openness)) continue;
+        return { x, z, dirX: -ax || 0, dirZ: -az || 0 };
+      }
+    }
+  }
+  return null;
 }
 
 /** Keys that walk, by what KeyboardEvent.key reports (letters lower-cased, so Shift and Caps Lock walk too). */

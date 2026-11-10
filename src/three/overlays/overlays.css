@@ -1,7 +1,8 @@
 /*
  * The 3D view's chrome and states: the camera switch, the hint bar, the loading skeleton and
- * the error card, floating over the scene's own dark backdrop (--scene-backdrop). Tokens only
- * (src/ui/theme/tokens.ts); floating pieces carry the one shadow, the backdrop none.
+ * the error card, floating over the scene's own warm paper backdrop (--scene-backdrop, the colour
+ * the first frame clears to). Tokens only (src/ui/theme/tokens.ts, the scene's air from
+ * sceneTokens.ts); floating pieces carry the one shadow, the backdrop none.
  */
 @layer alza-surfaces {
   /* ---------------------------------------------------------------- chrome over the scene */
@@ -15,7 +16,13 @@
     position: absolute;
     pointer-events: auto;
   }
-  .scene-overlays__toolbar { top: var(--spacing-4); left: var(--spacing-4); }
+  .scene-overlays__toolbar {
+    top: var(--spacing-4);
+    left: var(--spacing-4);
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-2);
+  }
   .scene-overlays__hint {
     left: 50%;
     bottom: var(--spacing-4);

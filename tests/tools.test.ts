@@ -16,7 +16,7 @@ const PUBLIC_NAMES = [
   "calibrate_underlay", "add_wall", "edit_wall", "remove_wall", "add_door", "set_door_swing",
   "add_window", "move_opening", "remove_opening", "add_room", "update_room", "remove_room",
   "place_item", "define_item_kind", "move_item", "remove_item", "set_plan_name", "clear_model",
-  "build_3d", "set_camera", "set_doors", "get_supplier_catalog", "place_supplier_product",
+  "build_3d", "set_camera", "set_3d_style", "set_doors", "get_supplier_catalog", "place_supplier_product",
   "leave_note", "get_notes",
 ];
 

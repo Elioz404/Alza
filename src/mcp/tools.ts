@@ -26,10 +26,12 @@ import { dist, segLen } from "../model/geometry";
 import { bus, EVENTS } from "../model/sceneBus";
 import { defineTool, executeWrapped, type ToolDef } from "./registry";
 import {
+  CUT_HEIGHT,
   DEFAULT_FLOOR,
   DOOR_DEFAULTS,
   FLOOR_FINISHES,
   FURNITURE_DIM,
+  PART_MATERIALS,
   ROOM_SIZE,
   SNAP,
   SUPPLIER,
@@ -510,7 +512,9 @@ export const TOOLS: ToolDef[] = [
     description:
       "Create a piece of furniture that is NOT in the catalogue, then place it with place_item. Use this whenever the plan draws something the catalogue does not have, or draws it at a different size — a corner bath, an L-shaped sofa, a kitchen island, a piano. Do NOT approximate with the nearest stock item when the plan shows something specific: define the real thing. " +
       "Required: kind (a stable snake_case id), label, and the true footprint w × d and height h in METRES. " +
-      "Optional `parts` models it in 3D from primitives; without it the piece is blocked out from its footprint. Each part is { shape: \"box\" | \"cylinder\" | \"sphere\", x, y, z, w, h, d, color, rotation }, in the piece's OWN local frame: x runs along its width, z along its depth, y is height above the floor and is the part's BOTTOM (a 0.4 m tall seat resting on the floor is y:0, h:0.4). The piece faces +z, so a backrest sits at negative z and the front is positive z — that keeps it consistent with the rotation convention in place_item. For a cylinder, w is the diameter and d makes it an ellipse. Sizes are metres, colours are hex.",
+      "Optional `parts` models it in 3D from primitives; without it the piece is blocked out from its footprint. Each part is { shape: \"box\" | \"cylinder\" | \"sphere\", x, y, z, w, h, d, color, material, rotation }, in the piece's OWN local frame: x runs along its width, z along its depth, y is height above the floor and is the part's BOTTOM (a 0.4 m tall seat resting on the floor is y:0, h:0.4). The piece faces +z, so a backrest sits at negative z and the front is positive z — that keeps it consistent with the rotation convention in place_item. For a cylinder, w is the diameter and d makes it an ellipse. `material` (" +
+      PART_MATERIALS.join(", ") +
+      ") gives a part the same finish as the catalogue's own pieces, tinted by its colour. Sizes are metres, colours are hex.",
     input: args({
       kind: kindId,
       label,
@@ -605,6 +609,17 @@ export const TOOLS: ToolDef[] = [
       "Move the 3D camera: \"orbit\" (default 3/4 view), \"top\" (plan view from above), \"walk\" (first-person at 1.6 m — the user walks with WASD). Implies switching to 3D.",
     input: args({ mode: cameraMode }),
     execute: (i) => actions.setCamera(i.mode),
+  }),
+  defineTool({
+    name: "set_3d_style",
+    title: "Change how the 3D view draws",
+    description: `How the 3D view draws (the human's View settings): edges = ink lines like the plan's; cutaway = slice the walls at cutHeight m (${CUT_HEIGHT.min}-${CUT_HEIGHT.max}) to look in. Omitted settings stay. A view setting: the plan and undo history are untouched. Implies 3D.`,
+    input: args({ edges: z.boolean().optional(), cutaway: z.boolean().optional(), cutHeight: inRange(CUT_HEIGHT).optional() }),
+    execute: (i) => {
+      const result = actions.setSceneStyle(i);
+      if (result.ok) actions.setView("3d");
+      return result;
+    },
   }),
 
   defineTool({

@@ -458,10 +458,81 @@ check("3D: canvas mounted", (await page.locator(SCENE_CANVAS).count()) === 1);
 check("3D: the rail shows the 3D tools", (await railButton(page, "Orbit").count()) === 1 && (await railButton(page, "Draw walls").count()) === 0);
 await S("07-3d-orbit");
 
-for (const cam of ["Top view", "Walk"]) {
-  await railButton(page, cam).click();
-  await page.waitForTimeout(700);
-}
+/** What the mounted 3D view holds (the test hook's probe), or null. */
+const scene = () => hook.evaluate((h) => h.sceneStats());
+/** Wait for the 3D view to agree, up to a moment. */
+const sceneUntil = async (test, ms = 3000) => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    const s = await scene();
+    if (s && test(s)) return true;
+    await page.waitForTimeout(50);
+  }
+  const s = await scene();
+  return Boolean(s && test(s));
+};
+const canvasBox = await page.locator(SCENE_CANVAS).boundingBox();
+
+// the cutaway: the View panel's slider sets the height the walls are cut at
+const viewButton = page.getByRole("button", { name: "View", exact: true });
+await viewButton.click();
+const viewPanel = page.getByRole("group", { name: "View" });
+await viewPanel.getByRole("switch", { name: /^Cutaway/ }).click();
+const cutSlider = viewPanel.getByRole("slider", { name: "Cut height" });
+const firstCut = Number(await cutSlider.inputValue());
+check("3D: the cutaway cuts the walls", (await sceneUntil((s) => s.cut !== null)) && (await state("s.editor.scene.cutHeight")) === firstCut, `${firstCut} m`);
+const firstLevel = (await scene()).cut;
+await cutSlider.focus();
+await page.keyboard.press("ArrowRight");
+await page.keyboard.press("ArrowRight");
+const raisedCut = Number(await cutSlider.inputValue());
+// the walls stand to the cut: it rises in the model by what the slider moved
+check(
+  "3D: moving the slider raises the walls' cut by as much",
+  raisedCut > firstCut && (await sceneUntil((s) => s.cut !== null && Math.abs(s.cut - firstLevel - (raisedCut - firstCut)) < 1e-6)),
+  `${firstCut} m → ${raisedCut} m`,
+);
+await viewPanel.getByRole("switch", { name: /^Cutaway/ }).click();
+check("3D: the walls stand whole again without the cutaway", await sceneUntil((s) => s.cut === null));
+await page.keyboard.press("Escape");
+
+// the camera switch moves the camera to each mode and lets it settle there
+await railButton(page, "Top view").click();
+check("3D: Top view switches the camera and the move settles", (await until("s.editor.camera === 'top'")) && (await sceneUntil((s) => !s.moving)));
+
+// a click on a wall in the model selects it, in the store and in the panel
+await panelTab(page, "Properties");
+const northWall = await hook.evaluate((h) => h.sceneLocate("wall", "wall_n"));
+await page.mouse.click(canvasBox.x + northWall.x, canvasBox.y + northWall.y);
+check("3D: a click on a wall selects it", await until("s.editor.selectedWallId === 'wall_n'"));
+check(
+  "3D: the panel shows the wall picked in 3D, and the model outlines it",
+  (await page.getByRole("complementary", { name: "Plan panel" }).getByText("Openings on this wall").isVisible()) && (await sceneUntil((s) => s.marks.selection === 1)),
+);
+await hook.evaluate((h) => h.actions.selectWall(null));
+await until("!s.editor.selectedWallId");
+
+// the plan's keys act on what is selected in the 3D view too: Delete removes it, Ctrl+Z undoes
+await hook.evaluate((h) => h.actions.selectItem("item_dining"));
+const itemsSelected = await state("s.model.items.length");
+await page.locator(SCENE_CANVAS).hover();
+await page.keyboard.press("Delete");
+check("3D: Delete removes the selected piece, as on the plan", await until(`s.model.items.length === ${itemsSelected - 1} && !s.editor.selectedItemId`));
+await page.keyboard.press("Control+z");
+check("3D: Ctrl+Z brings it back", await until(`s.model.items.length === ${itemsSelected}`));
+
+// a pending removal is hatched on the model as on the plan, until it is answered
+await hook.evaluate((h) => {
+  window.__pending3d = h.runTool("remove_room", { id: "Bathroom" });
+});
+await requestCard(page).waitFor({ timeout: 5000 });
+check("3D: a pending remove_room is hatched on the model", await sceneUntil((s) => s.marks.pending === 1));
+await answerRequest(page, "keep");
+const kept3d = await page.evaluate(() => window.__pending3d);
+check("3D: the hatch goes once the request is kept", !kept3d.ok && (await sceneUntil((s) => s.marks.pending === 0)));
+
+await railButton(page, "Walk").click();
+await page.waitForTimeout(700);
 check("3D: walk camera active", (await state("s.editor.camera")) === "walk");
 await S("08-3d-walk");
 await page.locator(SCENE_CANVAS).hover();
@@ -519,6 +590,37 @@ for (const [label, size] of [["drawer", TABLET], ["sheet", PHONE]]) {
   await page.waitForTimeout(400);
   check(`${label} ${size.width}px: Esc closes the panel`, (await panel.getAttribute("data-open")) === "false");
 }
+
+// the 3D view's View panel at phone width: inside the view, every control in reach of a finger
+await showView(page, "3D");
+await page.locator(SCENE_CANVAS).waitFor({ timeout: 8000 }).catch(() => {});
+await page.getByRole("button", { name: "View", exact: true }).click();
+const phoneView = page.getByRole("group", { name: "View" });
+const viewBox = await phoneView.boundingBox();
+const phoneCanvas = await page.locator(SCENE_CANVAS).boundingBox();
+check(
+  `phone ${PHONE.width}px: the View panel lies inside the 3D view`,
+  !!viewBox && !!phoneCanvas && viewBox.x >= phoneCanvas.x - 1 && viewBox.x + viewBox.width <= phoneCanvas.x + phoneCanvas.width + 1,
+  viewBox ? `${Math.round(viewBox.x)}..${Math.round(viewBox.x + viewBox.width)} px` : "no panel",
+);
+const edgesWere = await state("s.editor.scene.edges");
+const pressed = [];
+for (const name of [/^Ink edges/, /^Cutaway/]) {
+  pressed.push(
+    await phoneView
+      .getByRole("switch", { name })
+      .click({ timeout: 3000 })
+      .then(() => true)
+      .catch(() => false),
+  );
+}
+check(
+  `phone ${PHONE.width}px: the Ink edges and Cutaway switches can be pressed`,
+  pressed.every(Boolean) && (await state("s.editor.scene.edges")) === !edgesWere && (await state("s.editor.scene.cutaway")) === true,
+);
+await hook.evaluate((h) => h.actions.setSceneStyle({ edges: true, cutaway: false }));
+await page.keyboard.press("Escape");
+await showView(page, "Plan");
 await page.setViewportSize(DESKTOP);
 
 // ---------- 13. console errors ----------

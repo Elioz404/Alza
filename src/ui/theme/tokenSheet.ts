@@ -1,14 +1,16 @@
 /**
  * The design tokens laid out as the stylesheet's custom properties (LIGHT_TOKENS, DARK_TOKENS),
  * and `renderTokenCss()`, which vite.config.ts renders into `virtual:alza-tokens.css` at build
- * time. The values are tokens.ts's; this module only names them. Nothing in the page imports it:
+ * time. The values are tokens.ts's (and the 3D view's air, sceneTokens.ts's); this module only names them. Nothing in the page imports it:
  * the page reads the stylesheet, so these tables never reach the bundle.
  */
 
 import type { Swatch } from "./color";
+import { SCENE_AIR } from "./sceneTokens";
 import { FONT, FONT_SIZE, FONT_WEIGHT, LEADING, MIX, MOTION, OPACITY, PALETTE, RADIUS, SHADOW, SIZE, SPACING, TOOLTIP, Z } from "./tokens";
 
-const { chrome, accent, agent, status, sheet, scene, dark } = PALETTE;
+const { chrome, accent, agent, status, sheet, dark } = PALETTE;
+const scene = SCENE_AIR;
 
 
 const ref = (name: string) => `var(${name})`;
@@ -221,6 +223,7 @@ export const LIGHT_TOKENS: TokenSheet = Object.freeze({
   /** how much of the hover tint a hovered surface and a hovered accent fill take */
   "--mix-hover-surface": MIX.hoverSurface,
   "--mix-hover-accent": MIX.hoverAccent,
+  "--mix-label-chip": MIX.labelChip,
   // layers
   ...scaleVars("--z", Z),
 });

@@ -62,6 +62,39 @@ export const BUDGETS = Object.freeze(
 );
 
 /**
+ * The 3D view's lazy chunks. They are not first load (the studio fetches them when the 3D view
+ * or the Library's thumbnails first open), but they are what a visitor waits on there, so they
+ * have budgets of their own, set and checked the same way:
+ *
+ *  - `three`: three.js, in its own chunk (vite.config.ts, manualChunks);
+ *  - `scene3d`: the studio's own 3D code (the view, the scene, the furniture, the thumbnails),
+ *    whatever chunks Rollup splits it into: every lazy chunk that imports three.js, directly
+ *    or through another chunk.
+ *
+ * Sizes are what the chunks shipped when the budget was last set (the build log's
+ * `studio lazy …` lines), in bytes.
+ *
+ * @typedef {"three" | "scene3d"} LazyGroup
+ * @type {Readonly<Record<LazyGroup, SizeLimit>>}
+ */
+export const LAZY_SHIPPED = Object.freeze({
+  three: { min: 517_921, gzip: 130_065 },
+  scene3d: { min: 109_791, gzip: 41_777 },
+});
+
+/**
+ * Each lazy group's budget: what it shipped, plus MARGIN.
+ *
+ * @type {Readonly<Record<LazyGroup, SizeLimit>>}
+ */
+export const LAZY_BUDGETS = Object.freeze(
+  /** @type {Record<LazyGroup, SizeLimit>} */ (Object.fromEntries(Object.entries(LAZY_SHIPPED).map(([group, shipped]) => [group, withMargin(shipped)]))),
+);
+
+/** What each lazy group is called in the build log and in a failure. */
+const LAZY_LABEL = Object.freeze({ three: "three.js", scene3d: "3D view" });
+
+/**
  * The parts of Rollup's output bundle the check reads.
  *
  * @typedef {{ type: "chunk", fileName: string, name: string, isEntry: boolean, code: string, imports: string[], viteMetadata?: { importedCss: Set<string> } }} ChunkLike
@@ -167,6 +200,86 @@ export function checkBudgets(bundle, gzipSize, budgets = BUDGETS) {
             `by ${formatSize(measured[measure] - limit[measure])} (config/budgets.js). It is: ${list || "nothing"}.`,
         );
       }
+    }
+  }
+  return { report, violations };
+}
+
+/**
+ * The 3D view's lazy chunks, by group (see LAZY_SHIPPED): the three.js chunk, and every chunk
+ * outside the sites' first loads that imports it, directly or through another chunk.
+ *
+ * @param {BundleLike} bundle
+ * @param {readonly string[]} sites the sites whose first loads are not lazy
+ * @returns {Record<LazyGroup, string[]> & { firstLoad: string[] }} the files of each group, and
+ *   the three.js files a first load holds (which must be none)
+ */
+export function lazyFiles(bundle, sites) {
+  const firstLoad = new Set(sites.flatMap((site) => firstLoadFiles(bundle, site)?.js ?? []));
+  const chunks = /** @type {ChunkLike[]} */ (Object.values(bundle).filter((o) => o.type === "chunk"));
+  const three = chunks.filter((c) => !c.isEntry && c.name === "three").map((c) => c.fileName);
+  const threeSet = new Set(three);
+  /**
+   * Does this chunk import three.js, directly or through the chunks it imports?
+   *
+   * @param {string} start
+   * @returns {boolean}
+   */
+  const importsThree = (start) => {
+    const seen = new Set([start]);
+    const queue = [start];
+    while (queue.length > 0) {
+      const chunk = bundle[/** @type {string} */ (queue.shift())];
+      if (chunk?.type !== "chunk") continue;
+      for (const name of chunk.imports) {
+        if (threeSet.has(name)) return true;
+        if (!seen.has(name)) {
+          seen.add(name);
+          queue.push(name);
+        }
+      }
+    }
+    return false;
+  };
+  const scene3d = chunks.filter((c) => !threeSet.has(c.fileName) && !firstLoad.has(c.fileName) && importsThree(c.fileName)).map((c) => c.fileName);
+  return { three: three.filter((f) => !firstLoad.has(f)), scene3d, firstLoad: three.filter((f) => firstLoad.has(f)) };
+}
+
+/**
+ * The 3D view's lazy chunks, measured against their budgets (LAZY_BUDGETS).
+ *
+ * @param {BundleLike} bundle
+ * @param {GzipSize} gzipSize
+ * @param {readonly string[]} sites the sites whose first loads are not lazy
+ * @param {Readonly<Record<LazyGroup, SizeLimit>>} [budgets]
+ * @returns {{ report: string[], violations: string[] }} as checkBudgets
+ */
+export function checkLazyBudgets(bundle, gzipSize, sites, budgets = LAZY_BUDGETS) {
+  const report = [];
+  const violations = [];
+  const files = lazyFiles(bundle, sites);
+  if (files.firstLoad.length > 0) {
+    violations.push(`three.js is in a first load (${files.firstLoad.map(baseName).join(", ")}): it must only be reached through the 3D view's dynamic imports.`);
+  }
+  for (const group of /** @type {LazyGroup[]} */ (Object.keys(budgets))) {
+    const label = LAZY_LABEL[group];
+    if (files[group].length === 0) {
+      violations.push(`the build has no lazy ${label} chunk, so its budget cannot be checked.`);
+      continue;
+    }
+    const measured = measureFiles(bundle, files[group], gzipSize);
+    const limit = budgets[group];
+    report.push(
+      `studio lazy ${label}: ${formatSize(measured.min)} (budget ${formatSize(limit.min)}), gzip ${formatSize(measured.gzip)} (budget ${formatSize(limit.gzip)})`,
+    );
+    const list = measured.files.map((f) => `${baseName(f.fileName)} ${formatSize(f.min)} / gzip ${formatSize(f.gzip)}`).join(", ");
+    for (const measure of /** @type {const} */ (["min", "gzip"])) {
+      if (measured[measure] <= limit[measure]) continue;
+      const how = measure === "min" ? "minified" : "gzipped";
+      violations.push(
+        `the lazy ${label} chunks are ${formatSize(measured[measure])} ${how}, over their budget of ${formatSize(limit[measure])} ` +
+          `by ${formatSize(measured[measure] - limit[measure])} (config/budgets.js, LAZY_SHIPPED). They are: ${list}.`,
+      );
     }
   }
   return { report, violations };

@@ -107,9 +107,12 @@ export const SHORTCUT_SHEET: readonly ShortcutGroup[] = Object.freeze([
         .map((t) => ({ keys: [t.shortcut], does: t.label })),
       { keys: ["w", "a", "s", "d"], isSet: true, does: "Walk, in Walk view (the arrow keys too)" },
       { keys: [], gesture: "Click a door", does: "Open or close it" },
+      { keys: [], gesture: "Click a wall, room or piece", does: "Select it, as on the plan (from the keyboard: Properties, On the plan)" },
+      { keys: ["delete"], does: "Remove what is selected, as on the plan (Ctrl Z undoes it)" },
+      { keys: [], gesture: "View, beside the cameras", does: "Ink edges, and a cutaway at a height you set" },
       { keys: [], gesture: "Swing the doors, in the hint bar", does: "Open or close every door" },
       { keys: ["enter"], does: "While placing furniture, put it in the middle of the view" },
-      { keys: ["esc"], does: "Stop placing furniture" },
+      { keys: ["esc"], does: "Stop placing furniture, or let go of the selection" },
     ],
   },
 ]);

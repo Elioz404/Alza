@@ -110,6 +110,29 @@ export const MAX_PARTS = 64;
 export const MAX_CUSTOM_KINDS = 100;
 export const PART_SHAPES = ["box", "cylinder", "sphere"] as const;
 export type PartShape = (typeof PART_SHAPES)[number];
+/**
+ * What a custom part may be made of. Each is one of the 3D view's named surfaces (src/three/
+ * surfaces.ts), so an agent's piece gets the same wood grain, weave and metal as the built-ins;
+ * the part's colour, when it has one, tints it.
+ */
+export const PART_MATERIALS = [
+  "wood",
+  "light_wood",
+  "dark_wood",
+  "paint",
+  "lacquer",
+  "fabric",
+  "linen",
+  "leather",
+  "metal",
+  "chrome",
+  "brass",
+  "ceramic",
+  "stone",
+  "glass",
+  "plastic",
+] as const;
+export type PartMaterial = (typeof PART_MATERIALS)[number];
 export const ITEM_CATEGORIES = ["living", "bedroom", "kitchen", "bath", "office", "decor"] as const;
 export type ItemCategory = (typeof ITEM_CATEGORIES)[number];
 /** Fallback colour for a custom kind defined without one. */
@@ -157,6 +180,23 @@ export const UNDERLAY_PIXELS = range(1, UNDERLAY.maxEdgePx, "px");
 
 export const CAMERA_MODES = ["orbit", "top", "walk"] as const;
 export type CameraMode = (typeof CAMERA_MODES)[number];
+
+/**
+ * The 3D view's drawing style: ink edges on every piece (as the plan draws its linework), and a
+ * dollhouse cutaway that slices the walls at `cutHeight` above the floor and shows the cut in
+ * the plan's poché. View settings, not part of the plan: kept for the tab's session, never in
+ * the undo history.
+ */
+export interface SceneStyle {
+  edges: boolean;
+  cutaway: boolean;
+  cutHeight: number;
+}
+/** Where the cutaway may slice the walls, and the step the slider moves it by. */
+export const CUT_HEIGHT = range(0.3, 4);
+export const CUT_HEIGHT_STEP = 0.05;
+/** The model is drawn in the plan's ink from the start; the cut is the person's to make. */
+export const SCENE_STYLE_DEFAULTS: Readonly<SceneStyle> = Object.freeze({ edges: true, cutaway: false, cutHeight: 1.2 });
 
 // ---------------------------------------------------------------------------- text and ids
 

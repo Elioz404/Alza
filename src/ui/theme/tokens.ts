@@ -13,12 +13,13 @@
  *    so the strict CSP holds), inside `@layer alza-tokens`. The sheet is a module of its own so
  *    that its tables, which only the build and the tests read, stay out of the page's bundle;
  *  - script: the 2D editor and the 3D builders cannot use `var(--…)` in a WebGL material or an
- *    SVG presentation attribute, so they read `PLAN_HEX`, `FLOOR_FILL` and `MATERIAL` here.
+ *    SVG presentation attribute, so they read `PLAN_HEX` and `FLOOR_FILL` here (and the 3D view
+ *    its `MATERIAL` table in sceneTokens.ts).
  *
  * Nothing here touches the DOM; the Vite config loads it under Node.
  */
 
-import { oklch, srgb, type Swatch } from "./color";
+import { oklch } from "./color";
 import type { FloorFinish } from "../../model/limits";
 
 // ============================================================================ chrome palette
@@ -87,12 +88,6 @@ const sheet = {
   destructiveHatch: oklch(80, 0.07, 27),
 } as const;
 
-/** The 3D view's air: what the far side of the model fades into, and its loading state. */
-const scene = {
-  backdrop: srgb("#24282c"),
-  ink: oklch(94, 0.006, 85),
-} as const;
-
 // ============================================================================ dark rendering
 // A designed second sheet (graphite ground, light linework), not an inversion. The page runs
 // light; these are Studio's dark values, kept so the switch is a mode change, not a redesign.
@@ -134,7 +129,7 @@ const dark = {
 } as const;
 
 /** The palettes, for the stylesheet's tables (tokenSheet.ts); script reads the tables below. */
-export const PALETTE = Object.freeze({ chrome, accent, agent, status, sheet, scene, dark });
+export const PALETTE = Object.freeze({ chrome, accent, agent, status, sheet, dark });
 
 // ============================================================================ type
 
@@ -319,9 +314,11 @@ export const OPACITY = Object.freeze({
 
 /**
  * How much of the hover tint (--color-tint-hover) a hovered fill takes, as Astryx's own hover
- * recipe mixes it: a neutral surface a little, the accent more, so both read as one change.
+ * recipe mixes it: a neutral surface a little, the accent more, so both read as one change. And
+ * how much of the 3D view's paper a room name's chip is (labelChip): enough to read over any
+ * finish, still showing a hint of the floor beneath.
  */
-export const MIX = Object.freeze({ hoverSurface: "5%", hoverAccent: "15%" });
+export const MIX = Object.freeze({ hoverSurface: "5%", hoverAccent: "15%", labelChip: "88%" });
 
 export const Z = Object.freeze({ raised: 10, dropdown: 100, sticky: 200, drawer: 300, toast: 500, tooltip: 600 });
 
@@ -394,37 +391,9 @@ export const FLOOR_FILL: Readonly<Record<FloorFinish, string>> = Object.freeze({
   concrete: sheet.floorConcrete.hex,
 });
 
-/**
- * The 3D view's surfaces: the albedo each material is created with. The plan's 2D tints above
- * are a drawing; these are the built thing, so they are their own table.
+/*
+ * The 3D view's tokens (its air: --scene-backdrop and --scene-ink; the surfaces' albedos, the
+ * lights' colours, the furniture palette) are in src/ui/theme/sceneTokens.ts: only the lazily
+ * loaded 3D chunk reads them from script, so they are a module of their own and stay out of
+ * the page's first load. The stylesheet reads the air from there too (tokenSheet.ts).
  */
-export const MATERIAL = Object.freeze({
-  wall: srgb("#f2ede4"),
-  wallTop: srgb("#d9d2c5"),
-  glass: srgb("#bcd8e8"),
-  frame: srgb("#6b5d4f"),
-  doorLeaf: srgb("#e5ddd0"),
-  doorPanel: srgb("#d8cfc0"),
-  skirting: srgb("#fbf8f2"),
-  handle: srgb("#b9a26a"),
-  sill: srgb("#efeae0"),
-  curtain: srgb("#ded5c6"),
-  lampShade: srgb("#fdf6e6"),
-  lampGlow: srgb("#ffe9bd"),
-  pendantLight: srgb("#ffe0ae"),
-  cable: srgb("#3a3733"),
-  ground: srgb("#565b52"),
-  /** a textured floor's base colour is the texture itself */
-  untinted: srgb("#ffffff"),
-  floor: Object.freeze({
-    oak: srgb("#c39a67"),
-    tile: srgb("#dcd6cb"),
-    carpet: srgb("#a9b39e"),
-    concrete: srgb("#a5a5a0"),
-  } satisfies Record<FloorFinish, Swatch>),
-  /** the procedural floor textures' detail */
-  oakSeam: srgb("#5a3f24", 0.32),
-  oakGrain: srgb("#78583a", 0.16),
-  tileGrout: srgb("#c0bab0"),
-  backdrop: scene.backdrop,
-});

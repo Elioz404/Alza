@@ -19,6 +19,7 @@ const EXAMPLES: Record<string, string> = {
   place_item: '{ "kind": "sofa", "x": 2, "y": 2, "rotation": 0 }',
   move_item: '{ "id": "sofa", "x": 3, "y": 3 }',
   set_camera: '{ "mode": "walk" }',
+  set_3d_style: '{ "edges": true, "cutaway": true, "cutHeight": 1.2 }',
   set_plan_name: '{ "name": "My loft" }',
   measure: '{ "x1": 0, "y1": 0, "x2": 3, "y2": 4 }',
   leave_note: '{ "text": "Check the north wall measurement with the owner." }',

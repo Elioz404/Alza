@@ -11,9 +11,16 @@
  * image per kind however often that happens.
  *
  * A piece lives only for the frame that draws it: it is read back in the same task (so the
- * renderer needs no preserveDrawingBuffer) and then freed — its geometries at once, its shared
- * materials once the batch of thumbnails being drawn is done, so the pieces of one catalogue
- * render share their materials and shaders instead of compiling them per card.
+ * renderer needs no preserveDrawingBuffer) and then freed — its geometries at once (unless the
+ * 3D view is drawing the same kind: pieces of one definition share them, furniture.ts), its
+ * shared materials once the batch of thumbnails being drawn is done, so the pieces of one
+ * catalogue render share their materials and shaders instead of compiling them per card.
+ *
+ * A card shows the piece as the 3D view draws it, standing on its contact shadow, in its
+ * surfaces' finishes and tints — but plain: without their patterns, and without the plan's ink.
+ * At a card's size a weave or a grain is finer than a pixel and an ink line crosses the piece's
+ * own edge, while finding the creases, sampling the patterns and encoding the extra detail
+ * would slow the Library's first open, when every card is drawn at once.
  *
  * Loaded on demand (ui/useThumbnails.ts), with three.js, so the page's first chunk has neither.
  */
@@ -21,6 +28,7 @@
 import * as THREE from "three";
 import { buildFurniture } from "./furniture";
 import { MaterialCache, disposeObject } from "./materials";
+import { TONE_MAPPING, contactShadow } from "./surfaces";
 import { RENDERER, THUMBNAIL, THUMBNAIL_SIZE } from "./config";
 import type { KindDef } from "../model/types";
 
@@ -37,7 +45,7 @@ function init(): boolean {
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, RENDERER.maxPixelRatio));
     renderer.setSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMapping = TONE_MAPPING[RENDERER.toneMapping];
     renderer.toneMappingExposure = THUMBNAIL.toneMappingExposure;
 
     scene = new THREE.Scene();
@@ -75,12 +83,14 @@ export function thumbnailFor(def: KindDef): string | null {
   if (hit?.definition === definition) return hit.url;
   if (!init() || !renderer || !scene || !camera) return null;
 
-  const piece = buildFurniture(def, materials);
+  const piece = buildFurniture(def, materials, { patterns: false });
+  // frame the piece itself: three-quarter view, fitted to its bounding sphere
+  const box = new THREE.Box3().setFromObject(piece);
+  // drawn as the 3D view draws it (planScene.ts): standing on its contact shadow (a rug lies flat)
+  if (!def.isRug) piece.add(contactShadow(def.w, def.d));
   materials.retain(piece);
   scene.add(piece);
 
-  // frame the piece: three-quarter view, fitted to its bounding sphere
-  const box = new THREE.Box3().setFromObject(piece);
   const centre = box.getCenter(new THREE.Vector3());
   const { minRadius, margin, direction } = THUMBNAIL.camera;
   const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, minRadius);

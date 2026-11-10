@@ -4,11 +4,14 @@
  * Three kinds of material and texture exist in the 3D view:
  *  - STATIC ones, made once by a module (the wall plaster, the glass, a floor finish's canvas).
  *    Every build shares them and none of them is ever disposed with an object.
- *  - CACHED ones, handed out by a MaterialCache by surface (colour, roughness, metalness). Two
- *    pieces of oak furniture share one material instead of each making its own. The cache
- *    counts the objects holding each one and disposes it when the last of them is released.
- *  - OWNED ones: anything else an object was built with (a room's floor material and the
- *    texture repeat it clones). They go with the object.
+ *  - CACHED ones, handed out by a MaterialCache by key — a named surface in a tint
+ *    (surfaces.ts). Two pieces of oak furniture, or two oak floors, share one material instead
+ *    of each making its own. The cache counts the objects holding each one and disposes it when
+ *    the last of them is released.
+ *  - OWNED ones: anything else an object was built with (a piece built without a cache).
+ *    They go with the object.
+ *
+ * Textures are the procedural patterns (surfaces.ts): static, one per pattern, shared by all.
  *
  * disposeObject() frees an object's geometries and the materials and textures it owns, so a
  * piece removed from the scene leaves nothing behind on the GPU.
@@ -45,31 +48,31 @@ export function texturesOf(material: THREE.Material): Set<THREE.Texture> {
 }
 
 interface CacheEntry {
-  readonly material: THREE.MeshStandardMaterial;
+  readonly material: THREE.Material;
   /** how many retained objects draw with it */
   refs: number;
 }
 
 /**
- * Materials shared by surface. get() hands out the one material for a surface, creating it on
- * first ask. An object that keeps cached materials is retain()ed once when it joins the scene
- * and release()d once when it leaves; sweep() then disposes every material no retained object
- * holds any more. Counting per object, not per get(), is what keeps the count right however
+ * Materials shared by key. obtain() hands out the one material for a key, creating it on first
+ * ask. An object that keeps cached materials is retain()ed once when it joins the scene and
+ * release()d once when it leaves; sweep() then disposes every material no retained object
+ * holds any more. Counting per object, not per obtain(), is what keeps the count right however
  * many meshes of the piece share one material and however many times its builder asked.
  */
 export class MaterialCache {
   private readonly entries = new Map<string, CacheEntry>();
   private readonly owners = new Map<THREE.Material, CacheEntry>();
 
-  get(color: string, roughness: number, metalness = 0): THREE.MeshStandardMaterial {
-    const key = `${color.toLowerCase()}|${roughness}|${metalness}`;
+  /** The material for `key`, made by `create` the first time it is asked for. */
+  obtain<M extends THREE.Material>(key: string, create: () => M): M {
     let entry = this.entries.get(key);
     if (!entry) {
-      entry = { material: new THREE.MeshStandardMaterial({ color, roughness, metalness }), refs: 0 };
+      entry = { material: create(), refs: 0 };
       this.entries.set(key, entry);
       this.owners.set(entry.material, entry);
     }
-    return entry.material;
+    return entry.material as M;
   }
 
   owns(material: THREE.Material): boolean {

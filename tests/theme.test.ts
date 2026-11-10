@@ -6,7 +6,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { contrast, oklch, oklchToHex, srgb } from "../src/ui/theme/color";
-import { BREAKPOINT, FLOOR_FILL, MATERIAL, PLAN_HEX, THEME, mediaQuery } from "../src/ui/theme/tokens";
+import { BREAKPOINT, FLOOR_FILL, PLAN_HEX, THEME, mediaQuery } from "../src/ui/theme/tokens";
+import { MATERIAL, SCENE_MARK } from "../src/ui/theme/sceneTokens";
 import { DARK_TOKENS, LIGHT_TOKENS, renderTokenCss } from "../src/ui/theme/tokenSheet";
 import { FLOOR_FINISHES } from "../src/model/limits";
 import indexHtml from "../index.html?raw";
@@ -107,6 +108,15 @@ describe("script reads the same values as the stylesheet", () => {
     expect(FLOOR_FILL.oak).toBe(hexOf("--plan-floor-oak"));
     expect(FLOOR_FILL.concrete).toBe(hexOf("--plan-floor-concrete"));
     expect(MATERIAL.backdrop.hex).toBe(hexOf("--scene-backdrop"));
+  });
+
+  it("the 3D view's marks are the plan's own colours: ink, poché, selection, removal", () => {
+    expect(SCENE_MARK.ink.hex).toBe(hexOf("--plan-ink"));
+    expect(SCENE_MARK.poche.hex).toBe(PLAN_HEX.ink);
+    expect(SCENE_MARK.selection.hex).toBe(PLAN_HEX.selection);
+    expect(SCENE_MARK.selection.hex).toBe(hexOf("--color-accent"));
+    expect(SCENE_MARK.destructive.hex).toBe(hexOf("--color-error"));
+    expect(SCENE_MARK.destructiveHatch.hex).toBe(PLAN_HEX.destructiveHatch);
   });
 
   it("every floor finish has a plan fill and a 3D albedo", () => {

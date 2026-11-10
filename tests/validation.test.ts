@@ -57,6 +57,7 @@ const CONTRACT: Record<string, [Record<string, string>, string[]]> = {
   clear_model: [{}, []],
   build_3d: [{}, []],
   set_camera: [{ mode: S }, ["mode"]],
+  set_3d_style: [{ edges: B, cutaway: B, cutHeight: N }, []],
   set_doors: [{ state: S, id: S }, ["state"]],
   get_supplier_catalog: [{ category: S, maxPrice: N, maxWidth: N, inStock: B }, []],
   place_supplier_product: [{ sku: S, x: N, y: N, rotation: N }, ["sku", "x", "y"]],

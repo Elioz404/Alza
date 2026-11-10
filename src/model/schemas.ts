@@ -25,6 +25,7 @@ import {
   OPENING_T,
   OPENING_WIDTH,
   PART_OFFSET,
+  PART_MATERIALS,
   PART_SHAPES,
   ROOM_SIZE,
   ROTATION,
@@ -92,6 +93,7 @@ export const partSpec = z.strictObject({
   h: furnitureDim.optional(),
   d: furnitureDim.optional(),
   color: hexColor.optional(),
+  material: z.enum(PART_MATERIALS).optional(),
   rotation: rotation.optional(),
 });
 export const partList = z.array(partSpec).max(MAX_PARTS);

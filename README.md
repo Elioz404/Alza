@@ -76,13 +76,13 @@ More stills in [`shots/showcase/`](shots/showcase/).
 1. Open the live app (link at the top of this repo).
 2. **In ChatGPT desktop:** open the URL in the in-app browser. WebMCP works out of the box.
    **In Google Chrome 149+:** enable `chrome://flags/#enable-webmcp-testing` and restart.
-   The agent status in the top bar turns green: **Agent tools on** (31 tools registered).
+   The agent status in the top bar turns green: **Agent tools on** (32 tools registered).
 3. Ask your agent, for example:
    - *"Add a 3 × 2.5 m study next to the bedroom, with a door and a window."*
    - *"The sofa placement feels off. Check the plan and fix any issues."*
    - *"Build the 3D and give me a walkthrough."*
 4. No WebMCP runtime? The app is still complete. Open **Activity → Developer tools** in the side
-   panel and run the exact same 32 tools manually; every call is logged in Activity.
+   panel and run the exact same 33 tools manually; every call is logged in Activity.
 
 ## Trace your own plan with the agent
 
@@ -115,7 +115,7 @@ document.modelContext.registerTool({
 });
 ```
 
-## The 31 tools (+ 1 dynamic)
+## The 32 tools (+ 1 dynamic)
 
 | Group | Tools |
 |---|---|
@@ -125,7 +125,7 @@ document.modelContext.registerTool({
 | **Openings** | `add_door` · `add_window` · `move_opening` · `remove_opening` · `set_door_swing` (hinge side + swing direction) |
 | **Rooms** | `add_room` · `update_room` · `remove_room` |
 | **Furniture** | `place_item` · `move_item` · `remove_item` · `define_item_kind`, model a piece the catalogue lacks, from primitives |
-| **Model & view** | `set_plan_name` · `clear_model` · `build_3d` · `set_camera` (orbit/top/walk) · `set_doors` (swing the leaves open/shut) |
+| **Model & view** | `set_plan_name` · `clear_model` · `build_3d` · `set_camera` (orbit/top/walk) · `set_3d_style` (ink edges, dollhouse cutaway at a height) · `set_doors` (swing the leaves open/shut) |
 | **Cross-origin** | `get_supplier_catalog` · `place_supplier_product`, read a **partner origin's** own WebMCP tools and drop its real products into the plan |
 | **Collaboration** | `leave_note` · `get_notes` |
 | **Dynamic** | `extend_selected_wall`, published **only while the human has a wall selected** (registered/unregistered live, per the spec's `toolchange` cycle). The human points, the agent acts on exactly that wall. |
@@ -206,7 +206,7 @@ regression test.
 ```
 src/
   model/    types.ts · geometry.ts (snap, SAT, segment math) · issues.ts (checker rules)
-            catalog.ts (31 built-in kinds + the plan's own kinds) · resolve.ts (id/name lookup)
+            catalog.ts (32 built-in kinds + the plan's own kinds) · resolve.ts (id/name lookup)
             store.ts (shared actions, undo, activity) · commands.ts (dispatch: the one change path)
             assets.ts (underlay images, kept while the plan or its undo history names them)
             sceneBus.ts · seed.ts · provenance.ts (what each change touched; its revision number)
@@ -218,12 +218,21 @@ src/
             drawing.ts · symbols.tsx
   three/    (loaded on demand: the 2D editor's first chunk has no three.js)
             build.ts (extrusion with real openings, resolved joints, floors)
-            furniture.ts (composite pieces + generic builder for imported products)
+            furniture.ts (every built-in kind modelled to its catalogue box from soft cushions, turned
+            and lathed parts and cut plates, baked to one mesh per surface and shared per kind;
+            agent parts on the same surfaces; a tidy block-out for imported products)
+            furnitureShapes.ts (soft and chamfered boxes, lathes, plates, merge) · furnitureStyle.ts
             planScene.ts (per-entity reconciliation of the plan) · materials.ts (shared materials, disposal)
+            surfaces.ts (named surfaces from the tokens; procedural wood, weave, plank and tile
+            patterns at plan scale; contact shadows)
             viewport.ts (one renderer per mount: orbit/top/walk + WASD, click-to-place, OBJ/PNG export)
-            frames.ts (render on demand) · walk.ts (collision) · Scene3D.tsx · thumbnails.ts · config.ts
-            overlays/ (the camera switch, hint bar, and the loading and failure states)
-  mcp/      registry.ts (registration + uniform logging) · tools.ts (31 + 1 dynamic)
+            frames.ts (render on demand) · walk.ts (collision, where Walk sets you down) · Scene3D.tsx
+            transitions.ts (eased camera moves; instant under reduced motion) · marks.ts (the
+            selection and pending removals drawn on the model) · labels.ts (room names over the
+            model) · edges.ts (ink edges) · screenLines.ts (marks a set width on screen)
+            cutaway.ts (dollhouse cut, poché) · thumbnails.ts · config.ts
+            overlays/ (the camera switch, View settings, hint bar, and the loading and failure states)
+  mcp/      registry.ts (registration + uniform logging) · tools.ts (32 + 1 dynamic)
             bootstrap.ts (runtime detection, dynamic tool lifecycle, toolchange)
   ui/       App · theme/ (design tokens, Astryx theme, fonts) · primitives/ (buttons, fields, icons)
             shell/ (top bar, tool rail, canvas, side panel: Properties/Library/Issues/Notes + Activity)
@@ -234,18 +243,23 @@ src/
             useThumbnails
 tests/      domain: geometry, checker (incl. seed = 0 issues regression), rules, catalog,
             resolve, store, invariants, commands (dispatch, gestures, undo), assets, checkerCost
-            3D: planScene (reconciliation, GPU memory), frames, scene3d, thumbnails · editorKeys
+            3D: planScene (reconciliation, GPU memory), surfaces, furniture (fit, budgets, shared
+            geometry), scene3dIntegration (furniture inked, picked and outlined in the scene),
+            sceneStyle (selection, marks,
+            cutaway, edges, names, camera moves), frames, scene3d, thumbnails · editorKeys
             agent surface: tools, validation, approval gate, trust, untrusted partner text,
             supplier, transport, discovery, underlay · page: derived (what the UI reads off the tools),
             theme, shell, panels, canvas, provenance, activityApprovals, firstRun, lazyView,
             deferred (what loads after the first paint)
             build and config: layering, config, sites, headers, production, serve-local, purge,
-            budgets (each site's first-load size)
+            budgets (each site's first-load size, and the 3D view's lazy chunks)
 scripts/
   e2e-full.mjs  Playwright: drives the real app in Chromium with --enable-features=WebMCP,
               by mouse and keyboard: drawing, selection from "On the plan", shortcuts, every
-              tool, the approval card (buttons, Ctrl+Enter, Esc), the drawer and bottom-sheet
-              layouts; asserts zero console errors — 115 checks (2 skip on Chrome builds
+              tool, the approval card (buttons, Ctrl+Enter, Esc), the 3D view (camera modes,
+              the cutaway's slider, a wall selected by a click on the model, a pending removal
+              hatched on it), the drawer and bottom-sheet layouts; asserts zero console
+              errors — 123 checks (2 skip on Chrome builds
               without navigator.modelContextTesting, 3 when the partner origin does not
               answer; with either one there, a failure is a FAIL, never a skip)
   trace.mjs   the demo plan as data: walls, openings, rooms, furniture, and the kinds the
@@ -274,8 +288,8 @@ full Chromium or Chrome.
 ALZA_CHROMIUM_PATH=/path/to/chrome npm run e2e
 ```
 
-Stack: Vite 7 · React 19 · TypeScript (strict) · zustand · Three.js (ACES tone mapping,
-PCF soft shadows) · SVG 2D · Astryx (dialogs, menus, popovers, toasts, number inputs) ·
+Stack: Vite 7 · React 19 · TypeScript (strict) · zustand · Three.js (neutral tone mapping,
+PCF soft shadows, baked contact shading, no post-processing) · SVG 2D · Astryx (dialogs, menus, popovers, toasts, number inputs) ·
 native tabs, segmented controls, switches and tooltips on the same tokens · vitest ·
 Playwright. Deploys as a fully static site.
 
@@ -302,7 +316,10 @@ theme and tokens: its component rules, with the keyframes and registered propert
 they use (about 113 KB, 18 KB gzip), are a stylesheet of their own that Vite links when the
 first chunk needing it is fetched, with each rule in an ordered sub-layer so the cascade is exactly what it was (`config/purgeAtomicCss.js`). It also
 fails when a site's first load goes over its budget in `config/budgets.js`: what the site
-shipped, plus 2% (script and stylesheet, minified and gzip).
+shipped, plus 2% (script and stylesheet, minified and gzip). The 3D view's lazy chunks have
+budgets of their own, set the same way: three.js (518 KB, 130 KB gzip) and the studio's own
+3D code, the view, the scene, the furniture and the thumbnails, whatever chunks they are split
+into (110 KB, 42 KB gzip).
 
 ## What building this taught me about the spec
 
@@ -364,7 +381,7 @@ npm run typecheck  # tsc -b over the app, the tests and vite.config.ts
 npm run lint       # ESLint (typescript-eslint + react-hooks)
 npm test           # unit tests (vitest, happy-dom)
 npm run build      # production build — dist/studio and dist/partner, one directory per host
-npm run e2e        # 115-check Playwright battery (run both servers first)
+npm run e2e        # 125-check Playwright battery (run both servers first)
 npm run build:local  # production build aimed at the two local origins below, into dist-local/
 npm run serve:local  # serve dist-local/ on two origins with the production headers
 npm run shots      # rebuild the screenshot gallery (against the dev servers, or serve:local

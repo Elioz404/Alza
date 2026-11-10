@@ -47,6 +47,7 @@ const BUILT_IN_ROWS: readonly BuiltInRow[] = [
   { kind: "sink", label: "Washbasin", w: 0.55, d: 0.42, h: 0.85, color: "#e7ebee", category: "bath" },
   { kind: "towel_rail", label: "Towel rail", w: 0.6, d: 0.12, h: 1.1, color: "#c8ccd0", category: "bath" },
   { kind: "plant", label: "Plant", w: 0.4, d: 0.4, h: 1.1, color: "#5d8a54", category: "decor" },
+  { kind: "floor_lamp", label: "Floor lamp", w: 0.45, d: 0.45, h: 1.6, color: "#d8cdb8", category: "decor" },
 ];
 
 /** The kinds the app ships with. Frozen: no caller can add to it or edit a row in place. */

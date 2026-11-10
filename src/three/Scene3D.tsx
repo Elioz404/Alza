@@ -1,8 +1,9 @@
 /**
  * Scene3D — the "alzado". The React side of the 3D view: it mounts one viewport (viewport.ts)
- * for as long as the view is on screen and feeds it the plan and the camera mode, and floats
- * the view's own chrome over it (overlays/SceneOverlays.tsx: the camera switch and the hint
- * bar). Export lives in the top bar's Export menu, which reaches the viewport over the bus.
+ * for as long as the view is on screen and feeds it the plan, the camera mode, the drawing
+ * style, the selection and the pending requests; it holds the layer the room names are set in
+ * (labels.ts), and floats the view's own chrome over it (overlays/SceneOverlays.tsx: the camera
+ * switch, the View settings and the hint bar). Export lives in the top bar's Export menu, which reaches the viewport over the bus.
  *
  * The viewport is created in a mount-only effect, so a change to the plan never creates a
  * renderer or a WebGL context. Changes reach it through a store subscription, outside React's
@@ -17,25 +18,48 @@
  */
 
 import { useEffect, useRef } from "react";
-import { pageActions, store } from "../model/store";
+import { pageActions, store, type EditorState } from "../model/store";
 import { isInsideOverlay, isTypingTarget } from "../ui/keys";
 import { placeInMiddle } from "../editor/canvasState";
+import { deselectAll, handleSelectionKey } from "../editor/selectionKeys";
 import { createViewport } from "./viewport";
+import type { Selected } from "./marks";
 import { SceneOverlays } from "./overlays/SceneOverlays";
 import { SceneErrorBoundary } from "./overlays/SceneStates";
 
+/** The store's selection, as the 3D view outlines it. */
+function selectedOf(editor: EditorState): Selected | null {
+  if (editor.selectedWallId) return { type: "wall", id: editor.selectedWallId };
+  if (editor.selectedRoomId) return { type: "room", id: editor.selectedRoomId };
+  if (editor.selectedItemId) return { type: "item", id: editor.selectedItemId };
+  return null;
+}
+
 function SceneView() {
   const mountRef = useRef<HTMLDivElement>(null);
+  const labelsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
-    const { model, editor } = store.getState();
+    const { model, editor, approvals } = store.getState();
     // throws when the browser cannot give the page a WebGL context; SceneErrorBoundary says so
-    const viewport = createViewport(mount, model, editor.camera);
+    const viewport = createViewport(mount, model, editor.camera, {
+      labels: labelsRef.current,
+      style: editor.scene,
+      selected: selectedOf(editor),
+      approvals,
+    });
     const unsubscribe = store.subscribe((s, prev) => {
       if (s.model !== prev.model) viewport.setModel(s.model);
       if (s.editor.camera !== prev.editor.camera) viewport.setCamera(s.editor.camera);
+      if (s.editor.scene !== prev.editor.scene) viewport.setStyle(s.editor.scene);
+      if (s.approvals !== prev.approvals) viewport.setPending(s.approvals);
+      const e = s.editor;
+      const p = prev.editor;
+      if (e.selectedWallId !== p.selectedWallId || e.selectedRoomId !== p.selectedRoomId || e.selectedItemId !== p.selectedItemId || s.model !== prev.model) {
+        viewport.setSelection(selectedOf(e));
+      }
     });
     return () => {
       unsubscribe();
@@ -43,23 +67,29 @@ function SceneView() {
     };
   }, []);
 
-  // While a piece is being placed, Esc stops and Enter puts it down in the middle of the view,
-  // as on the plan (the 2D editor is not mounted while the 3D view is, so it cannot hear the
-  // keys). Neither acts on a key typed into a field, pressed on a control of its own, or
-  // pressed inside a dialog, a menu or a popover.
+  // The plan's keys, here too (the 2D editor is not mounted while the 3D view is, so it cannot
+  // hear them): Delete removes what a click on the model selected and Ctrl/Cmd+Z undoes, as on
+  // the plan (src/editor/selectionKeys.ts); while a piece is being placed, Esc stops and Enter
+  // puts it down in the middle of the view, and otherwise Esc lets go of the selection. None
+  // acts on a key typed into a field or pressed inside a dialog, a menu or a popover, nor on one
+  // something else already answered (the View panel's Escape); Enter not on a control either.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key !== "Escape" && e.key !== "Enter") || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (isTypingTarget(e.target) || isInsideOverlay(e.target)) return;
-      if (store.getState().editor.drawMode !== "place") return;
+      if (e.defaultPrevented || isTypingTarget(e.target) || isInsideOverlay(e.target)) return;
+      if (handleSelectionKey(e)) return;
+      if ((e.key !== "Escape" && e.key !== "Enter") || e.ctrlKey || e.metaKey || e.altKey) return;
+      const placing = store.getState().editor.drawMode === "place";
       if (e.key === "Enter") {
-        if (e.target instanceof Element && e.target.closest("button, a[href], [role]")) return;
+        if (!placing || (e.target instanceof Element && e.target.closest("button, a[href], [role]"))) return;
         e.preventDefault();
         placeInMiddle();
         return;
       }
+      const { selectedWallId, selectedRoomId, selectedItemId } = store.getState().editor;
+      if (!placing && !selectedWallId && !selectedRoomId && !selectedItemId) return;
       e.preventDefault();
-      pageActions.setDrawMode("select");
+      if (placing) pageActions.setDrawMode("select");
+      else deselectAll();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -68,6 +98,8 @@ function SceneView() {
   return (
     <div className="scene3d-wrap">
       <div ref={mountRef} className="scene3d" />
+      {/* the room names, placed over the model by the viewport (labels.ts); aria-hidden there */}
+      <div ref={labelsRef} className="scene-labels" />
       <SceneOverlays />
     </div>
   );

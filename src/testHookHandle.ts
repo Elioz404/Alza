@@ -22,4 +22,12 @@ export const testHookHandle = () => ({
   releaseImage: (assetId: string) => releaseHeldAsset(assetId),
   /** What the mounted 3D view holds on the GPU and how often it has drawn, or null when none is mounted. */
   sceneStats: () => sceneProbe.read?.() ?? null,
+  /** Where a wall, room or piece shows on the 3D canvas (CSS pixels from its corner), or null. */
+  sceneLocate: (type: "wall" | "room" | "item", id: string) => sceneProbe.locate?.(type, id) ?? null,
+  /** Put the 3D camera at `position` looking at `target`, as a drag would; false when no view is mounted. */
+  sceneLook: (position: [number, number, number], target: [number, number, number]) => {
+    if (!sceneProbe.look) return false;
+    sceneProbe.look(position, target);
+    return true;
+  },
 });

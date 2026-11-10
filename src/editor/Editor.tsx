@@ -27,6 +27,7 @@ import { agentMarks, provenance } from "../model/provenance";
 import { useGesture } from "../ui/useGesture";
 import { bus, EVENTS } from "../model/sceneBus";
 import { isInsideOverlay, isTypingTarget } from "../ui/keys";
+import { deselectAll, handleSelectionKey } from "./selectionKeys";
 import { DEFAULT_FLOOR, DOOR_DEFAULTS, DOUBLE_DOOR_CLEAR, ROOM_SIZE, SNAP, WALL_DEFAULTS, WALL_MIN_LENGTH, WINDOW_DEFAULTS } from "../model/limits";
 import {
   activeTool,
@@ -124,12 +125,6 @@ const placeInView = (): boolean => {
   return placeHeldPieceAt(c.x, c.y);
 };
 
-const deselectAll = () => {
-  pageActions.selectWall(null);
-  pageActions.selectItem(null);
-  pageActions.selectRoom(null);
-};
-
 export function Editor() {
   const model = useAppStore((s) => s.model);
   const editor = useAppStore((s) => s.editor);
@@ -187,7 +182,6 @@ export function Editor() {
   // (or while a modal dialog is open), and one something else already answered: an Escape that
   // closed a tooltip or kept a pending request is not also "back to Select".
   useEffect(() => {
-    const human = { actor: "human" } as const;
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || isTypingTarget(e.target) || isInsideOverlay(e.target)) return;
       const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
@@ -200,25 +194,8 @@ export function Editor() {
         setRoomStart(null);
         return;
       }
-      if (e.key === "Delete" || e.key === "Backspace") {
-        const { selectedWallId, selectedItemId, selectedRoomId } = store.getState().editor;
-        if (selectedWallId) {
-          dispatch({ type: "remove_wall", id: selectedWallId }, human);
-          pageActions.selectWall(null);
-        } else if (selectedItemId) {
-          dispatch({ type: "remove_item", id: selectedItemId }, human);
-          pageActions.selectItem(null);
-        } else if (selectedRoomId) {
-          dispatch({ type: "remove_room", id: selectedRoomId }, human);
-          pageActions.selectRoom(null);
-        }
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
-        e.preventDefault();
-        dispatch({ type: "undo" }, human);
-        return;
-      }
+      // Delete removes the selection, Ctrl/Cmd+Z undoes: the same keys as in the 3D view
+      if (handleSelectionKey(e)) return;
       if (!plain) return;
       if (e.key === "Enter" && !isControlTarget(e.target) && store.getState().editor.drawMode === "place") {
         // the keyboard's click: the piece goes in the middle of the view, selected for nudging

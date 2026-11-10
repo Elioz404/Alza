@@ -1,0 +1,95 @@
+/*
+ * The 3D view's own settings and lettering, which only the mounted view draws (so they load with
+ * its chunk, not with the page): the View settings' panel beside the camera switch, and the room
+ * names set over the model (labels.ts places them through --label-x and --label-y). Tokens only;
+ * the names are the plan's lettering on a chip of the scene's paper.
+ *
+ * The panel hangs from the toolbar (.scene-overlays__toolbar, positioned), not from its own
+ * button: anchored at the toolbar's left edge it stays inside the view at any width, a phone's
+ * included, however far along the toolbar the button sits.
+ */
+@layer alza-surfaces {
+  /* ---------------------------------------------------------------- the View settings */
+  .scene-view__toggle {
+    background: var(--color-background-card);
+    border-radius: var(--radius-container);
+    box-shadow: var(--shadow-med);
+  }
+  .scene-view__panel {
+    position: absolute;
+    top: calc(100% + var(--spacing-2));
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+    width: calc(var(--size-panel) - var(--spacing-12));
+    max-width: calc(100vw - 2 * var(--spacing-3));
+    padding: var(--spacing-3) var(--spacing-4);
+  }
+  .scene-view__cut {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: var(--spacing-1) var(--spacing-2);
+  }
+  .scene-view__label {
+    color: var(--color-text-secondary);
+    font-size: var(--text-label-size);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--text-label-leading);
+  }
+  .scene-view__value {
+    color: var(--color-text-primary);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-sm);
+    font-variant-numeric: tabular-nums;
+  }
+  .scene-view__slider {
+    grid-column: 1 / -1;
+    width: 100%;
+    height: var(--size-control-sm);
+    margin: 0;
+    accent-color: var(--color-accent);
+    cursor: pointer;
+  }
+  .scene-view__slider:disabled { cursor: default; opacity: var(--opacity-quiet); }
+  /* a finger's target: the range as tall as --size-hit, as the switches beside it are */
+  @media (pointer: coarse), (max-width: 40rem) {
+    .scene-view__slider { height: max(var(--size-control-sm), var(--size-hit)); }
+  }
+
+  /* ---------------------------------------------------------------- room names over the model */
+  /* placed by the viewport (labels.ts) through --label-x and --label-y, in canvas pixels */
+  .scene-labels {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .scene-label {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    translate: calc(var(--label-x) - 50%) calc(var(--label-y) - 50%);
+    padding: var(--spacing-0-5) var(--spacing-1-5);
+    border-radius: var(--radius-inner);
+    /* a chip of the scene's paper, so a name reads over any floor, piece or cord */
+    background: color-mix(in srgb, var(--scene-backdrop) var(--mix-label-chip), transparent);
+    color: var(--plan-label);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--text-tight-leading);
+    white-space: nowrap;
+  }
+  .scene-label[hidden] { display: none; }
+  .scene-label--selected { color: var(--plan-selection); }
+  .scene-label__flag {
+    color: var(--color-text-error);
+    font-size: var(--font-size-sm);
+  }
+  .scene-label__flag[hidden] { display: none; }
+}

@@ -1,7 +1,8 @@
 /**
  * The 3D view's own chrome, floating over the scene: the camera switch (Orbit, Top view, Walk)
- * at the top left, and one hint bar at the bottom centre that says what the pointer and the
- * keys do in the current camera, or how to finish placing a piece of furniture.
+ * at the top left with the View settings beside it (ink edges, the cutaway and its height), and
+ * one hint bar at the bottom centre that says what the pointer and the keys do in the current
+ * camera, or how to finish placing a piece of furniture.
  *
  * The camera switch and the rail's 3D tools are the same three tools (RAIL_TOOLS in
  * src/ui/shell/tools.ts): one label, hint and shortcut each, read from there. Export stays in
@@ -11,16 +12,18 @@
  * boolean), so an agent's run of edits does not re-render the scene's chrome.
  */
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { pageActions } from "../../model/store";
-import { CAMERA_MODES, type CameraMode } from "../../model/limits";
+import { CAMERA_MODES, CUT_HEIGHT, CUT_HEIGHT_STEP, type CameraMode } from "../../model/limits";
 import { catalogOf } from "../../model/catalog";
 import { runToolManually } from "../../mcp/tools";
 import { useAppStore } from "../../ui/useAppStore";
-import { Button, Kbd, SegmentedControl, SegmentedControlItem, Tip } from "../../ui/primitives";
+import { Button, IconButton, IconEye, Kbd, SegmentedControl, SegmentedControlItem, Switch, Tip } from "../../ui/primitives";
 import { toolsFor, type RailTool } from "../../ui/shell/tools";
+import { DESELECT, REMOVE, selectionTitle, type HintPart } from "../../ui/canvas/hints";
 import { useBreakpoint } from "../../ui/theme/media";
 import "./overlays.css";
+import "./view.css";
 
 /** The rail's camera tools, in rail order: Orbit 1, Top view 2, Walk 3. */
 const CAMERA_TOOLS: readonly RailTool[] = toolsFor("3d").filter((t) => (CAMERA_MODES as readonly string[]).includes(t.id));
@@ -51,6 +54,100 @@ export function CameraToolbar() {
   );
 }
 
+/** Metres as the plan writes a height. */
+const metres = (m: number) => `${m.toFixed(2)} m`;
+
+/**
+ * The View settings: a button that shows and hides a small panel of the 3D view's drawing style
+ * (the store's editor.scene, the same settings set_3d_style changes). A disclosure, not a menu:
+ * its controls are a switch, a switch and a slider, each with its own keys, and Escape or a
+ * press outside closes it, focus back on the button.
+ */
+export function ViewSettings() {
+  const scene = useAppStore((s) => s.editor.scene);
+  const walking = useAppStore((s) => s.editor.camera === "walk");
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  const sliderId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [open]);
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || !open) return;
+    // the panel's Escape: nothing else on the page answers it (a request card's Keep included)
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(false);
+    buttonRef.current?.focus();
+  };
+
+  return (
+    <div ref={rootRef} className="scene-view" onKeyDown={onKeyDown}>
+      <IconButton
+        ref={buttonRef}
+        icon={IconEye}
+        label="View"
+        hint="Ink edges and a cutaway"
+        variant="ghost"
+        className="scene-view__toggle"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen((v) => !v)}
+      />
+      {open ? (
+        <div id={panelId} role="group" aria-label="View" className="scene-float scene-view__panel">
+          <Switch
+            label="Ink edges"
+            description="Line every edge, as the plan does"
+            labelPosition="start"
+            labelSpacing="spread"
+            value={scene.edges}
+            onChange={(on) => pageActions.setSceneStyle({ edges: on })}
+          />
+          <Switch
+            label="Cutaway"
+            description={walking ? "Lifted while you walk" : "Slice the walls to look in"}
+            labelPosition="start"
+            labelSpacing="spread"
+            value={scene.cutaway}
+            onChange={(on) => pageActions.setSceneStyle({ cutaway: on })}
+          />
+          <div className="scene-view__cut">
+            <label htmlFor={sliderId} className="scene-view__label">
+              Cut height
+            </label>
+            {/* the slider says its value itself (aria-valuetext): this is its readout for the eye */}
+            <span className="scene-view__value" aria-hidden="true">
+              {metres(scene.cutHeight)}
+            </span>
+            <input
+              id={sliderId}
+              type="range"
+              className="scene-view__slider"
+              min={CUT_HEIGHT.min}
+              max={CUT_HEIGHT.max}
+              step={CUT_HEIGHT_STEP}
+              value={scene.cutHeight}
+              disabled={!scene.cutaway}
+              aria-valuetext={`${scene.cutHeight.toFixed(2)} metres`}
+              onChange={(e) => pageActions.setSceneStyle({ cutHeight: Number(e.target.value) })}
+            />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** One segment of the hint bar: Kbd chips and the words that go with them. */
 function Item({ keys, children }: { keys?: readonly string[]; children: ReactNode }) {
   return (
@@ -77,7 +174,15 @@ function cameraItems(camera: CameraMode, hasDoors: boolean): ReactNode[] {
     items.push(<Item key="orbit">Drag to orbit</Item>, <Item key="zoom">Scroll to zoom</Item>);
   }
   if (hasDoors) items.push(<Item key="door">Click a door to open or close it</Item>);
+  items.push(<Item key="select">Click a wall, room or piece to select it</Item>);
   return items;
+}
+
+/** A hint segment of words and keys (hints.ts), as an Item. */
+function PartsItem({ parts }: { parts: readonly HintPart[] }) {
+  const keys = parts.flatMap((p) => (typeof p === "string" ? [] : [p.kbd]));
+  const words = parts.flatMap((p) => (typeof p === "string" ? [p] : [])).join(" ");
+  return <Item keys={keys}>{words}</Item>;
 }
 
 /** Segments with a hairline between each, never a dot-joined string. */
@@ -91,13 +196,17 @@ function Segments({ items }: { items: ReactNode[] }) {
 }
 
 /**
- * The hint at the bottom of the scene. While a piece is being placed it says how to put it
- * down (a click, or Enter for the middle of the view) and how to stop (Esc, or Cancel);
- * otherwise it teaches the camera, and with doors in the plan offers to swing them all.
+ * The hint at the bottom of the scene, a polite status. While a piece is being placed it says
+ * how to put it down (a click, or Enter for the middle of the view) and how to stop (Esc, or
+ * Cancel); with something selected (a click on the model selects as the plan does) it names it,
+ * as the plan's hint does, so the selection is announced, with its keys; otherwise it teaches
+ * the camera, and with doors in the plan offers to swing them all.
  */
 export function SceneHint() {
   const camera = useAppStore((s) => s.editor.camera);
   const hasDoors = useAppStore((s) => s.model.openings.some((o) => o.kind === "door"));
+  // a string, so an edit that leaves the selection alone does not re-render the hint
+  const selected = useAppStore((s) => selectionTitle(s.editor, s.model));
   // a string, so a plan change that leaves it alone does not re-render the hint
   const placing = useAppStore((s) => {
     const kind = s.editor.drawMode === "place" ? s.editor.placingKind : null;
@@ -126,11 +235,13 @@ export function SceneHint() {
       </div>
     );
   }
+  const items = cameraItems(camera, hasDoors);
+  if (selected) items.unshift(<PartsItem key="remove" parts={REMOVE} />, <PartsItem key="deselect" parts={DESELECT} />);
   return (
     <div className="scene-float scene-hint" role="status">
-      <span className="scene-hint__tool">{tool?.label ?? camera}</span>
+      <span className="scene-hint__tool">{selected ?? tool?.label ?? camera}</span>
       <span className="scene-hint__sep" aria-hidden="true" />
-      <Segments items={cameraItems(camera, hasDoors)} />
+      <Segments items={items} />
       {hasDoors ? (
         // the same set_doors call a click on a leaf makes, for every door, from the keyboard too
         <Button size="sm" variant="ghost" className="scene-hint__action" onClick={() => void runToolManually("set_doors", { state: "toggle" })}>
@@ -147,6 +258,7 @@ export function SceneOverlays() {
     <div className="scene-overlays">
       <div className="scene-overlays__toolbar">
         <CameraToolbar />
+        <ViewSettings />
       </div>
       <div className="scene-overlays__hint">
         <SceneHint />

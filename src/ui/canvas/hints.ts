@@ -33,8 +33,25 @@ const centimetres = (m: number): string => `${Math.round(m * 100)} cm`;
 const metres = (m: number): string => `${m.toFixed(2)} m`;
 
 const NUDGE: readonly HintPart[] = [{ kbd: "left" }, { kbd: "right" }, { kbd: "up" }, { kbd: "down" }, `nudge ${centimetres(SNAP)}`];
-const REMOVE: readonly HintPart[] = [{ kbd: "delete" }, "remove"];
-const DESELECT: readonly HintPart[] = [{ kbd: "esc" }, "deselect"];
+export const REMOVE: readonly HintPart[] = [{ kbd: "delete" }, "remove"];
+export const DESELECT: readonly HintPart[] = [{ kbd: "esc" }, "deselect"];
+
+/**
+ * What is selected, as both hint bars name it ("Wall selected", "Bedroom selected", "Desk
+ * selected"); null when nothing that still exists is.
+ */
+export function selectionTitle(editor: Pick<EditorState, "selectedWallId" | "selectedRoomId" | "selectedItemId">, model: PlanModel): string | null {
+  if (editor.selectedWallId && model.walls.some((w) => w.id === editor.selectedWallId)) return "Wall selected";
+  if (editor.selectedRoomId) {
+    const room = model.rooms.find((r) => r.id === editor.selectedRoomId);
+    if (room) return `${room.label} selected`;
+  }
+  if (editor.selectedItemId) {
+    const item = model.items.find((i) => i.id === editor.selectedItemId);
+    if (item) return `${catalogOf(model).get(item.kind)?.label ?? "Piece"} selected`;
+  }
+  return null;
+}
 
 export function hintFor({ editor, model, tool, spacePan, openingFits }: HintInput): Hint {
   if (spacePan) return { title: "Pan", segments: [["Drag to move the plan"], ["Let go of", { kbd: "space" }, "to go back"]] };
@@ -77,19 +94,10 @@ export function hintFor({ editor, model, tool, spacePan, openingFits }: HintInpu
       break;
   }
 
-  if (editor.selectedWallId && model.walls.some((w) => w.id === editor.selectedWallId)) {
-    return { title: "Wall selected", segments: [["Drag an end to move it"], NUDGE, REMOVE, DESELECT] };
-  }
-  if (editor.selectedRoomId) {
-    const room = model.rooms.find((r) => r.id === editor.selectedRoomId);
-    if (room) return { title: `${room.label} selected`, segments: [["Drag to move"], NUDGE, REMOVE, DESELECT] };
-  }
-  if (editor.selectedItemId) {
-    const item = model.items.find((i) => i.id === editor.selectedItemId);
-    if (item) {
-      const label = catalogOf(model).get(item.kind)?.label ?? "Piece";
-      return { title: `${label} selected`, segments: [["Drag to move"], NUDGE, REMOVE, DESELECT] };
-    }
+  const selected = selectionTitle(editor, model);
+  if (selected) {
+    const wall = model.walls.some((w) => w.id === editor.selectedWallId);
+    return { title: selected, segments: [[wall ? "Drag an end to move it" : "Drag to move"], NUDGE, REMOVE, DESELECT] };
   }
 
   const empty = model.walls.length === 0 && model.rooms.length === 0 && model.items.length === 0;

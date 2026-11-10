@@ -92,4 +92,37 @@ describe("thumbnailFor", () => {
     expect(disposed.size).toBeGreaterThan(0);
     disposeGeometry.mockRestore();
   });
+
+  it("draws a piece as the 3D view does, on its contact shadow (a rug lies flat), plain: no pattern, no ink", async () => {
+    const { CONTACT_SHADOW, patternTextureCount, disposePatternTextures } = await import("../src/three/surfaces");
+    const { INK_EDGE } = await import("../src/three/edges");
+    disposePatternTextures();
+    const named = (piece: THREE_NS.Object3D, name: string) => {
+      let n = 0;
+      piece.traverse((o) => o.name === name && n++);
+      return n;
+    };
+    // definitions not drawn yet (a size of their own), so they are drawn now
+    const table = { ...BUILT_IN_KINDS.find((k) => k.kind === "coffee_table")!, w: 1.3 };
+    const rug = { ...BUILT_IN_KINDS.find((k) => k.kind === "rug")!, w: 2.1 };
+    thumbnailFor(table);
+    const drawnTable = gl.drawn.at(-1)!;
+    thumbnailFor(rug);
+    const drawnRug = gl.drawn.at(-1)!;
+    expect(named(drawnTable, CONTACT_SHADOW)).toBe(1);
+    expect(named(drawnRug, CONTACT_SHADOW)).toBe(0);
+    // finer than a card's pixels, and costly to find, sample and encode for every card at once
+    expect(named(drawnTable, INK_EDGE)).toBe(0);
+    expect(named(drawnRug, INK_EDGE)).toBe(0);
+    // the same named surfaces as the scene's, in their tints, without their patterns: no texture made
+    const surfaces: THREE_NS.MeshStandardMaterial[] = [];
+    drawnTable.traverse((o) => {
+      const m = (o as THREE_NS.Mesh).material as THREE_NS.MeshStandardMaterial | undefined;
+      if (m?.userData?.surface) surfaces.push(m);
+    });
+    expect(surfaces.length).toBeGreaterThan(0);
+    expect(surfaces.some((m) => m.userData.metres)).toBe(true);
+    expect(surfaces.every((m) => !m.map)).toBe(true);
+    expect(patternTextureCount()).toBe(0);
+  });
 });
