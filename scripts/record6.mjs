@@ -20,10 +20,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WALLS, OPEN, ROOMS, FURN, DEFINE, DEFINED_ITEMS, NOTES } from "./trace.mjs";
 import { fromRoot } from "./paths.mjs";
-import { productionOrigins } from "./origins.mjs";
+import { STUDIO_DEV_ORIGIN } from "../config/origins.js";
+import { requireTestHook } from "./test-hook.mjs";
 
-// the film is shot against the deployed studio, so the default is the production origin
-const BASE = process.env.BASE_URL ?? productionOrigins().studio;
+// The beats are driven through the test hook, which deployed builds do not carry. So the film
+// is shot against the local origin: the dev server, or a production build that keeps the hook
+// (`npm run build:local -- --test-hook`, then `npm run serve:local`), which renders exactly as
+// the deployed studio does.
+const BASE = process.env.BASE_URL ?? STUDIO_DEV_ORIGIN;
 const OUT = fromRoot("videos/alza-webmcp/capture/footage6");
 const FFMPEG = "C:/Users/elias/.local/bin/ffmpeg.exe";
 mkdirSync(OUT, { recursive: true });
@@ -128,15 +132,16 @@ const step = async (page, key, ms) => { await keyDown(page, key); await page.pau
 
 async function open() {
   const page = sheet;
-  page.run = (c) => page.evaluate(async (l) => { const o = []; for (const [t, a] of l) o.push(await window.__alza.runTool(t, a ?? {})); return o.map(r => r.summary); }, c);
+  page.run = (c) => page.hook.evaluate(async (h, l) => { const o = []; for (const [t, a] of l) o.push(await h.runTool(t, a ?? {})); return o.map(r => r.summary); }, c);
   page.pause_ = (ms) => page.waitForTimeout(ms);
   await page.goto(BASE, { waitUntil: "networkidle" });
+  page.hook = await requireTestHook(page, BASE);
   await page.waitForSelector("text=Build 3D");
   await page.pause_(900);
-  await page.evaluate(() => window.__alza.actions.setRequireApproval(false));
+  await page.hook.evaluate((h) => h.actions.setRequireApproval(false));
   await page.run([["clear_model", {}], ["set_plan_name", { name: "Traced from a photo of the plan" }]]);
   await page.run(WALLS.map(([ax, ay, bx, by, thickness]) => ["add_wall", { ax, ay, bx, by, thickness }]));
-  const w = await page.evaluate(() => window.__alza.store.getState().model.walls.map(x => x.id));
+  const w = await page.hook.evaluate((h) => h.store.getState().model.walls.map(x => x.id));
   await page.run(OPEN(w));
   await page.run(ROOMS.map(([x, y, ww, h, label, floor]) => ["add_room", { x, y, w: ww, h, label, floor }]));
   await page.run(DEFINE);   // the three kinds the catalogue lacks, before anything places them
@@ -190,7 +195,7 @@ await beat("trace", async (page) => {
   await page.pause_(700);
   for (const [ax, ay, bx, by, thickness] of WALLS) { await page.run([["add_wall", { ax, ay, bx, by, thickness }]]); await page.pause_(230); }
   await page.pause_(350);
-  const w = await page.evaluate(() => window.__alza.store.getState().model.walls.map((x) => x.id));
+  const w = await page.hook.evaluate((h) => h.store.getState().model.walls.map((x) => x.id));
   for (const c of OPEN(w)) { await page.run([c]); await page.pause_(130); }
   await page.pause_(300);
   for (const [x, y, ww, h, label, floor] of ROOMS) { await page.run([["add_room", { x, y, w: ww, h, label, floor }]]); await page.pause_(150); }
@@ -215,8 +220,8 @@ await beat("repair", async (page) => {
   await page.pause_(1800);
   await page.run([["get_issues", {}]]);
   await page.pause_(3400);                      // the error sits and reads
-  const badId = await page.evaluate(() => {
-    const it = window.__alza.store.getState().model.items;
+  const badId = await page.hook.evaluate((h) => {
+    const it = h.store.getState().model.items;
     return it[it.length - 1].id;
   });
   await page.run([["move_item", { id: badId, x: 7.10, y: 9.40, rotation: 90 }]]);
@@ -236,10 +241,10 @@ await beat("crossorigin", async (page) => {
 });
 
 await beat("veto", async (page) => {
-  await page.evaluate(() => window.__alza.actions.setRequireApproval(true));
+  await page.hook.evaluate((h) => h.actions.setRequireApproval(true));
   await page.click(".sidebar-tabs button:has-text('Tools')");
   await page.pause_(1000);
-  await page.evaluate(() => { window.__pending = window.__alza.runTool("clear_model", {}); });
+  await page.hook.evaluate((h) => { window.__pending = h.runTool("clear_model", {}); });
   await page.pause_(5600);                      // the request waits, unanswered
   await page.hover(".approval-actions .reject");
   await page.pause_(1300);

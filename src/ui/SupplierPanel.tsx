@@ -7,7 +7,7 @@
 
 import { useState } from "react";
 import { useAppStore, actions, logActivity } from "../model/store";
-import { SUPPLIER_ORIGIN, SUPPLIER_URL, listProducts, type SupplierProduct } from "../mcp/supplier";
+import { SUPPLIER_ORIGIN, listProducts, supplierFrameSrc, type SupplierProduct } from "../mcp/supplier";
 import { supplierKind } from "../model/catalog";
 
 export function SupplierPanel() {
@@ -49,7 +49,7 @@ export function SupplierPanel() {
 
       <iframe
         className="supplier-frame"
-        src={`${SUPPLIER_URL}?host=${encodeURIComponent(location.origin)}&display=1`}
+        src={supplierFrameSrc({ display: true })}
         title="Nordika supplier catalogue"
         allow="tools"
       />

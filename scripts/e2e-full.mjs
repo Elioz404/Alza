@@ -8,6 +8,7 @@ import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
 import { fromRoot } from "./paths.mjs";
 import { STUDIO_DEV_ORIGIN } from "../config/origins.js";
+import { requireTestHook } from "./test-hook.mjs";
 
 const BASE = process.env.BASE_URL ?? STUDIO_DEV_ORIGIN;
 const OUT = fromRoot("shots/full");
@@ -28,13 +29,13 @@ page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
 
 const S = async (name) => page.screenshot({ path: `${OUT}/${name}.png` });
+await page.goto(BASE, { waitUntil: "networkidle" });
+const hook = await requireTestHook(page, BASE);
 const state = (expr) =>
-  page.evaluate((e) => {
-    const { store } = window.__alza;
+  hook.evaluate((h, e) => {
+    const { store } = h;
     return Function("s", `return (${e})`)(store.getState());
   }, expr);
-
-await page.goto(BASE, { waitUntil: "networkidle" });
 await page.waitForSelector("text=Build 3D", { timeout: 10000 });
 await page.waitForTimeout(500);
 
@@ -179,15 +180,15 @@ check("tool get_underlay: not loaded", r.ok && r.loaded === false);
 r = await runTool("calibrate_underlay", { u1: 0.1, v1: 0.5, u2: 0.9, v2: 0.5, meters: 4 });
 check("tool calibrate_underlay: fails without image", !r.ok);
 // load an underlay programmatically, then calibrate: points 0.8 apart horizontally on an 8×6 rect → scale to 4 m
-await page.evaluate(() =>
-  window.__alza.actions.setUnderlay({ dataUrl: "data:image/png;base64,iVBORw0KGgo=", opacity: 0.55, x: 0, y: 0, w: 8, h: 6 }),
+await hook.evaluate((h) =>
+  h.actions.setUnderlay({ dataUrl: "data:image/png;base64,iVBORw0KGgo=", opacity: 0.55, x: 0, y: 0, w: 8, h: 6 }),
 );
 r = await runTool("calibrate_underlay", { u1: 0.1, v1: 0.5, u2: 0.9, v2: 0.5, meters: 4 });
 check("tool calibrate_underlay: 8 m → 5 m", r.ok && Math.abs(r.w - 5) < 0.01);
 const uw = await state("s.model.underlay.w");
 const uh = await state("s.model.underlay.h");
 check("tool calibrate_underlay: rect scaled, aspect kept", Math.abs(uw - 5) < 0.01 && Math.abs(uh - 3.75) < 0.01);
-await page.evaluate(() => window.__alza.actions.setUnderlay(null));
+await hook.evaluate((h) => h.actions.setUnderlay(null));
 r = await runTool("add_room", { x: 6.2, y: 1.2, w: 2, h: 2, label: "Study", floor: "oak" });
 check("tool add_room", r.ok);
 r = await runTool("update_room", { id: "Study", label: "Office" });

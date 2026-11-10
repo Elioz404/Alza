@@ -13,11 +13,12 @@
     "lint": "eslint .",
     "test": "vitest run",
     "partner": "node scripts/partner-dev.mjs",
+    "build:local": "node scripts/build-local.mjs",
     "serve:local": "node scripts/serve-local.mjs",
     "e2e": "node scripts/e2e-full.mjs",
     "shots": "node scripts/shots.mjs",
-    "deploy:studio": "wrangler pages deploy dist --project-name alza-dev --branch main",
-    "deploy:partner": "npx netlify deploy --prod --dir dist"
+    "deploy:studio": "npm run build && wrangler pages deploy dist/studio --project-name alza-dev --branch main",
+    "deploy:partner": "npm run build && npx netlify deploy --prod --dir dist/partner"
   },
   "dependencies": {
     "react": "^19.1.0",

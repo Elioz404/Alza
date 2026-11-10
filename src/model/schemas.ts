@@ -39,6 +39,13 @@ import {
   type Range,
 } from "./limits";
 
+// Zod compiles object parsers with `new Function` when it may. The studio's CSP has no
+// 'unsafe-eval', so the attempt would only fail — and a browser reports the blocked attempt
+// as a CSP violation even though zod catches it and falls back. Running jitless skips the
+// attempt. It must be set before the first z.object() is built, which is why it sits here:
+// every module that builds schemas imports this one first.
+z.config({ jitless: true });
+
 /** A number inside a named range. z.number() already refuses NaN and ±Infinity. */
 export const inRange = (r: Range) => z.number().min(r.min).max(r.max);
 

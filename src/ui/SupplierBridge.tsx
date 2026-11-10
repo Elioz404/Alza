@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { SUPPLIER_URL, attachSupplierFrame } from "../mcp/supplier";
+import { attachSupplierFrame, supplierFrameSrc } from "../mcp/supplier";
 
 export function SupplierBridge() {
   const ref = useRef<HTMLIFrameElement>(null);
@@ -27,7 +27,7 @@ export function SupplierBridge() {
     <iframe
       ref={ref}
       className="supplier-bridge"
-      src={`${SUPPLIER_URL}?host=${encodeURIComponent(location.origin)}`}
+      src={supplierFrameSrc()}
       title="Partner catalogue bridge"
       allow="tools"
       aria-hidden="true"

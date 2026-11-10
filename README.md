@@ -223,7 +223,10 @@ scripts/
               agent defines for itself. Shared by the video and the screenshot gallery.
   record6.mjs records the film's eight beats as real 60 fps screen capture (ffmpeg ddagrab)
   shots.mjs   rebuilds the screenshot gallery from trace.mjs
-  serve-local.mjs  serves dist/ on two origins with the production headers, for local demos
+  serve-local.mjs  serves dist-local/studio and dist-local/partner on two origins with the
+              production headers, for local demos (headers from config/headers.js, the
+              module the build writes each site's _headers from)
+  build-local.mjs  a production build aimed at those two local origins, into dist-local/
   paths.mjs   resolves dist/, shots/ and plan-source.jpeg from the repo root, not the cwd
 ```
 
@@ -289,19 +292,35 @@ npm run partner    # the partner origin    → http://localhost:5200   (second t
 npm run typecheck  # tsc -b over the app, the tests and vite.config.ts
 npm run lint       # ESLint (typescript-eslint + react-hooks)
 npm test           # unit tests (vitest, happy-dom)
-npm run build      # production build — two entry points: the studio and partner/
+npm run build      # production build — dist/studio and dist/partner, one directory per host
 npm run e2e        # 56-check Playwright battery (run both servers first)
-npm run serve:local  # serve dist/ on two origins with the production headers
-npm run shots      # rebuild the screenshot gallery (against serve:local)
+npm run build:local  # production build aimed at the two local origins below, into dist-local/
+npm run serve:local  # serve dist-local/ on two origins with the production headers
+npm run shots      # rebuild the screenshot gallery (against the dev servers, or serve:local
+                   # over `npm run build:local -- --test-hook`)
 ```
 
 The partner catalogue is a separate origin on purpose; that is the whole point of the
 cross-origin tool exchange. A different port is a different origin, so `localhost:5200` is
-all you need locally. In production, deploy the same `dist/` to a second host and name both
+all you need locally. In production, `dist/studio` and `dist/partner` go to two hosts
+(`npm run deploy:studio`, `npm run deploy:partner`, which rebuild first) and you name both
 origins in `.env.production` (`VITE_STUDIO_ORIGIN`, `VITE_SUPPLIER_ORIGIN`): bare `https://`
 origins, no path. `npm run build` fails if either is missing or malformed, rather than
-shipping headers that name nobody. `?supplier=https://…` still overrides the partner for
-debugging. Without a reachable partner, everything else in the app still works.
+shipping headers that name nobody. In a development build `?supplier=https://…` overrides the
+partner for debugging; a production build ignores it, and the partner likewise trusts only the
+studio origin it was built for. Without a reachable partner, everything else in the app still
+works.
+
+Both sites' security headers (CSP, `Permissions-Policy: tools`, HSTS, COOP) come from
+`config/headers.js`. The build writes each site's set to the `_headers` of its own directory,
+on every path, so no answer a host gives (a page, its single-page-app fallback, a directory
+index, an error page) leaves without its page's policy, and `serve:local` sends the same sets.
+
+The Playwright scripts drive the page through `window.__alza`, which only development builds
+carry. A production build has it only when built with `VITE_ALZA_TEST_HOOK=1`
+(`npm run build:local -- --test-hook` does that). The build refuses the switch for any
+origin that is not loopback, and a build for loopback origins goes to `dist-local/`, never to
+the `dist/` the deploy scripts publish.
 
 Every tool's arguments are a zod schema built from the ranges in `src/model/limits.ts`; the
 published `inputSchema` is derived from it, and each call is validated against it before

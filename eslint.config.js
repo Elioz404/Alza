@@ -6,10 +6,11 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 import { defineConfig, globalIgnores } from "eslint/config";
+import { DIST_DIR, LOCAL_DIST_DIR } from "./config/sites.js";
 
 export default defineConfig(
   // build output, rendered media and deploy-tool state are not source
-  globalIgnores(["dist/", "shots/", "videos/", ".netlify/", ".wrangler/"]),
+  globalIgnores([`${DIST_DIR}/`, `${LOCAL_DIST_DIR}/`, "shots/", "videos/", ".netlify/", ".wrangler/"]),
 
   {
     files: ["src/**/*.{ts,tsx}", "tests/**/*.ts", "vite.config.ts"],

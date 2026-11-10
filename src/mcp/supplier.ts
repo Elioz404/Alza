@@ -24,7 +24,9 @@ import { actions, logActivity } from "../model/store";
 import { SUPPLIER, TEXT } from "../model/limits";
 import { clip, describeIssues, furnitureDim, hexColor, inRange, label, supplierSku, text } from "../model/schemas";
 import { callRemoteTool, discoverTools, type ModelContextLike, type RemoteTool } from "./registry";
-import { PARTNER_PAGE_PATH, resolveOrigins, supplierOriginFor } from "../../config/origins.js";
+import { isAllowedOrigin, resolveOrigins, supplierOriginFor } from "../../config/origins.js";
+import { PARTNER_PAGE_PATH } from "../../config/sites.js";
+import { MESSAGE_ID_MAX_LENGTH, REPLY_TIMEOUT_MS, REQUEST_TAG, RESULT_TAG } from "../../partner/protocol.js";
 
 /**
  * The origins this build talks to, from config/origins.js: baked in at build time from
@@ -34,13 +36,34 @@ import { PARTNER_PAGE_PATH, resolveOrigins, supplierOriginFor } from "../../conf
 const ORIGINS = resolveOrigins(import.meta.env, { production: import.meta.env.PROD, devHost: location.hostname });
 
 /**
- * Where the partner lives. `?supplier=https://…` overrides it for debugging; the override must
- * itself be a valid origin or it is ignored. It MUST be https: `exposedTo` only accepts secure
- * origins (localhost counts).
+ * Where the partner lives. This origin is framed with `allow="tools"`, named in the `tools`
+ * Permissions-Policy and trusted for every answer, so in a shipped build it is exactly the
+ * baked, validated one. Only a development build lets `?supplier=https://…` point it elsewhere
+ * for debugging, and even then the override must be a valid origin or it is ignored. It MUST
+ * be https: `exposedTo` only accepts secure origins (localhost counts).
  */
-export const SUPPLIER_ORIGIN: string = supplierOriginFor(new URLSearchParams(location.search).get("supplier"), ORIGINS.supplier);
+export const SUPPLIER_ORIGIN: string = supplierOriginFor({
+  override: new URLSearchParams(location.search).get("supplier"),
+  configured: ORIGINS.supplier,
+  dev: import.meta.env.DEV,
+});
 
 export const SUPPLIER_URL = `${SUPPLIER_ORIGIN}${PARTNER_PAGE_PATH}`;
+
+/**
+ * The address of a partner frame. `display` renders the shop for the human without
+ * registering tools (one frame per page owns them). In development the studio also tells the
+ * partner where it is (`?host=`), so a studio on another local port or on 127.0.0.1 can pair
+ * with it; a shipped partner ignores the hint and trusts only its built-in studio origin, so
+ * a shipped studio does not send one.
+ */
+export function supplierFrameSrc({ display = false, dev = import.meta.env.DEV } = {}): string {
+  const params = new URLSearchParams();
+  if (dev) params.set("host", location.origin);
+  if (display) params.set("display", "1");
+  const query = params.toString();
+  return query ? `${SUPPLIER_URL}?${query}` : SUPPLIER_URL;
+}
 
 /**
  * One product as the studio accepts it. Unknown fields are stripped rather than refused, so
@@ -80,8 +103,8 @@ const issuesOf = (error: z.ZodError): string => describeIssues(error, { root: "a
  * typed, because it is relayed to the agent and shown on the page.
  */
 const replyEnvelope = z.object({
-  __alzaSupplierResult: z.literal(true),
-  id: z.string().max(TEXT.ref),
+  [RESULT_TAG]: z.literal(true),
+  id: z.string().max(MESSAGE_ID_MAX_LENGTH),
   ok: z.boolean(),
   result: z.unknown().optional(),
   error: z
@@ -118,13 +141,13 @@ let msgSeq = 0;
 const pending = new Map<string, (payload: Reply) => void>();
 
 window.addEventListener("message", (e: MessageEvent) => {
-  if (e.origin !== SUPPLIER_ORIGIN) return;
+  if (!isAllowedOrigin(e.origin, [SUPPLIER_ORIGIN])) return;
   const data: unknown = e.data;
   // only a reply to a call still waiting is looked at; anything else is not addressed to us
   const id = (data as { id?: unknown } | null)?.id;
   if (typeof id !== "string") return;
   const settle = pending.get(id);
-  if (!settle || (data as { __alzaSupplierResult?: unknown }).__alzaSupplierResult !== true) return;
+  if (!settle || (data as Record<string, unknown>)[RESULT_TAG] !== true) return;
   pending.delete(id);
   const reply = replyEnvelope.safeParse(data);
   settle(reply.success ? reply.data : { ok: false, error: `${SUPPLIER_ORIGIN} sent a malformed reply (${issuesOf(reply.error)}).` });
@@ -189,11 +212,11 @@ async function viaPostMessage(tool: string, args: Record<string, unknown>): Prom
   const reply = new Promise<Reply>((resolve, reject) => {
     pending.set(id, resolve);
     setTimeout(() => {
-      if (pending.delete(id)) reject(new Error(`Supplier did not answer "${tool}" in time.`));
-    }, 8000);
+      if (pending.delete(id)) reject(new Error(`Supplier did not answer "${tool}" within ${REPLY_TIMEOUT_MS} ms.`));
+    }, REPLY_TIMEOUT_MS);
   });
   try {
-    target.postMessage({ __alzaSupplier: true, id, tool, args }, SUPPLIER_ORIGIN);
+    target.postMessage({ [REQUEST_TAG]: true, id, tool, args }, SUPPLIER_ORIGIN);
   } catch (err) {
     pending.delete(id);
     throw new Error(`Could not reach ${SUPPLIER_ORIGIN}: ${err instanceof Error ? err.message : String(err)}`, {

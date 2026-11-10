@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { WALLS, OPEN, ROOMS, FURN, DEFINE, DEFINED_ITEMS, NOTES } from "./trace.mjs";
 import { fromRoot } from "./paths.mjs";
 import { STUDIO_DEV_ORIGIN } from "../config/origins.js";
+import { requireTestHook } from "./test-hook.mjs";
 
 const BASE = process.env.BASE_URL ?? STUDIO_DEV_ORIGIN;
 const OUT = fromRoot("shots/devpost");   // 2700x1800 originals for the submission form
@@ -29,21 +30,22 @@ const shot = async (name) => {
   await page.screenshot({ path: file });
   console.log(`  ${file}`);
 };
+await page.goto(BASE, { waitUntil: "networkidle" });
+const hook = await requireTestHook(page, BASE);
 const run = (calls) =>
-  page.evaluate(async (c) => {
+  hook.evaluate(async (h, c) => {
     const out = [];
-    for (const [t, a] of c) out.push(await window.__alza.runTool(t, a ?? {}));
+    for (const [t, a] of c) out.push(await h.runTool(t, a ?? {}));
     return out.map((r) => r.summary);
   }, calls);
 
-await page.goto(BASE, { waitUntil: "networkidle" });
 await page.waitForSelector("text=Build 3D");
-await page.evaluate(() => window.__alza.actions.setRequireApproval(false));
+await hook.evaluate((h) => h.actions.setRequireApproval(false));
 
 // ---- build the traced plan -------------------------------------------------
 await run([["clear_model", {}], ["set_plan_name", { name: "Traced from a photo of the plan" }]]);
 await run(WALLS.map(([ax, ay, bx, by, thickness]) => ["add_wall", { ax, ay, bx, by, thickness }]));
-const w = await page.evaluate(() => window.__alza.store.getState().model.walls.map((x) => x.id));
+const w = await hook.evaluate((h) => h.store.getState().model.walls.map((x) => x.id));
 await run(OPEN(w));
 
 console.log("capturing…");
@@ -58,9 +60,9 @@ await run([["build_3d", {}]]);
 await page.waitForTimeout(1100);
 await page.click("button:has-text('Back to 2D')");
 await page.waitForTimeout(700);
-await page.evaluate(
-  ({ url, span }) =>
-    window.__alza.actions.setUnderlay({
+await hook.evaluate(
+  (h, { url, span }) =>
+    h.actions.setUnderlay({
       dataUrl: url, opacity: 0.55,
       x: -(333 / 2048) * span, y: -(222 / 2048) * span, w: span, h: span,
     }),
@@ -68,7 +70,7 @@ await page.evaluate(
 );
 await page.waitForTimeout(900);
 await shot("traced-over-the-drawing");
-await page.evaluate(() => window.__alza.actions.setUnderlay(null));
+await hook.evaluate((h) => h.actions.setUnderlay(null));
 
 await run(ROOMS.map(([x, y, ww, h, label, floor]) => ["add_room", { x, y, w: ww, h, label, floor }]));
 await run(DEFINE);
@@ -118,16 +120,16 @@ await page.waitForTimeout(500);
 await shot("tool-runner");
 
 // 9 — the human-in-the-loop gate
-await page.evaluate(() => window.__alza.actions.setRequireApproval(true));
-await page.evaluate(() => {
-  window.__pending = window.__alza.runTool("clear_model", {});
+await hook.evaluate((h) => h.actions.setRequireApproval(true));
+await hook.evaluate((h) => {
+  window.__pending = h.runTool("clear_model", {});
 });
 await page.waitForTimeout(900);
 await shot("approval-gate");
 await page.click(".approval-actions .reject");
 await page.waitForTimeout(600);
 await shot("approval-rejected-feed");
-await page.evaluate(() => window.__alza.actions.setRequireApproval(false));
+await hook.evaluate((h) => h.actions.setRequireApproval(false));
 
 // 10 — the four agent-authored pieces, in the catalogue beside the built-ins
 await page.click(".sidebar-tabs button:has-text('Catalog')");

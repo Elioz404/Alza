@@ -16,6 +16,7 @@
 import { z } from "zod";
 import { actions, store, logActivity, type ActionResult } from "../model/store";
 import { describeIssues } from "../model/schemas";
+import { isAllowedOrigin } from "../../config/origins.js";
 
 /** A JSON Schema object, as published in a tool descriptor. */
 export type JsonSchema = Record<string, unknown>;
@@ -209,11 +210,18 @@ export function registerAll(mc: ModelContextLike, tools: ToolDef[], signal?: Abo
 // exposes them to this origin; we discover and call them from here.
 // ---------------------------------------------------------------------------
 
+/**
+ * The tools `fromOrigins` share with this page. The runtime is asked for exactly those
+ * origins, but its answer is still checked here, because whatever survives is called and its
+ * output reaches the agent: a tool is kept only when it declares an origin and that origin,
+ * normalised, is exactly one of `fromOrigins`. A tool that does not say where it comes from is
+ * dropped — it cannot be told apart from one that came from somewhere it should not.
+ */
 export async function discoverTools(mc: ModelContextLike, fromOrigins: string[]): Promise<RemoteTool[]> {
   if (!mc.getTools) return [];
   try {
     const all = await mc.getTools({ fromOrigins });
-    return (all ?? []).filter((t) => !t.origin || fromOrigins.some((o) => t.origin?.startsWith(o)));
+    return (Array.isArray(all) ? all : []).filter((t) => isAllowedOrigin(t?.origin, fromOrigins));
   } catch (err) {
     console.warn("[webmcp] cross-origin discovery failed", err);
     return [];

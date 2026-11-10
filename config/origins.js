@@ -42,9 +42,6 @@ export const ORIGIN_ENV = Object.freeze({
   supplier: "VITE_SUPPLIER_ORIGIN",
 });
 
-/** Where the partner's page sits under its origin (the second Vite entry point). */
-export const PARTNER_PAGE_PATH = "/partner/index.html";
-
 /**
  * A dev server's origin. `host` lets a page served from 127.0.0.1 pair with its sibling on
  * 127.0.0.1 rather than on localhost, which the browser counts as a different origin.
@@ -144,16 +141,54 @@ export function resolveOrigins(env, { production, devHost = DEV_HOST }) {
 }
 
 /**
- * The partner origin the studio actually talks to: a `?supplier=` override when it names a
- * valid origin, otherwise the configured one. A malformed override is ignored rather than
- * trusted half-way.
+ * The canonical origin of a value that should name one, or null.
  *
- * @param {string | null} override
- * @param {string} configured
+ * Every comparison between origins goes through this and then through `===`: two origins are
+ * the same only when scheme, host and port are equal once the URL parser has normalised them
+ * (case, default ports, a trailing slash). A string prefix is never a match —
+ * "https://partner.example.com.evil.net" starts with "https://partner.example.com" — and an
+ * opaque origin ("null", from a sandboxed frame or a data: URL) is nobody's origin.
+ *
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+export function canonicalOrigin(value) {
+  if (typeof value !== "string" || value === "") return null;
+  let origin;
+  try {
+    origin = new URL(value).origin;
+  } catch {
+    return null;
+  }
+  return origin === "null" ? null : origin;
+}
+
+/**
+ * Whether `origin` is exactly one of `allowed`. An empty list allows nothing: a trust list
+ * that failed to build must lock the door, not open it.
+ *
+ * @param {unknown} origin
+ * @param {readonly string[]} allowed
+ * @returns {boolean}
+ */
+export function isAllowedOrigin(origin, allowed) {
+  const candidate = canonicalOrigin(origin);
+  if (candidate === null) return false;
+  return allowed.some((a) => canonicalOrigin(a) === candidate);
+}
+
+/**
+ * The partner origin the studio actually talks to. In a development build a `?supplier=`
+ * override is honoured when it names a valid origin (a malformed one is ignored rather than
+ * trusted half-way). A shipped build ignores it: the origin it frames, delegates the `tools`
+ * feature to and accepts answers from is the one baked in at build time, and a crafted link
+ * must not be able to swap in somebody else's "catalogue".
+ *
+ * @param {{ override: string | null, configured: string, dev: boolean }} from
  * @returns {string}
  */
-export function supplierOriginFor(override, configured) {
-  if (!override) return configured;
+export function supplierOriginFor({ override, configured, dev }) {
+  if (!dev || !override) return configured;
   try {
     return parseOrigin(override, "?supplier");
   } catch {
@@ -162,15 +197,19 @@ export function supplierOriginFor(override, configured) {
 }
 
 /**
- * The studio origins the partner shares its tools with and answers on postMessage: the
- * configured studio, a `?host=` hint, the embedding page (from the referrer), and the local
- * dev studio when the partner itself is served from a loopback host. Values that are not
- * valid origins are dropped.
+ * The studio origins the partner shares its tools with and answers on postMessage.
  *
- * @param {{ configured: string, host: string | null, referrer: string, hostname: string }} from
+ * A shipped build trusts exactly one: the studio origin it was built for. `?host=` and the
+ * referrer are written by whoever embeds the partner, so they can only ever extend the list
+ * in a development build — where they let a studio on 127.0.0.1 or another local port pair
+ * with this partner — together with the local dev studio when the partner itself is served
+ * from a loopback host. Values that are not valid origins are dropped, and a list that ends
+ * up empty means "nobody", never "anybody" (see isAllowedOrigin).
+ *
+ * @param {{ configured: string, host: string | null, referrer: string, hostname: string, dev: boolean }} from
  * @returns {string[]}
  */
-export function hostOriginsFor({ configured, host, referrer, hostname }) {
+export function hostOriginsFor({ configured, host, referrer, hostname, dev }) {
   /** @type {string[]} */
   const list = [];
   /**
@@ -185,14 +224,11 @@ export function hostOriginsFor({ configured, host, referrer, hostname }) {
     }
   };
   add(configured, ORIGIN_ENV.studio);
-  if (host) add(host, "?host");
-  if (referrer) {
-    try {
-      add(new URL(referrer).origin, "referrer");
-    } catch {
-      /* no usable referrer */
-    }
+  if (dev) {
+    if (host) add(host, "?host");
+    const fromReferrer = canonicalOrigin(referrer);
+    if (fromReferrer) add(fromReferrer, "referrer");
+    if (isLoopbackHost(hostname)) list.push(devOrigin(STUDIO_DEV_PORT, hostname));
   }
-  if (isLoopbackHost(hostname)) list.push(devOrigin(STUDIO_DEV_PORT, hostname));
   return [...new Set(list)];
 }

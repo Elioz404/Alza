@@ -10,6 +10,8 @@
  */
 
 import { hostOriginsFor, resolveOrigins } from "../config/origins.js";
+import { createRequestHandler, isPlainObject } from "./protocol.js";
+import { renderProducts } from "./view.js";
 
 const PRODUCTS = [
   { sku: "NK-SOF-3S", name: "Frejda 3-seat sofa", category: "living", w: 2.18, d: 0.92, h: 0.84, price: 749, currency: "EUR", color: "#8d8577", stock: 12 },
@@ -26,40 +28,19 @@ const PRODUCTS = [
   { sku: "NK-DCH-01", name: "Sund dining chair", category: "dining", w: 0.46, d: 0.47, h: 0.9, price: 89, currency: "EUR", color: "#96754e", stock: 48 },
 ];
 
-const money = (p) => `€${p.toFixed(0)}`;
-
-function render() {
-  const list = document.getElementById("list");
-  list.innerHTML = "";
-  for (const p of PRODUCTS) {
-    const li = document.createElement("li");
-    const sw = document.createElement("span");
-    sw.className = "swatch";
-    sw.style.background = p.color;
-    const mid = document.createElement("div");
-    mid.innerHTML =
-      `<div class="name">${p.name}</div>` +
-      `<div class="dims">${p.sku} · ${p.w.toFixed(2)} × ${p.d.toFixed(2)} m` +
-      (p.stock === 0 ? ` · <span class="oos">out of stock</span>` : ` · ${p.stock} in stock`) +
-      `</div>`;
-    const price = document.createElement("div");
-    price.className = "price";
-    price.textContent = money(p.price);
-    li.append(sw, mid, price);
-    list.append(li);
-  }
-}
-
 // ---------------------------------------------------------------- tool logic
+/** @param {Record<string, unknown>} [input] */
 function listProducts(input = {}) {
+  const { category, maxPrice, maxWidth, inStock } = input;
   let out = PRODUCTS.slice();
-  if (input.category) out = out.filter((p) => p.category === String(input.category).toLowerCase());
-  if (typeof input.maxPrice === "number") out = out.filter((p) => p.price <= input.maxPrice);
-  if (typeof input.maxWidth === "number") out = out.filter((p) => p.w <= input.maxWidth);
-  if (input.inStock) out = out.filter((p) => p.stock > 0);
+  if (category) out = out.filter((p) => p.category === String(category).toLowerCase());
+  if (typeof maxPrice === "number") out = out.filter((p) => p.price <= maxPrice);
+  if (typeof maxWidth === "number") out = out.filter((p) => p.w <= maxWidth);
+  if (inStock) out = out.filter((p) => p.stock > 0);
   return { supplier: "Nordika", count: out.length, products: out };
 }
 
+/** @param {Record<string, unknown>} [input] */
 function getProduct(input = {}) {
   const sku = String(input.sku ?? "").toUpperCase();
   const product = PRODUCTS.find((p) => p.sku === sku) ?? null;
@@ -103,17 +84,26 @@ const TOOLS = [
 
 // ------------------------------------------------- WebMCP registration
 // Which studio origins may see these tools and talk to this frame. The list is built by
-// config/origins.js — the same module the studio reads its partner origin from — starting
-// with the studio origin this build was configured for.
+// config/origins.js — the same module the studio reads its partner origin from. A shipped
+// build trusts only the studio origin it was built for; `?host=` and the referrer are chosen
+// by whoever embeds this page, so they count in development builds only.
 const ORIGINS = resolveOrigins(import.meta.env, { production: import.meta.env.PROD, devHost: location.hostname });
 const HOST_ORIGINS = hostOriginsFor({
   configured: ORIGINS.studio,
   host: new URLSearchParams(location.search).get("host"),
   referrer: document.referrer,
   hostname: location.hostname,
+  dev: import.meta.env.DEV,
 });
 
-const mc = document.modelContext ?? navigator.modelContext ?? null;
+/**
+ * @typedef {{ registerTool?: (tool: object, options: { signal: AbortSignal, exposedTo: string[] }) => unknown }} ModelContext
+ */
+const mc = /** @type {ModelContext | null} */ (
+  /** @type {{ modelContext?: ModelContext }} */ (document).modelContext ??
+    /** @type {{ modelContext?: ModelContext }} */ (navigator).modelContext ??
+    null
+);
 
 function registerTools() {
   if (!mc?.registerTool) return 0;
@@ -126,7 +116,11 @@ function registerTools() {
       description: t.description,
       inputSchema: t.inputSchema,
       annotations: t.annotations,
-      execute: async (input) => JSON.stringify(t.run(input ?? {})),
+      // the same rule as the postMessage path: arguments are an object or nothing
+      execute: async (/** @type {unknown} */ input) => {
+        if (input !== undefined && input !== null && !isPlainObject(input)) throw new TypeError(`Arguments for "${t.name}" must be an object.`);
+        return JSON.stringify(t.run(input ?? {}));
+      },
     };
     try {
       // exposedTo is what lets the host page's agent see this supplier's tools
@@ -140,22 +134,15 @@ function registerTools() {
 }
 
 // ------------------------------------------------- postMessage fallback
-window.addEventListener("message", (e) => {
-  const d = e.data;
-  if (!d || d.__alzaSupplier !== true || !d.id) return;
-  if (HOST_ORIGINS.length > 0 && !HOST_ORIGINS.includes(e.origin)) return;
-  const tool = TOOLS.find((t) => t.name === d.tool);
-  const reply = tool
-    ? { __alzaSupplierResult: true, id: d.id, ok: true, result: tool.run(d.args ?? {}) }
-    : { __alzaSupplierResult: true, id: d.id, ok: false, error: `Unknown tool "${d.tool}".` };
-  e.source?.postMessage(reply, e.origin);
-});
+// Fail-closed: only HOST_ORIGINS are answered, an empty list answers nobody, and a request
+// must name one of TOOLS with an object of arguments before anything runs (protocol.js).
+window.addEventListener("message", createRequestHandler({ allowedOrigins: HOST_ORIGINS, tools: TOOLS }));
 
-render();
+renderProducts(/** @type {HTMLElement} */ (document.getElementById("list")), PRODUCTS);
 // ?display=1 renders the shop for a human to look at without registering anything: exactly one
 // frame per page may own the tools, otherwise stale descriptors point at detached windows.
 const displayOnly = new URLSearchParams(location.search).get("display") === "1";
 const registered = displayOnly ? 0 : registerTools();
-const pill = document.getElementById("pill");
+const pill = /** @type {HTMLElement} */ (document.getElementById("pill"));
 pill.textContent = displayOnly ? "display only" : registered > 0 ? `${registered} tools shared` : "tools off";
 pill.className = registered > 0 ? "pill" : "pill off";
