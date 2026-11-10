@@ -9,38 +9,48 @@
  * The cache is keyed by kind and checked against the whole definition, so a kind an agent
  * redefines (or an undo restores) gets the thumbnail of what it is now, and the cache holds one
  * image per kind however often that happens.
+ *
+ * A piece lives only for the frame that draws it: it is read back in the same task (so the
+ * renderer needs no preserveDrawingBuffer) and then freed — its geometries at once, its shared
+ * materials once the batch of thumbnails being drawn is done, so the pieces of one catalogue
+ * render share their materials and shaders instead of compiling them per card.
+ *
+ * Loaded on demand (ui/useThumbnails.ts), with three.js, so the page's first chunk has neither.
  */
 
 import * as THREE from "three";
 import { buildFurniture } from "./furniture";
+import { MaterialCache, disposeObject } from "./materials";
+import { RENDERER, THUMBNAIL, THUMBNAIL_SIZE } from "./config";
 import type { KindDef } from "../model/types";
 
-const SIZE = 176;
 const cache = new Map<string, { definition: string; url: string }>();
+const materials = new MaterialCache();
 let renderer: THREE.WebGLRenderer | null = null;
 let scene: THREE.Scene | null = null;
 let camera: THREE.PerspectiveCamera | null = null;
+let sweepQueued = false;
 
 function init(): boolean {
   if (renderer) return true;
   try {
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(SIZE, SIZE);
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, RENDERER.maxPixelRatio));
+    renderer.setSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
+    renderer.toneMappingExposure = THUMBNAIL.toneMappingExposure;
 
     scene = new THREE.Scene();
-    const hemi = new THREE.HemisphereLight("#eef3fa", "#6a6152", 1.5);
-    scene.add(hemi);
-    const key = new THREE.DirectionalLight("#fff4e2", 2.4);
-    key.position.set(3, 5, 4);
+    const { hemisphere, key: keySpec, rim: rimSpec } = THUMBNAIL;
+    scene.add(new THREE.HemisphereLight(hemisphere.sky, hemisphere.ground, hemisphere.intensity));
+    const key = new THREE.DirectionalLight(keySpec.color, keySpec.intensity);
+    key.position.set(...keySpec.position);
     scene.add(key);
-    const rim = new THREE.DirectionalLight("#cfe0ff", 0.7);
-    rim.position.set(-4, 2, -3);
+    const rim = new THREE.DirectionalLight(rimSpec.color, rimSpec.intensity);
+    rim.position.set(...rimSpec.position);
     scene.add(rim);
 
-    camera = new THREE.PerspectiveCamera(32, 1, 0.05, 60);
+    camera = new THREE.PerspectiveCamera(THUMBNAIL.camera.fov, 1, THUMBNAIL.camera.near, THUMBNAIL.camera.far);
     return true;
   } catch {
     renderer = null;
@@ -48,9 +58,13 @@ function init(): boolean {
   }
 }
 
-function dispose(group: THREE.Object3D): void {
-  group.traverse((o) => {
-    if (o instanceof THREE.Mesh) o.geometry.dispose();
+/** Free the materials no thumbnail holds once the current batch of draws is over. */
+function sweepAfterBatch(): void {
+  if (sweepQueued) return;
+  sweepQueued = true;
+  queueMicrotask(() => {
+    sweepQueued = false;
+    materials.sweep();
   });
 }
 
@@ -61,23 +75,29 @@ export function thumbnailFor(def: KindDef): string | null {
   if (hit?.definition === definition) return hit.url;
   if (!init() || !renderer || !scene || !camera) return null;
 
-  const piece = buildFurniture(def);
+  const piece = buildFurniture(def, materials);
+  materials.retain(piece);
   scene.add(piece);
 
   // frame the piece: three-quarter view, fitted to its bounding sphere
   const box = new THREE.Box3().setFromObject(piece);
   const centre = box.getCenter(new THREE.Vector3());
-  const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 0.25);
-  const dist = radius / Math.sin((camera.fov * Math.PI) / 360) + radius * 0.35;
-  camera.position.set(centre.x + dist * 0.62, centre.y + dist * 0.5, centre.z + dist * 0.72);
+  const { minRadius, margin, direction } = THUMBNAIL.camera;
+  const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, minRadius);
+  const dist = radius / Math.sin((camera.fov * Math.PI) / 360) + radius * margin;
+  const [east, up, south] = direction;
+  camera.position.set(centre.x + dist * east, centre.y + dist * up, centre.z + dist * south);
   camera.lookAt(centre);
   camera.updateProjectionMatrix();
 
+  // drawn and read back in the same task: the buffer is still there to read
   renderer.render(scene, camera);
   const url = renderer.domElement.toDataURL("image/png");
 
   scene.remove(piece);
-  dispose(piece);
+  materials.release(piece);
+  disposeObject(piece, materials);
+  sweepAfterBatch();
   cache.set(def.kind, { definition, url });
   return url;
 }

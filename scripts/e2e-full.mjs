@@ -191,7 +191,7 @@ r = await runTool("calibrate_underlay", { u1: 0.1, v1: 0.5, u2: 0.9, v2: 0.5, me
 check("tool calibrate_underlay: fails without image", !r.ok);
 // load an underlay programmatically, then calibrate: points 0.8 apart horizontally on an 8×6 rect → scale to 4 m
 await hook.evaluate((h) =>
-  h.actions.setUnderlay({ dataUrl: "data:image/png;base64,iVBORw0KGgo=", opacity: 0.55, x: 0, y: 0, w: 8, h: 6 }),
+  h.actions.setUnderlay({ assetId: h.putImage("data:image/png;base64,iVBORw0KGgo="), opacity: 0.55, x: 0, y: 0, w: 8, h: 6 }),
 );
 r = await runTool("calibrate_underlay", { u1: 0.1, v1: 0.5, u2: 0.9, v2: 0.5, meters: 4 });
 check("tool calibrate_underlay: 8 m → 5 m", r.ok && Math.abs(r.w - 5) < 0.01);

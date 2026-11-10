@@ -11,17 +11,28 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import type { KindDef, PartSpec } from "../model/types";
+import { keepStatic, type MaterialCache } from "./materials";
+
+/**
+ * The cache the piece being built takes its materials from. buildFurniture sets it for the
+ * length of one build, which is synchronous, so a builder never sees another build's cache.
+ * Without one (a test, a one-off export) every piece owns the materials it was built with.
+ */
+let activeCache: MaterialCache | null = null;
 
 const mat = (color: string, roughness = 0.8, metalness = 0): THREE.MeshStandardMaterial =>
-  new THREE.MeshStandardMaterial({ color, roughness, metalness });
+  activeCache ? activeCache.get(color, roughness, metalness) : new THREE.MeshStandardMaterial({ color, roughness, metalness });
 
 const FABRIC = (c: string) => mat(c, 0.95);
 const WOOD = (c: string) => mat(c, 0.6);
 const METAL = (c: string) => mat(c, 0.35, 0.7);
-const DARK = mat("#2e2c2a", 0.5);
 const CERAMIC = (c = "#eef1f3") => mat(c, 0.12, 0.02); // glazed sanitaryware
-const WATER = new THREE.MeshStandardMaterial({ color: "#9fc6dd", roughness: 0.05, transparent: true, opacity: 0.5 });
-const PANE = new THREE.MeshPhysicalMaterial({ color: "#cfe3ee", roughness: 0.05, transparent: true, opacity: 0.22, side: THREE.DoubleSide });
+// the same three surfaces in every piece that has them: made once, never disposed with a piece
+const DARK = keepStatic(new THREE.MeshStandardMaterial({ color: "#2e2c2a", roughness: 0.5 }));
+const WATER = keepStatic(new THREE.MeshStandardMaterial({ color: "#9fc6dd", roughness: 0.05, transparent: true, opacity: 0.5 }));
+const PANE = keepStatic(
+  new THREE.MeshPhysicalMaterial({ color: "#cfe3ee", roughness: 0.05, transparent: true, opacity: 0.22, side: THREE.DoubleSide }),
+);
 
 /**
  * Every furniture box gets a small chamfer — real objects have no razor edges, and the
@@ -588,9 +599,18 @@ function genericPiece(w: number, d: number, h: number, color: string): THREE.Gro
   return g;
 }
 
-/** The 3D piece for one catalogue definition. */
-export function buildFurniture(def: KindDef): THREE.Group {
-  if (def.parts && def.parts.length > 0) return buildCustom(def.parts, def.color);
-  const builder = def.source === "builtin" ? FURNITURE_BUILDERS[def.kind] : undefined;
-  return builder ? builder() : genericPiece(def.w, def.d, def.h, def.color);
+/**
+ * The 3D piece for one catalogue definition. With `materials`, its surfaces come from that
+ * cache — retain the piece there while it is shown, and release it when it goes.
+ */
+export function buildFurniture(def: KindDef, materials?: MaterialCache): THREE.Group {
+  const previous = activeCache;
+  activeCache = materials ?? null;
+  try {
+    if (def.parts && def.parts.length > 0) return buildCustom(def.parts, def.color);
+    const builder = def.source === "builtin" ? FURNITURE_BUILDERS[def.kind] : undefined;
+    return builder ? builder() : genericPiece(def.w, def.d, def.h, def.color);
+  } finally {
+    activeCache = previous;
+  }
 }

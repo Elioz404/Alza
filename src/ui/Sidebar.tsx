@@ -1,18 +1,19 @@
 /** Sidebar — Model / Check / Catalog / Notes tabs. */
 
-import { useMemo, useState } from "react";
-import { pageActions } from "../model/store";
+import { useState } from "react";
+import { pageActions, releaseHeldAsset } from "../model/store";
 import { useAppStore } from "./useAppStore";
 import { dispatch } from "../model/commands";
-import { checkModel } from "../model/issues";
+import { issuesOf } from "../model/issues";
 import { catalogFor } from "../model/catalog";
 import { DESTRUCTIVE_TOOL_NAMES, TOOLS } from "../mcp/tools";
 import { seedLoft } from "../model/seed";
 import { ToolRunner } from "./ToolRunner";
 import { SupplierPanel } from "./SupplierPanel";
-import { thumbnailFor } from "../three/thumbnails";
+import { useThumbnails } from "./useThumbnails";
 import { OPACITY, TEXT, UNDERLAY } from "../model/limits";
 import { decodeUnderlay } from "./underlay";
+import { putAsset } from "../model/assets";
 import { useGesture } from "./useGesture";
 
 type Tab = "model" | "check" | "catalog" | "supplier" | "notes" | "tools";
@@ -26,9 +27,11 @@ export function Sidebar() {
   const supplierTools = useAppStore((s) => s.supplierTools);
   const [noteText, setNoteText] = useState("");
   const [uploadError, setUploadError] = useState<string | null>(null);
-  // the model is immutable, so a new check is needed exactly when it is a new object
-  const issues = useMemo(() => checkModel(model), [model]);
+  // derived once per plan object and shared with get_issues (model/issues.ts → issuesOf)
+  const issues = issuesOf(model);
   const catalog = catalogFor(model.kinds);
+  // three.js arrives with the first catalogue that needs a picture; swatches until then
+  const thumbnailFor = useThumbnails();
   const nameEdit = useGesture();
   const opacityEdit = useGesture();
 
@@ -44,15 +47,19 @@ export function Sidebar() {
   const onUploadBlueprint = async (file: File) => {
     // checked, bounded and re-encoded to a small JPEG before it reaches the model (see underlay.ts)
     setUploadError(null);
-    let underlay;
+    let decoded;
     try {
-      underlay = await decodeUnderlay(file);
+      decoded = await decodeUnderlay(file);
     } catch (err) {
       // the file never became an underlay, so there is no change to dispatch: say so here
       setUploadError(`Blueprint not loaded: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
-    const r = dispatch({ type: "set_underlay", underlay }, { actor: "human" });
+    // The image goes to the asset store and the plan refers to it by id. Once the change is
+    // made the plan keeps it (and its undo history, after); a refused one lets it go at once.
+    const assetId = putAsset(decoded.image);
+    const r = dispatch({ type: "set_underlay", underlay: { ...decoded.underlay, assetId } }, { actor: "human" });
+    releaseHeldAsset(assetId);
     if (!r.ok) setUploadError(`Blueprint not loaded: ${r.summary}`);
   };
 
@@ -167,7 +174,7 @@ export function Sidebar() {
         {tab === "catalog" && (
           <div className="panel catalog-grid">
             {catalog.entries.map((c) => {
-              const thumb = thumbnailFor(c);
+              const thumb = thumbnailFor?.(c) ?? null;
               return (
                 <button
                   key={c.kind}

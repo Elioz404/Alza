@@ -103,6 +103,12 @@ export default defineConfig(({ command, mode }) => {
       // one entry point per site: the studio, and the partner catalogue that ships as its own origin
       rollupOptions: {
         input: Object.fromEntries(SITES.map((site) => [site, resolve(__dirname, pageFile(SITE_PAGES[site]))])),
+        output: {
+          // three.js is only reached through the lazily loaded 3D view and thumbnails; giving it
+          // its own chunk keeps it out of the first one and names it for what it is (module ids
+          // are forward-slashed on every platform)
+          manualChunks: (id) => (id.includes("/node_modules/three/") ? "three" : undefined),
+        },
       },
     },
     test: {

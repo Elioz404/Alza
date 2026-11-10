@@ -32,3 +32,26 @@ export interface SetDoorsPayload {
   state: DoorState;
   id?: string;
 }
+
+/** What a mounted 3D view holds and has done, read by the scripts through the test hook. */
+export interface SceneStats {
+  /** WebGL contexts the page has created for 3D views, and how many of them are still live */
+  contextsCreated: number;
+  contextsLive: number;
+  /** frames drawn since the view mounted */
+  frames: number;
+  /** the renderer's own count of geometries and textures it holds on the GPU */
+  geometries: number;
+  textures: number;
+  programs: number;
+  /** plan entities in the scene, and shared materials the scene holds */
+  entities: number;
+  materials: number;
+}
+
+/**
+ * Where the mounted 3D view, if any, answers what it holds. The view sets `read` while it is
+ * mounted and clears it when it goes; it is here, at the bottom layer, so the test hook can ask
+ * without importing three.js into the page's first chunk.
+ */
+export const sceneProbe: { read: (() => SceneStats) | null } = { read: null };

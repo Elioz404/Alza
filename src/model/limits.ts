@@ -134,8 +134,11 @@ export const UNDERLAY = Object.freeze({
   /** Encoding of the copy the page keeps. */
   encodeType: "image/jpeg",
   encodeQuality: 0.82,
-  /** Longest stored data URL, in characters — a sanity bound on what reaches the model. */
-  maxDataUrlChars: 8 * 1024 * 1024,
+  /**
+   * Largest stored image, in bytes — a sanity bound on what the asset store accepts as an
+   * underlay. A 1600 px JPEG at the quality above is a fraction of this.
+   */
+  maxStoredBytes: 6 * 1024 * 1024,
   /** Initial placement: the image's width in metres before calibration, and its opacity. */
   defaultWidth: 8,
   defaultOpacity: 0.55,

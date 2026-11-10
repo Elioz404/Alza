@@ -83,7 +83,11 @@ export interface KindDef {
 }
 
 export interface Underlay {
-  dataUrl: string;
+  /**
+   * The image, by id in the asset store (model/assets.ts). The bytes are not part of the plan:
+   * every plan the undo history keeps, and every get_model answer, would otherwise carry them.
+   */
+  assetId: string;
   opacity: number; // 0..1
   /** world-rect the image covers */
   x: number;
@@ -171,11 +175,12 @@ export interface ActivityEntry {
 
 export type IssueSeverity = "error" | "warning";
 
+/** A finding is read-only once made: every reader shares the one frozen list (issuesOf). */
 export interface Issue {
-  severity: IssueSeverity;
-  code: string;
-  message: string;
-  refs: string[]; // entity ids involved
+  readonly severity: IssueSeverity;
+  readonly code: string;
+  readonly message: string;
+  readonly refs: readonly string[]; // entity ids involved
 }
 
 export const emptyModel = (): PlanModel => ({

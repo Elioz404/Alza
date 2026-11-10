@@ -5,6 +5,7 @@
  */
 import { store, type AppState } from "../../src/model/store";
 import { catalogOf, type KindDef } from "../../src/model/catalog";
+import { putAsset, type AssetId } from "../../src/model/assets";
 
 const pristine: AppState = store.getState();
 
@@ -17,3 +18,9 @@ export const flush = (): Promise<void> => new Promise((resolve) => setTimeout(re
 
 /** A kind as the current plan's catalogue holds it (built-ins and the plan's own kinds). */
 export const kindOf = (kind: string): KindDef | undefined => catalogOf(store.getState().model).get(kind);
+
+/**
+ * Hold an image of `bytes` bytes in the asset store and return its id, for an underlay to name.
+ * Nothing refers to it yet, so put it in the same test step that sets the underlay.
+ */
+export const heldImage = (bytes = 4, type = "image/jpeg"): AssetId => putAsset(new Blob([new Uint8Array(bytes)], { type }));

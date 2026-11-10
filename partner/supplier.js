@@ -10,7 +10,7 @@
  */
 
 import { hostOriginsFor, resolveOrigins } from "../config/origins.js";
-import { createRequestHandler, isPlainObject } from "./protocol.js";
+import { announceReady, createRequestHandler, isPlainObject } from "./protocol.js";
 import { renderProducts } from "./view.js";
 
 const PRODUCTS = [
@@ -146,3 +146,6 @@ const registered = displayOnly ? 0 : registerTools();
 const pill = /** @type {HTMLElement} */ (document.getElementById("pill"));
 pill.textContent = displayOnly ? "display only" : registered > 0 ? `${registered} tools shared` : "tools off";
 pill.className = registered > 0 ? "pill" : "pill off";
+// The frame that owns the tools tells the studio they are in place, so it looks for them now
+// rather than after a fixed delay. A display-only copy registers nothing and says nothing.
+if (!displayOnly) announceReady({ self: window, parent: window.parent }, HOST_ORIGINS);

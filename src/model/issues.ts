@@ -11,6 +11,8 @@ import type { Issue, Item, KindDef, Opening, PlanModel, Room, Wall } from "./typ
 import {
   aabbOverlap,
   areCollinear,
+  boxOf,
+  boxesApart,
   collinearOverlap,
   dist,
   pointOnSeg,
@@ -20,6 +22,9 @@ import {
   segLen,
   segPoint,
   segmentsCross,
+  rectCorners,
+  wallAsRect,
+  type Box,
   type ORect,
   type Pt,
 } from "./geometry";
@@ -56,6 +61,17 @@ export function clampOpeningT(wall: Wall, width: number, t: number): number | nu
 
 // ---------------------------------------------------------------------------- context
 
+/** A wall with the shapes the pairwise rules test it as, computed once per check. */
+export interface WallShape {
+  readonly wall: Wall;
+  readonly a: Pt;
+  readonly b: Pt;
+  /** bounds of the centreline segment */
+  readonly segBox: Box;
+  /** bounds of the wall as a thick rectangle */
+  readonly box: Box;
+}
+
 /** An opening whose host wall exists, with the numbers several rules need. */
 export interface HostedOpening {
   readonly opening: Opening;
@@ -63,6 +79,9 @@ export interface HostedOpening {
   /** start and end of the vano along the wall, as wall parameters */
   readonly span: readonly [number, number];
   readonly center: Pt;
+  /** the floor in front of it that furniture must keep clear, and its bounds */
+  readonly clearance: ORect;
+  readonly clearanceBox: Box;
 }
 
 /** An item whose kind the catalogue knows, with its footprint on the plan. */
@@ -70,6 +89,8 @@ export interface PlacedItem {
   readonly item: Item;
   readonly def: KindDef;
   readonly rect: ORect;
+  /** bounds of the footprint */
+  readonly box: Box;
 }
 
 /** What every rule reads, computed once per check. */
@@ -77,33 +98,70 @@ export interface CheckContext {
   readonly model: PlanModel;
   readonly wallById: ReadonlyMap<string, Wall>;
   readonly catalog: Catalog;
+  readonly walls: readonly WallShape[];
   readonly hosted: readonly HostedOpening[];
+  /** the hosted openings of each wall, by wall id */
+  readonly hostedOn: ReadonlyMap<string, readonly HostedOpening[]>;
   readonly placed: readonly PlacedItem[];
 }
 
 /** One check over the plan. */
 export type Rule = (ctx: CheckContext) => Issue[];
 
+/** The floor in front of an opening furniture must keep clear: a door's swing, a window's reach. */
+function clearanceOf(wall: Wall, o: Opening, center: Pt): ORect {
+  return {
+    cx: center.x,
+    cy: center.y,
+    hw: o.width / 2 + DOOR_CLEAR,
+    hd: wall.thickness / 2 + (o.kind === "door" ? 0.8 : 0.4),
+    rot: Math.atan2(wall.by - wall.ay, wall.bx - wall.ax),
+  };
+}
+
 export function checkContext(model: PlanModel): CheckContext {
   const wallById = new Map(model.walls.map((w) => [w.id, w]));
   const catalog = catalogOf(model);
+  const walls = model.walls.map((wall): WallShape => {
+    const a = wA(wall);
+    const b = wB(wall);
+    return {
+      wall,
+      a,
+      b,
+      segBox: boxOf([a, b]),
+      box: boxOf(rectCorners(wallAsRect(wall.ax, wall.ay, wall.bx, wall.by, wall.thickness))),
+    };
+  });
   const hosted: HostedOpening[] = [];
+  const hostedOn = new Map<string, HostedOpening[]>();
   for (const opening of model.openings) {
     const wall = wallById.get(opening.wallId);
-    if (wall) hosted.push({ opening, wall, span: openingSpan(wall, opening), center: openingCenter(wall, opening) });
+    if (!wall) continue;
+    const center = openingCenter(wall, opening);
+    const clearance = clearanceOf(wall, opening, center);
+    const h: HostedOpening = {
+      opening,
+      wall,
+      span: openingSpan(wall, opening),
+      center,
+      clearance,
+      clearanceBox: boxOf(rectCorners(clearance)),
+    };
+    hosted.push(h);
+    const list = hostedOn.get(wall.id);
+    if (list) list.push(h);
+    else hostedOn.set(wall.id, [h]);
   }
   const placed: PlacedItem[] = [];
   for (const item of model.items) {
     const def = catalog.get(item.kind);
     if (def) {
-      placed.push({
-        item,
-        def,
-        rect: { cx: item.x, cy: item.y, hw: def.w / 2, hd: def.d / 2, rot: (-item.rotation * Math.PI) / 180 },
-      });
+      const rect: ORect = { cx: item.x, cy: item.y, hw: def.w / 2, hd: def.d / 2, rot: (-item.rotation * Math.PI) / 180 };
+      placed.push({ item, def, rect, box: boxOf(rectCorners(rect)) });
     }
   }
-  return { model, wallById, catalog, hosted, placed };
+  return { model, wallById, catalog, walls, hosted, hostedOn, placed };
 }
 
 /** The four edges of a room, clockwise from its top-left corner. */
@@ -131,13 +189,17 @@ export const wallTooShort: Rule = ({ model }) =>
   });
 
 /** Pairs of walls that overlap collinearly, or else cross mid-span (T-junctions at endpoints are legal). */
-export const wallIntersections: Rule = ({ model: { walls } }) => {
+export const wallIntersections: Rule = ({ walls }) => {
   const issues: Issue[] = [];
   for (let i = 0; i < walls.length; i++) {
     for (let j = i + 1; j < walls.length; j++) {
-      const a = walls[i];
-      const b = walls[j];
-      const ov = collinearOverlap(wA(a), wB(a), wA(b), wB(b));
+      const sa = walls[i];
+      const sb = walls[j];
+      // segments whose bounds are apart can neither overlap nor cross
+      if (boxesApart(sa.segBox, sb.segBox)) continue;
+      const a = sa.wall;
+      const b = sb.wall;
+      const ov = collinearOverlap(sa.a, sa.b, sb.a, sb.b);
       if (ov > 0.01) {
         issues.push({
           severity: "error",
@@ -145,7 +207,7 @@ export const wallIntersections: Rule = ({ model: { walls } }) => {
           message: `Walls ${a.id} and ${b.id} overlap collinearly for ${(ov * 100).toFixed(0)} cm.`,
           refs: [a.id, b.id],
         });
-      } else if (!areCollinear(wA(a), wB(a), wA(b), wB(b)) && segmentsCross(wA(a), wB(a), wA(b), wB(b))) {
+      } else if (!areCollinear(sa.a, sa.b, sb.a, sb.b) && segmentsCross(sa.a, sa.b, sb.a, sb.b)) {
         issues.push({
           severity: "error",
           code: "walls_cross",
@@ -159,17 +221,17 @@ export const wallIntersections: Rule = ({ model: { walls } }) => {
 };
 
 /** An endpoint that touches nothing (T-junctions count as connected). */
-export const wallLooseEnds: Rule = ({ model: { walls } }) => {
+export const wallLooseEnds: Rule = ({ walls }) => {
   if (walls.length <= 1) return [];
   const issues: Issue[] = [];
-  for (const w of walls) {
-    for (const end of [wA(w), wB(w)] as const) {
+  for (const { wall: w, a, b } of walls) {
+    for (const end of [a, b] as const) {
       const connected = walls.some(
         (other) =>
-          other.id !== w.id &&
-          (dist(end, wA(other)) < ENDPOINT_SNAP ||
-            dist(end, wB(other)) < ENDPOINT_SNAP ||
-            pointOnSeg(end, wA(other), wB(other), ENDPOINT_SNAP)),
+          other.wall.id !== w.id &&
+          (dist(end, other.a) < ENDPOINT_SNAP ||
+            dist(end, other.b) < ENDPOINT_SNAP ||
+            pointOnSeg(end, other.a, other.b, ENDPOINT_SNAP)),
       );
       if (!connected) {
         issues.push({
@@ -220,11 +282,12 @@ export const openingFit: Rule = ({ hosted }) =>
   });
 
 /** Two openings on the same wall whose spans overlap. Each pair is reported once. */
-export const openingsOverlap: Rule = ({ hosted }) => {
+export const openingsOverlap: Rule = ({ hosted, hostedOn }) => {
   const issues: Issue[] = [];
   for (const a of hosted) {
-    for (const b of hosted) {
-      if (b.opening.id <= a.opening.id || b.wall.id !== a.wall.id) continue;
+    // only openings on the same wall can overlap
+    for (const b of hostedOn.get(a.wall.id) ?? []) {
+      if (b.opening.id <= a.opening.id) continue;
       if (Math.min(a.span[1], b.span[1]) - Math.max(a.span[0], b.span[0]) > 1e-6) {
         issues.push({
           severity: "error",
@@ -344,12 +407,12 @@ export const itemUnknown: Rule = ({ model, catalog }) =>
     }));
 
 /** Touching a wall (leaning) is legal; crossing through it is an error. */
-export const itemThroughWall: Rule = ({ model: { walls }, placed }) =>
-  placed.flatMap(({ item, def, rect }) =>
+export const itemThroughWall: Rule = ({ walls, placed }) =>
+  placed.flatMap(({ item, def, rect, box }) =>
     walls
       // tolerance 0.02: penetration up to 2 cm still counts as "leaning"
-      .filter((w) => satRectWall(rect, w, 0.02))
-      .map((w): Issue => ({
+      .filter((s) => !boxesApart(box, s.box) && satRectWall(rect, s.wall, 0.02))
+      .map(({ wall: w }): Issue => ({
         severity: "error",
         code: "item_through_wall",
         message: `${kindName(def)} crosses wall ${w.id}.`,
@@ -360,16 +423,9 @@ export const itemThroughWall: Rule = ({ model: { walls }, placed }) =>
 /** Furniture in an opening's clearance: a door is blocked outright, a window only above its sill. */
 export const itemBlocksOpening: Rule = ({ hosted, placed }) => {
   const issues: Issue[] = [];
-  for (const { item, def, rect } of placed) {
-    for (const { opening: o, wall, center } of hosted) {
-      const clearance: ORect = {
-        cx: center.x,
-        cy: center.y,
-        hw: o.width / 2 + DOOR_CLEAR,
-        hd: wall.thickness / 2 + (o.kind === "door" ? 0.8 : 0.4),
-        rot: Math.atan2(wall.by - wall.ay, wall.bx - wall.ax),
-      };
-      if (!satRectRect(rect, clearance)) continue;
+  for (const { item, def, rect, box } of placed) {
+    for (const { opening: o, clearance, clearanceBox } of hosted) {
+      if (boxesApart(box, clearanceBox) || !satRectRect(rect, clearance)) continue;
       if (o.kind === "door") {
         issues.push({
           severity: "error",
@@ -397,7 +453,7 @@ export const itemsOverlap: Rule = ({ placed }) => {
     if (a.def.isRug) continue;
     for (const b of placed) {
       if (b.item.id <= a.item.id || b.def.isRug) continue;
-      if (satRectRect(a.rect, b.rect, 0.01)) {
+      if (!boxesApart(a.box, b.box) && satRectRect(a.rect, b.rect, 0.01)) {
         issues.push({
           severity: "error",
           code: "items_overlap",
@@ -452,4 +508,22 @@ export const RULES: readonly Rule[] = Object.freeze([
 export function checkModel(model: PlanModel, rules: readonly Rule[] = RULES): Issue[] {
   const ctx = checkContext(model);
   return rules.flatMap((rule) => rule(ctx));
+}
+
+/** Every plan's full check, computed once. Plans are immutable, so a plan's issues never change. */
+const issuesByModel = new WeakMap<PlanModel, readonly Issue[]>();
+
+/**
+ * The plan's issues under every rule: the derived value the sidebar's badge, its Check tab and
+ * the get_issues tool all read. It is computed the first time a plan object is asked about and
+ * kept for as long as that object lives, so a render, a tab switch or an agent asking twice
+ * costs nothing. Frozen, because every reader shares the one list.
+ */
+export function issuesOf(model: PlanModel): readonly Issue[] {
+  let issues = issuesByModel.get(model);
+  if (!issues) {
+    issues = Object.freeze(checkModel(model).map((i) => Object.freeze({ ...i, refs: Object.freeze([...i.refs]) })));
+    issuesByModel.set(model, issues);
+  }
+  return issues;
 }

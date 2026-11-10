@@ -27,6 +27,7 @@ import type {
   Wall,
 } from "./types";
 import { emptyModel } from "./types";
+import { imageAssetError, letGoOfAsset, releaseUnreferencedAssets, type AssetId } from "./assets";
 import { clampOpeningT } from "./issues";
 import { segLen, snap } from "./geometry";
 import {
@@ -70,7 +71,6 @@ import {
   SUPPLIER,
   SWING_SIDES,
   TEXT,
-  UNDERLAY,
   UNDERLAY_PIXELS,
   UNDERLAY_SIZE,
   WALL_DEFAULTS,
@@ -171,6 +171,37 @@ export const store = createStore<AppState>(() => ({
 }));
 
 // ---------------------------------------------------------------------------
+// Assets: an image is kept while the plan or its undo history refers to it
+// ---------------------------------------------------------------------------
+
+/** The assets `state` refers to: its plan's, and those of every plan its undo history keeps. */
+export function referencedAssets(state: Pick<AppState, "model" | "undoStack">): Set<AssetId> {
+  const ids = new Set<AssetId>();
+  if (state.model.underlay) ids.add(state.model.underlay.assetId);
+  for (const step of state.undoStack) if (step.model.underlay) ids.add(step.model.underlay.assetId);
+  return ids;
+}
+
+/** Release every asset that is not held and that neither the plan nor its undo history refers to. */
+export const collectAssets = (): number => releaseUnreferencedAssets(referencedAssets(store.getState()));
+
+/**
+ * Let go of an asset put for a change (an upload, once its set_underlay has been dispatched):
+ * from now on the plans that refer to it keep it, and if none does — the change was refused —
+ * it is released at once.
+ */
+export function releaseHeldAsset(id: AssetId): void {
+  letGoOfAsset(id);
+  collectAssets();
+}
+
+// After every change to the plan or the history, whatever neither refers to any more is
+// released — an image leaves memory with the last undo step that held it.
+store.subscribe((s, prev) => {
+  if (s.model !== prev.model || s.undoStack !== prev.undoStack) releaseUnreferencedAssets(referencedAssets(s));
+});
+
+// ---------------------------------------------------------------------------
 // Activity log
 // ---------------------------------------------------------------------------
 
@@ -265,12 +296,8 @@ const isCategory = (c: unknown): c is ItemCategory => isOneOf(c, ITEM_CATEGORIES
  * underlay that setUnderlay (and so the opacity slider, which goes through it) would refuse.
  */
 function underlayError(u: Underlay): string | null {
-  const { dataUrl } = u;
   return firstError(
-    typeof dataUrl === "string" && dataUrl.startsWith("data:image/") ? null : "dataUrl must be a data:image/… URL.",
-    typeof dataUrl === "string" && dataUrl.length > UNDERLAY.maxDataUrlChars
-      ? `The underlay image is too large to keep (${dataUrl.length} characters, max ${UNDERLAY.maxDataUrlChars}).`
-      : null,
+    imageAssetError(u.assetId),
     numbersError(
       ["opacity", u.opacity, OPACITY],
       ["x", u.x, COORD], ["y", u.y, COORD],
@@ -599,10 +626,13 @@ const planActions = {
   /**
    * Replace the whole plan, e.g. with the demo loft. Undoable like any other edit. A plan that
    * arrives as data (parsed JSON) has its kinds frozen on the way in, like every kind it holds.
+   * Its underlay is kept only if it is one setUnderlay would accept: a plan saved in another
+   * session names an image by an id this page does not hold, and the bytes do not travel with it.
    */
   loadModel(model: PlanModel): ActionResult {
+    const underlay = model.underlay && !underlayError(model.underlay) ? model.underlay : null;
     pushUndo();
-    setModel({ ...model, kinds: model.kinds.map(freezeKind) });
+    setModel({ ...model, kinds: model.kinds.map(freezeKind), underlay });
     return ok(`Plan "${model.name}" loaded: ${model.walls.length} walls, ${model.rooms.length} rooms, ${model.items.length} items.`);
   },
 
@@ -753,8 +783,9 @@ const planActions = {
     const { undoStack } = store.getState();
     if (undoStack.length === 0) return fail("Nothing to undo.");
     const prev = undoStack[undoStack.length - 1];
-    store.setState({ undoStack: undoStack.slice(0, -1), notes: prev.notes });
-    setModel(prev.model);
+    // one update: between popping the step and restoring its plan, nothing would refer to that
+    // plan's image, and the asset collection would release it
+    store.setState({ undoStack: undoStack.slice(0, -1), notes: prev.notes, model: prev.model, lastChangeAt: Date.now() });
     return ok("Undone.");
   },
 };

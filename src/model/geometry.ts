@@ -185,3 +185,37 @@ export const pointInAabb = (
 
 export const clamp = (v: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, v));
+
+// ---------------------------------------------------------------------------
+// Bounding boxes — a cheap first test before an exact one
+// ---------------------------------------------------------------------------
+
+/** An axis-aligned bounding box, by its extremes. */
+export interface Box {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+export function boxOf(pts: readonly Pt[]): Box {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * True when two boxes are strictly apart. Shapes whose boxes are apart cannot touch, cross or
+ * overlap, so an exact test (SAT, a segment crossing) between them can be skipped: this never
+ * rejects a pair the exact test would accept, it only spares the work of asking.
+ */
+export const boxesApart = (a: Box, b: Box): boolean =>
+  a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY;

@@ -25,6 +25,40 @@ export const ECHOED_TOOL_NAME_MAX_LENGTH = 64;
 export const REPLY_TIMEOUT_MS = 8000;
 
 /**
+ * The partner's "loaded" signal: { [READY_TAG]: true }, posted to the studio that embeds the
+ * frame once the partner has registered its WebMCP tools (or found it has no runtime to
+ * register them with). The studio waits for this, or for the runtime's `toolchange`, before it
+ * looks for the partner's tools a second time — instead of guessing how long a frame takes.
+ */
+export const READY_TAG = "__alzaSupplierReady";
+/**
+ * How long the studio waits for that signal before looking a second time anyway and settling
+ * for what it finds. Later registrations still arrive through `toolchange`.
+ */
+export const READY_TIMEOUT_MS = 5000;
+
+/**
+ * @param {unknown} data
+ * @returns {boolean}
+ */
+export const isReadyMessage = (data) => isPlainObject(data) && data[READY_TAG] === true;
+
+/**
+ * Tell the embedding page this frame is ready. Posted once per trusted studio origin: the
+ * browser delivers a message only when its target origin is the parent's, so the others are
+ * dropped and nothing reaches a page that is not on the list. A frame that is not embedded
+ * has nobody to tell.
+ *
+ * @param {{ self: unknown, parent: { postMessage(m: unknown, o: string): void } | null }} win
+ * @param {readonly string[]} origins
+ */
+export function announceReady(win, origins) {
+  const parent = win.parent;
+  if (!parent || parent === win.self) return;
+  for (const origin of origins) parent.postMessage({ [READY_TAG]: true }, origin);
+}
+
+/**
  * @typedef {{ name: string, run: (input: Record<string, unknown>) => unknown }} PartnerTool
  * @typedef {{ kind: "ignore" }
  *   | { kind: "reject", id: string, error: string }

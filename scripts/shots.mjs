@@ -63,7 +63,7 @@ await page.waitForTimeout(700);
 await hook.evaluate(
   (h, { url, span }) =>
     h.actions.setUnderlay({
-      dataUrl: url, opacity: 0.55,
+      assetId: h.putImage(url), opacity: 0.55,
       x: -(333 / 2048) * span, y: -(222 / 2048) * span, w: span, h: span,
     }),
   { url: dataUrl, span: SPAN },

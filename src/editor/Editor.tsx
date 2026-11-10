@@ -13,7 +13,9 @@ import type { Opening, Wall } from "../model/types";
 import { snap, segLen, segPoint } from "../model/geometry";
 import { openingSpan } from "../model/issues";
 import { catalogOf } from "../model/catalog";
+import { assetUrl } from "../model/assets";
 import { useGesture } from "../ui/useGesture";
+import { isTypingTarget } from "../ui/keys";
 import { DEFAULT_FLOOR, ROOM_SIZE, WALL_DEFAULTS, WALL_MIN_LENGTH, type FloorFinish } from "../model/limits";
 
 interface View {
@@ -100,7 +102,7 @@ export function Editor() {
   useEffect(() => {
     const human = { actor: "human" } as const;
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "TEXTAREA") return;
+      if (isTypingTarget(e.target)) return;
       if (e.key === "Escape") {
         pageActions.setDrawMode("select");
         setRoomStart(null);
@@ -248,6 +250,8 @@ export function Editor() {
   const S = view.scale;
   const wallById = new Map(model.walls.map((w) => [w.id, w]));
   const catalog = catalogOf(model);
+  // the image is held by the asset store; the plan only names it
+  const underlayUrl = model.underlay ? assetUrl(model.underlay.assetId) : null;
 
   const renderOpening = (o: Opening) => {
     const wall = wallById.get(o.wallId);
@@ -312,9 +316,9 @@ export function Editor() {
       {gridLines}
 
       {/* blueprint underlay */}
-      {model.underlay && (
+      {underlayUrl && model.underlay && (
         <image
-          href={model.underlay.dataUrl}
+          href={underlayUrl}
           x={model.underlay.x * S}
           y={model.underlay.y * S}
           width={model.underlay.w * S}

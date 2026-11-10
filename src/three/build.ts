@@ -2,6 +2,15 @@
  * 3D builder — extrudes the plan into a dollhouse-style model:
  * walls with REAL openings (lintels + sills, no CSG), resolved corner joints,
  * per-room floors with finishes, ground plane.
+ *
+ * Each function here builds one piece of the plan from plain data and touches nothing else, so
+ * the scene (planScene.ts) can rebuild exactly the pieces a change affects. What a piece
+ * depends on beyond its own entity — a wall's joints with its neighbours, whether a window has
+ * room for curtains — is computed here too, from the whole plan, and handed to the builder.
+ *
+ * The materials below are static (materials.ts): every wall shares them and they are never
+ * disposed with a piece. A floor owns its material, because each room repeats its texture to
+ * its own size.
  */
 
 import * as THREE from "three";
@@ -10,45 +19,50 @@ import { catalogOf, type Catalog } from "../model/catalog";
 import { segLen } from "../model/geometry";
 import { openingSpan } from "../model/issues";
 import { WALL_DEFAULTS, type FloorFinish } from "../model/limits";
+import { keepStatic } from "./materials";
+import { FLOOR_TOP } from "./config";
 
-export const wallMaterial = new THREE.MeshStandardMaterial({
-  color: "#f2ede4",
-  roughness: 0.93,
-  metalness: 0.0,
-});
-export const wallTopMaterial = new THREE.MeshStandardMaterial({
-  color: "#d9d2c5",
-  roughness: 0.9,
-});
-export const glassMaterial = new THREE.MeshPhysicalMaterial({
-  color: "#bcd8e8",
-  roughness: 0.05,
-  metalness: 0,
-  transparent: true,
-  opacity: 0.28,
-  side: THREE.DoubleSide,
-});
-export const frameMaterial = new THREE.MeshStandardMaterial({ color: "#6b5d4f", roughness: 0.6 });
+const standard = (params: THREE.MeshStandardMaterialParameters) => keepStatic(new THREE.MeshStandardMaterial(params));
 
-export const doorLeafMaterial = new THREE.MeshStandardMaterial({ color: "#e5ddd0", roughness: 0.5 });
-export const doorPanelMaterial = new THREE.MeshStandardMaterial({ color: "#d8cfc0", roughness: 0.55 });
-export const skirtingMaterial = new THREE.MeshStandardMaterial({ color: "#fbf8f2", roughness: 0.55 });
-export const handleMaterial = new THREE.MeshStandardMaterial({ color: "#b9a26a", roughness: 0.3, metalness: 0.8 });
+export const wallMaterial = standard({ color: "#f2ede4", roughness: 0.93, metalness: 0.0 });
+export const wallTopMaterial = standard({ color: "#d9d2c5", roughness: 0.9 });
+export const glassMaterial = keepStatic(
+  new THREE.MeshPhysicalMaterial({
+    color: "#bcd8e8",
+    roughness: 0.05,
+    metalness: 0,
+    transparent: true,
+    opacity: 0.28,
+    side: THREE.DoubleSide,
+  }),
+);
+export const frameMaterial = standard({ color: "#6b5d4f", roughness: 0.6 });
 
-export const sillMaterial = new THREE.MeshStandardMaterial({ color: "#efeae0", roughness: 0.6 });
-export const curtainMaterial = new THREE.MeshStandardMaterial({ color: "#ded5c6", roughness: 0.97 });
-export const lampShadeMaterial = new THREE.MeshStandardMaterial({
+export const doorLeafMaterial = standard({ color: "#e5ddd0", roughness: 0.5 });
+export const doorPanelMaterial = standard({ color: "#d8cfc0", roughness: 0.55 });
+export const skirtingMaterial = standard({ color: "#fbf8f2", roughness: 0.55 });
+export const handleMaterial = standard({ color: "#b9a26a", roughness: 0.3, metalness: 0.8 });
+
+export const sillMaterial = standard({ color: "#efeae0", roughness: 0.6 });
+export const curtainMaterial = standard({ color: "#ded5c6", roughness: 0.97 });
+// double-sided: the shade is an open cone, seen from below as well as from above
+export const lampShadeMaterial = standard({
   color: "#fdf6e6",
   roughness: 0.6,
   emissive: new THREE.Color("#ffe9bd"),
   emissiveIntensity: 0.9,
+  side: THREE.DoubleSide,
 });
-export const cableMaterial = new THREE.MeshStandardMaterial({ color: "#3a3733", roughness: 0.8 });
+export const cableMaterial = standard({ color: "#3a3733", roughness: 0.8 });
 
 const SKIRTING_H = 0.09;
 const DOOR_SWING = (82 * Math.PI) / 180;
 
-/** Procedural floor finishes — one canvas per finish, cloned per room so each gets its own repeat. */
+/**
+ * Procedural floor finishes — one canvas per finish, cloned per room so each gets its own
+ * repeat. The canvases are static: a clone shares its canvas and its upload, and only the
+ * clone is the room's to dispose.
+ */
 const texCache = new Map<FloorFinish, THREE.CanvasTexture>();
 function floorTexture(kind: FloorFinish): THREE.CanvasTexture | null {
   if (typeof document === "undefined") return null;
@@ -128,6 +142,7 @@ function floorTexture(kind: FloorFinish): THREE.CanvasTexture | null {
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
+  keepStatic(tex);
   texCache.set(kind, tex);
   return tex;
 }
@@ -142,8 +157,13 @@ const FLOOR_COLORS: Record<FloorFinish, string> = {
   concrete: "#a5a5a0",
 };
 
-/** Endpoints that touch another wall get extended by half the partner thickness → clean joints. */
-function jointExtensions(wall: Wall, walls: Wall[]): [number, number] {
+/**
+ * How far a wall's two ends reach past its endpoints: an end that touches another wall is
+ * extended by half the partner's thickness, for a clean joint. This is the one thing a wall's
+ * shape takes from its neighbours, so a neighbour that moves changes a wall exactly when it
+ * changes these two numbers.
+ */
+export function jointExtensions(wall: Wall, walls: readonly Wall[]): [number, number] {
   const a = { x: wall.ax, y: wall.ay };
   const b = { x: wall.bx, y: wall.by };
   let extA = 0;
@@ -193,11 +213,19 @@ function box(
   return m;
 }
 
-/** Build one wall with its openings as solid segments + lintels + sills + glass. */
-function buildWall(wall: Wall, openings: Opening[], walls: Wall[], curtained: Set<string>): THREE.Group {
+/**
+ * Build one wall with its openings as solid segments + lintels + sills + glass. `ext` is what
+ * jointExtensions() gives for it, and `curtained` the windows that have room for curtains.
+ */
+export function buildWall(
+  wall: Wall,
+  openings: readonly Opening[],
+  ext: readonly [number, number],
+  curtained: ReadonlySet<string>,
+): THREE.Group {
   const g = new THREE.Group();
   const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
-  const [extA, extB] = jointExtensions(wall, walls);
+  const [extA, extB] = ext;
   const total = len + extA + extB;
   const angle = Math.atan2(wall.by - wall.ay, wall.bx - wall.ax);
   // local frame: origin at wall start (extended), x along the wall
@@ -345,7 +373,8 @@ function buildWall(wall: Wall, openings: Opening[], walls: Wall[], curtained: Se
   return g;
 }
 
-function buildFloor(room: Room): THREE.Mesh {
+/** A room's floor slab, textured with its finish. The material and its texture repeat are the floor's own. */
+export function buildFloor(room: Room): THREE.Mesh {
   const color = FLOOR_COLORS[room.floor];
   const mat = new THREE.MeshStandardMaterial({ color, roughness: room.floor === "carpet" ? 1 : 0.72 });
   const base = floorTexture(room.floor);
@@ -358,15 +387,15 @@ function buildFloor(room: Room): THREE.Mesh {
     mat.color.set("#ffffff");
     if (room.floor === "tile") mat.roughness = 0.4;
   }
-  const geo = new THREE.BoxGeometry(room.w, 0.04, room.h);
+  const geo = new THREE.BoxGeometry(room.w, FLOOR_TOP, room.h);
   const m = new THREE.Mesh(geo, mat);
-  m.position.set(room.x + room.w / 2, 0.02, room.y + room.h / 2);
+  m.position.set(room.x + room.w / 2, FLOOR_TOP / 2, room.y + room.h / 2);
   m.receiveShadow = true;
   return m;
 }
 
 /** A pendant fixture plus the point light it stands for, hung over a room's centre. */
-function buildPendant(room: Room, ceiling: number): THREE.Group {
+export function buildPendant(room: Room, ceiling: number): THREE.Group {
   const g = new THREE.Group();
   const drop = Math.min(0.55, ceiling * 0.22);
   const shadeY = ceiling - drop;
@@ -374,7 +403,6 @@ function buildPendant(room: Room, ceiling: number): THREE.Group {
   cable.position.set(0, ceiling - drop / 2, 0);
   g.add(cable);
   const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.19, 0.17, 20, 1, true), lampShadeMaterial);
-  shade.material.side = THREE.DoubleSide;
   shade.position.set(0, shadeY, 0);
   g.add(shade);
   const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), lampShadeMaterial);
@@ -389,13 +417,8 @@ function buildPendant(room: Room, ceiling: number): THREE.Group {
   return g;
 }
 
-export interface BuiltPlan {
-  group: THREE.Group;
-  bounds: THREE.Box3;
-}
-
 /** Is a piece of furniture parked within curtain depth of this window? */
-function blockedInFront(wall: Wall, o: Opening, items: Item[], catalog: Catalog): boolean {
+function blockedInFront(wall: Wall, o: Opening, items: readonly Item[], catalog: Catalog): boolean {
   const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
   if (len === 0) return true;
   const dx = (wall.bx - wall.ax) / len;
@@ -415,54 +438,45 @@ function blockedInFront(wall: Wall, o: Opening, items: Item[], catalog: Catalog)
   return false;
 }
 
-export function buildPlan(model: PlanModel): BuiltPlan {
-  const group = new THREE.Group();
-  group.name = "plan";
-
-  const openingsByWall = new Map<string, Opening[]>();
+/** Each wall's openings, by wall id. */
+export function openingsByWall(model: PlanModel): Map<string, Opening[]> {
+  const byWall = new Map<string, Opening[]>();
   for (const o of model.openings) {
-    const list = openingsByWall.get(o.wallId) ?? [];
-    list.push(o);
-    openingsByWall.set(o.wallId, list);
+    const list = byWall.get(o.wallId);
+    if (list) list.push(o);
+    else byWall.set(o.wallId, [o]);
   }
+  return byWall;
+}
 
-  // A window only gets curtains when the floor in front of it is free — otherwise the
-  // fabric would grow straight through a sofa or a wardrobe.
+/**
+ * The windows that get curtains: only those with the floor in front of them free — otherwise
+ * the fabric would grow straight through a sofa or a wardrobe.
+ */
+export function curtainedWindows(model: PlanModel, byWall = openingsByWall(model)): Set<string> {
   const catalog = catalogOf(model);
   const curtained = new Set<string>();
   for (const w of model.walls) {
-    for (const o of openingsByWall.get(w.id) ?? []) {
+    for (const o of byWall.get(w.id) ?? []) {
       if (o.kind !== "window") continue;
       if (!blockedInFront(w, o, model.items, catalog)) curtained.add(o.id);
     }
   }
+  return curtained;
+}
 
-  for (const w of model.walls) {
-    group.add(buildWall(w, openingsByWall.get(w.id) ?? [], model.walls, curtained));
-  }
-  for (const r of model.rooms) {
-    group.add(buildFloor(r));
-  }
-  const ceiling = model.walls[0]?.height ?? WALL_DEFAULTS.height;
-  for (const r of model.rooms) {
-    group.add(buildPendant(r, ceiling));
-  }
+/** The ceiling the pendants hang from: the plan's first wall, or a standard wall's height. */
+export const ceilingOf = (model: PlanModel): number => model.walls[0]?.height ?? WALL_DEFAULTS.height;
 
-  // bounds of the CONTENT only (ground would blow up the camera fit)
-  const bounds = new THREE.Box3().setFromObject(group);
-  if (model.walls.length === 0) {
-    bounds.set(new THREE.Vector3(-4, 0, -3), new THREE.Vector3(4, 3, 3));
-  }
-
-  // ground plane (outside the plan)
+/** The ground around the plan. It has nothing to do with the plan's content, so it is built once per scene. */
+export function buildGround(): THREE.Mesh {
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(40, 64),
     new THREE.MeshStandardMaterial({ color: "#565b52", roughness: 1 }),
   );
+  ground.name = "ground";
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.02;
   ground.receiveShadow = true;
-  group.add(ground);
-
-  return { group, bounds };
+  return ground;
 }

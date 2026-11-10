@@ -26,7 +26,14 @@ import { clip, describeIssues, furnitureDim, hexColor, inRange, label, supplierS
 import { callRemoteTool, discoverTools, type ModelContextLike, type RemoteTool } from "./registry";
 import { isAllowedOrigin, resolveOrigins, supplierOriginFor } from "../../config/origins.js";
 import { PARTNER_PAGE_PATH } from "../../config/sites.js";
-import { MESSAGE_ID_MAX_LENGTH, REPLY_TIMEOUT_MS, REQUEST_TAG, RESULT_TAG } from "../../partner/protocol.js";
+import {
+  MESSAGE_ID_MAX_LENGTH,
+  READY_TIMEOUT_MS,
+  REPLY_TIMEOUT_MS,
+  REQUEST_TAG,
+  RESULT_TAG,
+  isReadyMessage,
+} from "../../partner/protocol.js";
 
 /**
  * The origins this build talks to, from config/origins.js: baked in at build time from
@@ -164,9 +171,35 @@ let frame: Window | null = null;
 let msgSeq = 0;
 const pending = new Map<string, (payload: Reply) => void>();
 
+/** Set once the partner frame has said it is loaded (partner/protocol.js → announceReady). */
+let partnerReady = false;
+/** Whoever is waiting for the partner to show up: its ready message, or a toolchange. */
+const partnerWaiters = new Set<() => void>();
+const partnerSignalled = () => {
+  for (const wake of [...partnerWaiters]) wake();
+};
+
+/** Resolves on the next sign of the partner, or after `timeoutMs` — whichever comes first. */
+function nextPartnerSignal(timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const wake = () => {
+      clearTimeout(timer);
+      partnerWaiters.delete(wake);
+      resolve();
+    };
+    const timer = setTimeout(wake, timeoutMs);
+    partnerWaiters.add(wake);
+  });
+}
+
 window.addEventListener("message", (e: MessageEvent) => {
   if (!isAllowedOrigin(e.origin, [SUPPLIER_ORIGIN])) return;
   const data: unknown = e.data;
+  if (isReadyMessage(data)) {
+    partnerReady = true;
+    partnerSignalled();
+    return;
+  }
   // only a reply to a call still waiting is looked at; anything else is not addressed to us
   const id = (data as { id?: unknown } | null)?.id;
   if (typeof id !== "string") return;
@@ -198,21 +231,55 @@ export function supplierToolNames(): string[] {
   return remoteTools.map((t) => t.name);
 }
 
-/** Discover the partner's tools. Runs once at bootstrap and again whenever tools change. */
+/** Ask the runtime again which tools the partner shares, and keep what it answers. */
+async function refreshSupplierTools(mc: ModelContextLike): Promise<RemoteTool[]> {
+  const found = await discoverTools(mc, [SUPPLIER_ORIGIN]);
+  // a newer connectSupplier may have replaced the runtime while this one was asking
+  if (modelContext !== mc) return found;
+  remoteTools = found;
+  actions.setSupplierTools(found.map((t) => t.name));
+  return found;
+}
+
+/** The runtimes whose `toolchange` this module already listens to: one listener each, ever. */
+const listeningTo = new WeakSet<ModelContextLike>();
+
+function listenForToolChanges(mc: ModelContextLike): void {
+  if (listeningTo.has(mc)) return;
+  listeningTo.add(mc);
+  mc.addEventListener?.("toolchange", () => {
+    partnerSignalled();
+    if (modelContext === mc) void refreshSupplierTools(mc);
+  });
+}
+
+/**
+ * Discover the partner's tools, once at bootstrap. Later changes arrive through the runtime's
+ * `toolchange` event, which is listened to once per runtime however often this runs.
+ *
+ * The partner registers its tools as its own frame loads, which can be after this page has
+ * booted. When the first look finds nothing and the partner had not said it was ready when that
+ * look began, a second look follows: at once if the ready message arrived meanwhile, otherwise
+ * after the partner's ready message or a `toolchange` — bounded by READY_TIMEOUT_MS
+ * (partner/protocol.js) — rather than after a guessed delay.
+ */
 export async function connectSupplier(mc: ModelContextLike | null): Promise<void> {
   modelContext = mc;
   if (!mc?.getTools) {
+    remoteTools = [];
     actions.setSupplierTools([]);
     return;
   }
-  let found = await discoverTools(mc, [SUPPLIER_ORIGIN]);
-  if (found.length === 0) {
-    // the partner iframe registers its tools on its own load; give it a beat and look again
-    await new Promise((r) => setTimeout(r, 1200));
-    found = await discoverTools(mc, [SUPPLIER_ORIGIN]);
+  listenForToolChanges(mc);
+  // Readiness is read before the first look, not after it: a ready message that lands while
+  // that look is still in flight means the partner registered after the snapshot was taken,
+  // so an empty answer is stale and only a second look can see its tools.
+  const readyBefore = partnerReady;
+  let found = await refreshSupplierTools(mc);
+  if (found.length === 0 && !readyBefore) {
+    if (!partnerReady) await nextPartnerSignal(READY_TIMEOUT_MS);
+    found = await refreshSupplierTools(mc);
   }
-  remoteTools = found;
-  actions.setSupplierTools(found.map((t) => t.name));
   if (found.length > 0) {
     logActivity(
       "system",
@@ -221,12 +288,6 @@ export async function connectSupplier(mc: ModelContextLike | null): Promise<void
       true,
     );
   }
-  mc.addEventListener?.("toolchange", () => {
-    void discoverTools(mc, [SUPPLIER_ORIGIN]).then((t) => {
-      remoteTools = t;
-      actions.setSupplierTools(t.map((x) => x.name));
-    });
-  });
 }
 
 async function viaPostMessage(tool: string, args: Record<string, unknown>): Promise<unknown> {
@@ -277,7 +338,7 @@ export async function callSupplier<S extends z.ZodType>(
   } catch (err) {
     // a descriptor can outlive its frame; refresh the list once before giving up on WebMCP
     console.warn("[webmcp] cross-origin call failed, re-discovering", err);
-    await connectSupplier(modelContext);
+    if (modelContext) await refreshSupplierTools(modelContext);
     try {
       text = await attempt();
     } catch {

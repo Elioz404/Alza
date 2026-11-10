@@ -17,7 +17,7 @@
 import { z } from "zod";
 import { actions, store, type ActionResult } from "../model/store";
 import type { Actor } from "../model/commands";
-import { checkModel } from "../model/issues";
+import { issuesOf } from "../model/issues";
 import { catalogOf, kindName, type KindDef } from "../model/catalog";
 import { lookupItem, lookupOpening, lookupRoom, lookupWall, type Lookup } from "../model/resolve";
 import type { PlanModel } from "../model/types";
@@ -185,7 +185,7 @@ export const TOOLS: ToolDef[] = [
     input: noArgs,
     annotations: { readOnlyHint: true },
     execute: () => {
-      const issues = checkModel(store.getState().model);
+      const issues = issuesOf(store.getState().model);
       return {
         ok: true,
         summary: issues.length === 0 ? "0 issues — the plan is clean." : `${issues.length} issue(s) found.`,

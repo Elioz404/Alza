@@ -205,21 +205,27 @@ src/
   model/    types.ts · geometry.ts (snap, SAT, segment math) · issues.ts (checker rules)
             catalog.ts (31 built-in kinds + the plan's own kinds) · resolve.ts (id/name lookup)
             store.ts (shared actions, undo, activity) · commands.ts (dispatch: the one change path)
+            assets.ts (underlay images, kept while the plan or its undo history names them)
             sceneBus.ts · seed.ts
   editor/   Editor.tsx — SVG: chained walls, rooms, openings with door arcs,
             furniture drag, blueprint underlay, metric dimensions, 5 cm snap, pan/zoom
-  three/    build.ts (extrusion with real openings, resolved joints, floors)
-            furniture.ts (composite pieces + generic builder for imported products) · Scene3D.tsx (orbit/top/walk + WASD,
-            click-to-place, OBJ/PNG export)
+  three/    (loaded on demand: the 2D editor's first chunk has no three.js)
+            build.ts (extrusion with real openings, resolved joints, floors)
+            furniture.ts (composite pieces + generic builder for imported products)
+            planScene.ts (per-entity reconciliation of the plan) · materials.ts (shared materials, disposal)
+            viewport.ts (one renderer per mount: orbit/top/walk + WASD, click-to-place, OBJ/PNG export)
+            frames.ts (render on demand) · walk.ts (collision) · Scene3D.tsx · thumbnails.ts · config.ts
   mcp/      registry.ts (registration + uniform logging) · tools.ts (31 + 1 dynamic)
             bootstrap.ts (runtime detection, dynamic tool lifecycle, toolchange)
   ui/       App · Sidebar (Model/Check/Catalog/Supplier/Notes/Tools) · ToolRunner
             ActivityFeed · ApprovalBar (human-in-the-loop gate) · SupplierPanel (cross-origin)
             SupplierBridge (the partner frame the postMessage transport uses) · useAppStore · useGesture
+            useThumbnails
 tests/      domain: geometry, checker (incl. seed = 0 issues regression), rules, catalog,
-            resolve, store, invariants, commands (dispatch, gestures, undo)
+            resolve, store, invariants, commands (dispatch, gestures, undo), assets, checkerCost
+            3D: planScene (reconciliation, GPU memory), frames, scene3d, thumbnails · editorKeys
             agent surface: tools, validation, approval gate, trust, untrusted partner text,
-            supplier, transport, underlay · page: derived (what the UI reads off the tools)
+            supplier, transport, discovery, underlay · page: derived (what the UI reads off the tools)
             build and config: layering, config, sites, headers, production, serve-local
 scripts/
   e2e-full.mjs  Playwright: drives the real app in Chromium with --enable-features=WebMCP,

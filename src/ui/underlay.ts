@@ -49,8 +49,27 @@ function intrinsicSize(url: string): Promise<{ width: number; height: number }> 
   });
 }
 
-/** Read, bound and re-encode an uploaded blueprint into a ready-to-store underlay. */
-export async function decodeUnderlay(file: File): Promise<Underlay> {
+/** A decoded blueprint: the re-encoded image, and the underlay it becomes once the page holds it. */
+export interface DecodedUnderlay {
+  image: Blob;
+  underlay: Omit<Underlay, "assetId">;
+}
+
+/** canvas.toBlob as a promise; a canvas the browser cannot encode is an error, not a null. */
+const encode = (canvas: HTMLCanvasElement): Promise<Blob> =>
+  new Promise((resolve, reject) =>
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error("This browser could not encode the image."))),
+      UNDERLAY.encodeType,
+      UNDERLAY.encodeQuality,
+    ),
+  );
+
+/**
+ * Read, bound and re-encode an uploaded blueprint. The image comes back as a Blob, not a data
+ * URL: the caller puts it in the asset store (model/assets.ts) and the plan refers to it by id.
+ */
+export async function decodeUnderlay(file: File): Promise<DecodedUnderlay> {
   const bad = underlayFileError(file);
   if (bad) throw new Error(bad);
   const url = URL.createObjectURL(file);
@@ -70,17 +89,19 @@ export async function decodeUnderlay(file: File): Promise<Underlay> {
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("This browser cannot draw the image.");
       ctx.drawImage(bitmap, 0, 0);
-      const dataUrl = canvas.toDataURL(UNDERLAY.encodeType, UNDERLAY.encodeQuality);
+      const image = await encode(canvas);
       const aspect = source.height / source.width;
       return {
-        dataUrl,
-        opacity: UNDERLAY.defaultOpacity,
-        x: 0,
-        y: 0,
-        w: UNDERLAY.defaultWidth,
-        h: UNDERLAY.defaultWidth * aspect,
-        pw: canvas.width,
-        ph: canvas.height,
+        image,
+        underlay: {
+          opacity: UNDERLAY.defaultOpacity,
+          x: 0,
+          y: 0,
+          w: UNDERLAY.defaultWidth,
+          h: UNDERLAY.defaultWidth * aspect,
+          pw: canvas.width,
+          ph: canvas.height,
+        },
       };
     } finally {
       bitmap.close();

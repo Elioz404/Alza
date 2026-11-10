@@ -23,6 +23,7 @@ import {
   ROTATION,
   SNAP,
   TEXT,
+  UNDERLAY,
   UNDERLAY_SIZE,
   WALL_DEFAULTS,
   WALL_HEIGHT,
@@ -34,7 +35,8 @@ import {
 } from "../src/model/limits";
 import { checkModel } from "../src/model/issues";
 import { z } from "zod";
-import { flush, kindOf, resetStore } from "./support/store";
+import { flush, heldImage, kindOf, resetStore } from "./support/store";
+import type { Underlay } from "../src/model/types";
 
 beforeEach(resetStore);
 
@@ -220,11 +222,16 @@ describe("furniture", () => {
 });
 
 describe("underlay", () => {
-  const underlay = { dataUrl: "data:image/jpeg;base64,AAAA", opacity: 0.5, x: 0, y: 0, w: 8, h: 6, pw: 800, ph: 600 };
+  let underlay: Underlay;
+  beforeEach(() => {
+    underlay = { assetId: heldImage(), opacity: 0.5, x: 0, y: 0, w: 8, h: 6, pw: 800, ph: 600 };
+  });
 
-  it("setUnderlay refuses an opacity out of 0..1, a non-image URL or an empty rect", () => {
+  it("setUnderlay refuses an opacity out of 0..1, an image the page does not hold, a non-image or an empty rect", () => {
     expectRefused(() => actions.setUnderlay({ ...underlay, opacity: 2 }), /opacity/);
-    expectRefused(() => actions.setUnderlay({ ...underlay, dataUrl: "https://example.com/plan.png" }), /dataUrl/);
+    expectRefused(() => actions.setUnderlay({ ...underlay, assetId: "https://example.com/plan.png" }), /assetId/);
+    expectRefused(() => actions.setUnderlay({ ...underlay, assetId: heldImage(4, "text/html") }), /not an image/);
+    expectRefused(() => actions.setUnderlay({ ...underlay, assetId: heldImage(UNDERLAY.maxStoredBytes + 1) }), /too large/);
     expectRefused(() => actions.setUnderlay({ ...underlay, w: 0 }), /w must be/);
     expectRefused(() => actions.setUnderlay({ ...underlay, h: NaN }));
   });
@@ -311,7 +318,10 @@ describe("rooms: one size rule for the action, the tool and the snap", () => {
 });
 
 describe("underlay calibration keeps the underlay valid", () => {
-  const underlay = { dataUrl: "data:image/jpeg;base64,AAAA", opacity: 0.5, x: 0, y: 0, w: 10, h: 10, pw: 800, ph: 800 };
+  let underlay: Underlay;
+  beforeEach(() => {
+    underlay = { assetId: heldImage(), opacity: 0.5, x: 0, y: 0, w: 10, h: 10, pw: 800, ph: 800 };
+  });
 
   it("refuses a calibration that would push the corner off the plan, and leaves the underlay alone", () => {
     expect(actions.setUnderlay(underlay).ok).toBe(true);

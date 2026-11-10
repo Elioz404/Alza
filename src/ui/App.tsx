@@ -4,13 +4,37 @@ import { pageActions } from "../model/store";
 import { useAppStore } from "./useAppStore";
 import { dispatch } from "../model/commands";
 import { Editor } from "../editor/Editor";
-import { Scene3D } from "../three/Scene3D";
 import { Sidebar } from "./Sidebar";
 import { ActivityFeed } from "./ActivityFeed";
 import { ApprovalBar } from "./ApprovalBar";
 import { SupplierBridge } from "./SupplierBridge";
+import { LazyView, type ViewLoader } from "./LazyView";
 import { bus, EVENTS } from "../model/sceneBus";
 import { CAMERA_MODES } from "../model/limits";
+
+/**
+ * The 3D view, and three.js with it, is fetched the first time it is shown: the 2D editor the
+ * page opens on does not wait for a 3D engine it does not use. If the fetch fails, only the
+ * canvas area says so (LazyView); the header, the sidebar and the way back to 2D stay.
+ */
+const loadScene3D: ViewLoader = () => import("../three/Scene3D").then((m) => ({ default: m.Scene3D }));
+
+/** What the canvas area shows while the 3D view is on its way. */
+const sceneLoading = (
+  <div className="scene3d-wrap">
+    <div className="scene3d scene3d-loading">Loading 3D…</div>
+  </div>
+);
+
+/** What it shows when the 3D view could not be fetched. */
+const sceneFailed = (retry: () => void) => (
+  <div className="scene3d-wrap">
+    <div className="scene3d scene3d-loading scene3d-failed" role="alert">
+      <span>Could not load the 3D view.</span>
+      <button onClick={retry}>Retry</button>
+    </div>
+  </div>
+);
 
 export function App() {
   const view = useAppStore((s) => s.editor.view);
@@ -66,7 +90,13 @@ export function App() {
       </header>
 
       <main className="main">
-        <div className="canvas-area">{view === "2d" ? <Editor /> : <Scene3D />}</div>
+        <div className="canvas-area">
+          {view === "2d" ? (
+            <Editor />
+          ) : (
+            <LazyView load={loadScene3D} loading={sceneLoading} failed={sceneFailed} />
+          )}
+        </div>
         <Sidebar />
       </main>
 

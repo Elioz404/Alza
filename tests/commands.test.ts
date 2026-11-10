@@ -13,7 +13,8 @@ import { EXTEND_SELECTED_WALL, TOOLS, runTool, runToolManually } from "../src/mc
 import { supplierKind } from "../src/model/catalog";
 import { seedLoft } from "../src/model/seed";
 import { useGesture, type GestureHandle } from "../src/ui/useGesture";
-import { kindOf, resetStore } from "./support/store";
+import { heldImage, kindOf, resetStore } from "./support/store";
+import type { Underlay } from "../src/model/types";
 
 beforeEach(resetStore);
 
@@ -158,7 +159,10 @@ describe("gestures", () => {
 });
 
 describe("every command is one undo step", () => {
-  const UNDERLAY = { dataUrl: "data:image/jpeg;base64,AAAA", opacity: 0.5, x: 0, y: 0, w: 8, h: 6, pw: 800, ph: 600 };
+  let UNDERLAY: Underlay;
+  beforeEach(() => {
+    UNDERLAY = { assetId: heldImage(), opacity: 0.5, x: 0, y: 0, w: 8, h: 6, pw: 800, ph: 600 };
+  });
 
   it("setting the underlay is undone like any other change", () => {
     dispatch({ type: "set_underlay", underlay: UNDERLAY }, human);
