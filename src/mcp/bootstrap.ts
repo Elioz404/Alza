@@ -3,7 +3,7 @@
  * (`extend_selected_wall` exists only while the human has a wall selected: it is registered
  * with its own AbortController and retired by aborting that signal, which is how the spec
  * unregisters a tool and what makes the runtime fire `toolchange`), and updates the
- * "Site tools live" pill.
+ * "Agent tools on" status in the top bar.
  */
 
 import { store, actions, logActivity } from "../model/store";
@@ -25,14 +25,14 @@ export function bootstrapWebMCP(): void {
     // Progressive enhancement: without a WebMCP runtime the app is still a full product,
     // and the built-in ToolRunner executes the same tools through the same pipeline.
     actions.setWebmcpStatus("off");
-    logActivity("system", "webmcp", "No WebMCP runtime detected — manual ToolRunner available.", true);
+    logActivity("system", "webmcp", "No WebMCP runtime in this browser. Every tool can be run by hand under Developer tools.", true);
     void connectSupplier(null);
     return;
   }
 
   const count = registerAll(mc, TOOLS, sessionTools.signal);
   actions.setWebmcpStatus("live");
-  logActivity("system", "webmcp", `Site tools live: ${count}/${TOOLS.length} registered.`, true);
+  logActivity("system", "webmcp", `Agent tools on: ${count} of ${TOOLS.length} tools registered.`, true);
 
   // ---- dynamic tool lifecycle ----
   // One AbortController per registration. Aborting it is the unregistration.

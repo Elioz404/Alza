@@ -26,6 +26,10 @@ export const EVENTS = {
   EXPORT_OBJ: "export-obj",
   EXPORT_PNG: "export-png",
   SET_DOORS: "set-doors",
+  /** a panel locates an entity ({ type, id }): the plan brings it into view */
+  FOCUS_ENTITY: "focus-entity",
+  /** the keyboard's way to place: the view showing puts the held piece in its middle */
+  PLACE_AT_CENTRE: "place-at-centre",
 } as const;
 
 export interface SetDoorsPayload {

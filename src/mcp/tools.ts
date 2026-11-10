@@ -272,12 +272,12 @@ export const TOOLS: ToolDef[] = [
           ok: true,
           summary:
             'No underlay loaded. Tracing needs the drawing in TWO places, and neither replaces the other: ' +
-            '(1) ask the human to upload it on the page via sidebar → "Blueprint underlay" — that is what sets the scale ' +
+            '(1) ask the human to upload it on the page under Properties → "Blueprint underlay" (with nothing selected) — that is what sets the scale ' +
             'and lets them watch your walls land on it; and (2) ask them to paste the SAME image into this conversation, ' +
             'because this tool returns the scale and the mapping, never the pixels — you cannot see the drawing otherwise.',
           loaded: false,
           needs: [
-            'human uploads the image on the page (sidebar → "Blueprint underlay") — sets the scale',
+            'human uploads the image on the page (Properties → "Blueprint underlay") — sets the scale',
             'human pastes the same image into this conversation — so you can read it',
             'human gives you ONE real dimension on the drawing — so calibrate_underlay can be true',
           ],

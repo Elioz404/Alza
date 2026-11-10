@@ -1,0 +1,164 @@
+/*
+ * The Library tab: the catalogue grid and the Nordika shop. Tokens only; see DESIGN.md.
+ */
+@layer alza-surfaces {
+  .library {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-4);
+    padding: var(--spacing-4);
+  }
+  .library-help { margin: 0; font-size: var(--font-size-sm); line-height: var(--text-label-leading); color: var(--color-text-secondary); text-wrap: pretty; }
+  .library-error { margin: 0; font-size: var(--font-size-sm); line-height: var(--text-label-leading); color: var(--color-text-error); }
+
+  /* ---------------------------------------------------------------- catalogue */
+  .catalogue { display: flex; flex-direction: column; gap: var(--spacing-3); }
+  .catalogue__filters { display: flex; flex-direction: column; gap: var(--spacing-2); }
+  .catalogue__status { margin: 0; font-size: var(--font-size-sm); line-height: var(--text-label-leading); color: var(--color-text-secondary); }
+
+  .search { position: relative; display: block; }
+  .search__icon { position: absolute; top: 50%; left: var(--spacing-3); translate: 0 -50%; color: var(--color-icon-secondary); pointer-events: none; }
+  .library .search__input { padding-left: calc(var(--spacing-3) + var(--size-icon-sm) + var(--spacing-2)); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: var(--spacing-1-5); }
+  .chip {
+    position: relative;
+    height: var(--size-control-sm);
+    padding: 0 var(--spacing-3);
+    border: var(--size-hairline) solid var(--color-border-emphasized);
+    border-radius: var(--radius-full);
+    background: var(--color-background-card);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  /* the finger's target is bigger than the chip */
+  .chip::before { content: ""; position: absolute; inset: calc((var(--size-control-sm) - var(--size-hit)) / 2) 0; }
+  .chip[aria-pressed="true"] { border-color: var(--color-accent); background: var(--color-accent-muted); color: var(--color-text-accent); font-weight: var(--font-weight-semibold); }
+  .chip:active { transform: translateY(var(--press-offset)); }
+
+  .catalogue__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--spacing-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .piece {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-0-5);
+    width: 100%;
+    height: 100%;
+    padding: var(--spacing-2);
+    border: var(--size-hairline) solid var(--color-border);
+    border-radius: var(--radius-element);
+    background: var(--color-background-card);
+    color: var(--color-text-primary);
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+  }
+  .piece:active { transform: translateY(var(--press-offset)); }
+  .piece[aria-pressed="true"] { border-color: var(--color-accent); background: var(--color-accent-muted); }
+  .piece__picture {
+    display: grid;
+    place-items: center;
+    aspect-ratio: var(--ratio-thumb);
+    margin-bottom: var(--spacing-1);
+    overflow: hidden;
+    border-radius: var(--radius-inner);
+    background: var(--plan-paper);
+  }
+  .piece__thumb { width: 100%; height: 100%; object-fit: contain; }
+  .piece__swatch { width: 50%; height: 50%; border-radius: var(--radius-inner); }
+  .piece__label { font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); line-height: var(--text-tight-leading); overflow-wrap: anywhere; }
+  .piece__dims { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+  .piece__badge { position: absolute; top: var(--spacing-3); right: var(--spacing-3); }
+
+  /* ---------------------------------------------------------------- nordika */
+  .nordika { display: flex; flex-direction: column; gap: var(--spacing-4); }
+  .nordika__intro { display: flex; flex-direction: column; gap: var(--spacing-2); }
+  .nordika__status { display: flex; }
+  .nordika__pull { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-3); }
+
+  .products { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+  .products > li + li { border-top: var(--size-hairline) solid var(--color-border); }
+  .product {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-3);
+    width: 100%;
+    min-height: var(--size-hit);
+    padding: var(--spacing-2);
+    border: 0;
+    border-radius: var(--radius-element);
+    background: transparent;
+    color: var(--color-text-primary);
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out);
+  }
+  .product[aria-disabled="true"] { opacity: var(--opacity-disabled); cursor: not-allowed; }
+  .product__swatch { flex: none; width: var(--size-control-sm); height: var(--size-control-sm); border-radius: var(--radius-inner); background: var(--color-background-muted); }
+  .product__main { display: flex; flex: 1; flex-direction: column; gap: var(--spacing-0-5); min-width: 0; }
+  .product__name { font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); overflow-wrap: anywhere; }
+  .product__meta { display: flex; flex-wrap: wrap; gap: var(--spacing-2); font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+  .product__meta .code { font-size: var(--font-size-xs); }
+  .product__end { display: flex; flex: none; flex-direction: column; align-items: flex-end; gap: var(--spacing-0-5); }
+  .product__price { font-family: var(--font-family-drawing); font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); }
+  .product__stock { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+  .product__stock--out { color: var(--color-text-error); }
+  .product__go { flex: none; color: var(--color-icon-secondary); }
+
+  .skeleton { display: block; height: 1lh; border-radius: var(--radius-inner); background: var(--color-background-muted); }
+  .skeleton--title { width: 60%; }
+  .skeleton--meta { width: 40%; height: 1cap; }
+  .products--loading .product--skeleton { display: flex; align-items: center; gap: var(--spacing-3); min-height: var(--size-hit); padding: var(--spacing-2); }
+  .products--loading { animation: library-pulse calc(var(--duration-slow) * 3) var(--ease-in) infinite alternate; }
+  @keyframes library-pulse {
+    to { opacity: var(--opacity-quiet); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .products--loading { animation: none; }
+  }
+
+  .nordika__shop { border: var(--size-hairline) solid var(--color-border); border-radius: var(--radius-element); background: var(--color-background-card); }
+  .nordika__shop-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    min-height: var(--size-control);
+    padding: 0 var(--spacing-3);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    cursor: pointer;
+    list-style: none;
+  }
+  .nordika__shop-summary::-webkit-details-marker { display: none; }
+  .nordika__shop-chevron { color: var(--color-icon-secondary); transition: rotate var(--duration-move) var(--ease-out); }
+  .nordika__shop[open] .nordika__shop-chevron { rotate: 90deg; }
+  .nordika__frame {
+    display: block;
+    width: 100%;
+    height: var(--size-partner-frame);
+    border: 0;
+    border-top: var(--size-hairline) solid var(--color-border);
+    border-radius: 0 0 var(--radius-element) var(--radius-element);
+    background: var(--color-background-surface);
+  }
+
+  @media (hover: hover) {
+    .chip:not([aria-pressed="true"]):hover,
+    .piece:not([aria-pressed="true"]):hover,
+    .product:not([aria-disabled="true"]):hover { background: var(--color-background-muted); }
+    .nordika__shop-summary:hover { background: var(--color-background-muted); }
+  }
+}

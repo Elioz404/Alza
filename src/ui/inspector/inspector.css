@@ -1,0 +1,222 @@
+/*
+ * The inspector (Properties tab). Tokens only; see DESIGN.md. The body scrolls inside the side
+ * panel and the footer with the remove action stays at its foot.
+ */
+@layer alza-surfaces {
+  .insp {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+  .insp-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--spacing-5);
+    padding: var(--spacing-4);
+  }
+
+  /* ---------------------------------------------------------------- heading */
+  .insp-head { display: flex; align-items: flex-start; gap: var(--spacing-3); }
+  .insp-head__icon {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: var(--size-control);
+    height: var(--size-control);
+    border-radius: var(--radius-element);
+  }
+  .insp-head__icon--accent { background: var(--color-accent-muted); color: var(--color-text-accent); }
+  .insp-head__icon--neutral { background: var(--color-background-muted); color: var(--color-icon-primary); }
+  .insp-head__text { display: flex; flex: 1; flex-direction: column; gap: var(--spacing-0-5); min-width: 0; }
+  .insp-head__title {
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--text-tight-leading);
+    color: var(--color-text-primary);
+  }
+  .insp-head__sub { margin: 0; font-size: var(--font-size-sm); line-height: var(--text-label-leading); color: var(--color-text-secondary); }
+  .insp-head__id { margin: 0; font-size: var(--font-size-xs); color: var(--color-text-secondary); }
+
+  /* ---------------------------------------------------------------- text */
+  .insp-help,
+  .insp-error {
+    margin: 0;
+    max-width: var(--size-measure);
+    font-size: var(--font-size-sm);
+    line-height: var(--text-label-leading);
+    color: var(--color-text-secondary);
+    text-wrap: pretty;
+  }
+  .insp-error { color: var(--color-text-error); }
+  .insp-aside { font-size: var(--font-size-sm); font-weight: var(--font-weight-regular); color: var(--color-text-secondary); }
+  .insp-value { font-size: var(--font-size-sm); color: var(--color-text-primary); }
+
+  /* ---------------------------------------------------------------- layout */
+  .insp-stack { display: flex; flex-direction: column; gap: var(--spacing-1-5); }
+  .insp-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-2); margin: 0; }
+  .insp-row--spread { justify-content: space-between; }
+  .insp-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--spacing-3); }
+  .insp-grid--end { align-items: end; }
+
+  /* a pair of figures under one label (Start point X / Y) */
+  .insp-pair { display: flex; flex-direction: column; gap: var(--spacing-1); }
+  .insp-pair__label { font-size: var(--font-size-sm); line-height: var(--text-label-leading); color: var(--color-text-secondary); }
+  .insp-prefix {
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+  }
+
+  /* a labelled segmented choice (floor finish, door swing) */
+  .insp-choice { display: flex; flex-direction: column; gap: var(--spacing-1); min-width: 0; }
+  .insp-choice__label { font-size: var(--font-size-sm); line-height: var(--text-label-leading); color: var(--color-text-secondary); }
+
+  /* ---------------------------------------------------------------- figures */
+  .insp-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-3) var(--spacing-2);
+    margin: 0;
+  }
+  .insp-stats__item { display: flex; flex-direction: column; min-width: 0; }
+  .insp-stats__item dt { order: 2; font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+  .insp-stats__item dd {
+    order: 1;
+    margin: 0;
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--text-tight-leading);
+    color: var(--color-text-primary);
+  }
+
+  /* ---------------------------------------------------------------- the blueprint slider */
+  .insp-range {
+    width: 100%;
+    height: var(--size-control-sm);
+    margin: 0;
+    accent-color: var(--color-accent);
+    cursor: pointer;
+  }
+
+  /* ---------------------------------------------------------------- approval policy */
+  .insp-policy__tools { margin: 0; font-size: var(--font-size-xs); line-height: var(--text-label-leading); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+  .insp-policy__tools-label { font-size: var(--font-size-sm); }
+
+  /* ---------------------------------------------------------------- openings on a wall */
+  .insp-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+  .insp-opening + .insp-opening { border-top: var(--size-hairline) solid var(--color-border); }
+  .insp-opening__row { display: flex; align-items: center; gap: var(--spacing-2); padding: var(--spacing-2) 0; }
+  .insp-opening__icon {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: var(--size-control-sm);
+    height: var(--size-control-sm);
+    border-radius: var(--radius-element);
+    background: var(--color-background-muted);
+    color: var(--color-icon-primary);
+  }
+  .insp-opening__main { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+  .insp-opening__name { font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
+  .insp-opening__meta { font-size: var(--font-size-sm); line-height: var(--text-label-leading); color: var(--color-text-secondary); }
+  .insp-opening__editor {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+    margin-bottom: var(--spacing-2);
+    padding: var(--spacing-3);
+    border: var(--size-hairline) solid var(--color-border);
+    border-radius: var(--radius-element);
+    background: var(--color-background-card);
+  }
+
+  /* ---------------------------------------------------------------- everything on the plan */
+  .insp-elements { display: flex; flex-direction: column; }
+  .insp-elements__group + .insp-elements__group { border-top: var(--size-hairline) solid var(--color-border); }
+  .insp-elements__summary {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    min-height: var(--size-control);
+    border-radius: var(--radius-element);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    list-style: none;
+    cursor: pointer;
+  }
+  .insp-elements__summary::-webkit-details-marker { display: none; }
+  .insp-elements__chevron { color: var(--color-icon-secondary); rotate: -90deg; transition: rotate var(--duration-move) var(--ease-out); }
+  .insp-elements__group[open] .insp-elements__chevron { rotate: none; }
+  .insp-elements__title { flex: 1; min-width: 0; }
+  .insp-elements__count { color: var(--color-text-secondary); font-weight: var(--font-weight-regular); }
+  .insp-elements__group .insp-list { padding-bottom: var(--spacing-2); }
+  .insp-element {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--spacing-2);
+    width: 100%;
+    min-height: var(--size-control);
+    padding: var(--spacing-1-5) var(--spacing-2);
+    border: 0;
+    border-radius: var(--radius-element);
+    background: transparent;
+    color: var(--color-text-primary);
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out);
+  }
+  .insp-element__name { min-width: 0; overflow-wrap: anywhere; }
+  .insp-element__detail { flex: none; font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+  @media (hover: hover) {
+    .insp-elements__summary:hover,
+    .insp-element:hover { background: var(--color-background-muted); }
+  }
+  @media (pointer: coarse) {
+    .insp-elements__summary,
+    .insp-element { min-height: var(--size-hit); }
+  }
+
+  /* ---------------------------------------------------------------- the agent's line */
+  .insp-agent {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-2);
+    margin: 0;
+    padding: var(--spacing-3);
+    border-radius: var(--radius-element);
+    background: var(--color-agent-muted);
+    color: var(--color-text-agent);
+    font-size: var(--font-size-sm);
+    line-height: var(--text-label-leading);
+  }
+  .insp-agent .icon { margin-top: var(--spacing-0-5); }
+
+  /* ---------------------------------------------------------------- footer */
+  .insp-foot {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-2);
+    padding: var(--spacing-2) var(--spacing-4);
+    border-top: var(--size-hairline) solid var(--color-border);
+    background: var(--color-background-surface);
+  }
+  .insp-foot__hint {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-1);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+}

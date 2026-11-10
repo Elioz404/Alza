@@ -1,0 +1,293 @@
+/*
+ * The canvas surface: the plan drawing (src/editor/Editor.tsx) and the controls floating over it
+ * (zoom and scale bar, hint bar, north arrow and legend). Tokens only (src/ui/theme/tokens.ts).
+ *
+ * The drawing is a sheet: one unit of the SVG is one screen pixel, so pen weights and lettering
+ * keep their size at every zoom, as a printed drawing's do. The pen weights are the --pen-*
+ * tokens; colours are the --plan-* tokens.
+ */
+@layer alza-surfaces {
+  /* ---------------------------------------------------------------- the sheet */
+  .editor-svg {
+    /* the pens (--pen-*) and dash patterns (--dash-*) are tokens */
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .editor-svg[data-tool="pan"] { cursor: grab; }
+  .editor-svg[data-panning] { cursor: grabbing; }
+  .editor-svg[data-tool="wall"],
+  .editor-svg[data-tool="room"],
+  .editor-svg[data-tool="place"],
+  .editor-svg[data-tool="door"],
+  .editor-svg[data-tool="window"] { cursor: crosshair; }
+  .editor-svg[data-tool="select"] .pl-room,
+  .editor-svg[data-tool="select"] .pl-item { cursor: move; }
+  .editor-svg[data-tool="select"] .pl-wall-hit { cursor: pointer; }
+  .editor-svg[data-tool="select"] .pl-handle-hit { cursor: move; }
+
+  .pl-paper { fill: var(--plan-paper); }
+  .pl-grid-minor { stroke: var(--plan-grid-minor); stroke-width: var(--pen-fine); fill: none; }
+  .pl-grid-major { stroke: var(--plan-grid-major); stroke-width: var(--pen-fine); fill: none; }
+
+  /* floors: oak and tile come from their patterns (the fill attribute), the rest are flat */
+  .pl-oak-base { fill: var(--plan-floor-oak); }
+  .pl-tile-base { fill: var(--plan-floor-tile); }
+  .pl-floor--carpet { fill: var(--plan-floor-carpet); }
+  .pl-floor--concrete { fill: var(--plan-floor-concrete); }
+  .pl-oak-grain { stroke: var(--plan-floor-oak-grain); stroke-width: var(--pen-fine); fill: none; }
+  .pl-tile-joint { stroke: var(--plan-floor-tile-joint); stroke-width: var(--pen-fine); fill: none; }
+  .pl-room[data-selected] .pl-floor { stroke: none; }
+
+  /* walls: solid poché */
+  .pl-wall { stroke: var(--plan-ink); stroke-linecap: square; fill: none; }
+  .pl-wall--hover { stroke: var(--plan-line); }
+  .pl-wall--selected { stroke: var(--plan-selection); }
+  .pl-hit { stroke: transparent; fill: none; pointer-events: stroke; }
+
+  /* openings */
+  .pl-openings { pointer-events: none; }
+  .pl-gap { fill: var(--plan-paper); }
+  .pl-jamb { stroke: var(--plan-ink); stroke-width: var(--pen-firm); fill: none; }
+  .pl-leaf { stroke: var(--plan-door-leaf); stroke-width: var(--pen-bold); stroke-linecap: square; fill: none; }
+  .pl-swing { stroke: var(--plan-door-swing); stroke-width: var(--pen-fine); fill: none; }
+  .pl-window { stroke: var(--plan-window-frame); stroke-width: var(--pen-fine); fill: var(--plan-paper); }
+  .pl-glass { stroke: var(--plan-window-glass); stroke-width: var(--pen-fine); fill: none; }
+
+  /* furniture symbols */
+  .pl-f { fill: var(--plan-furniture); stroke: var(--plan-line); stroke-width: var(--pen-medium); }
+  .pl-fd { fill: none; stroke: var(--plan-line-soft); stroke-width: var(--pen-fine); }
+  .pl-fd-ink { fill: none; stroke: var(--plan-line); stroke-width: var(--pen-fine); }
+  .pl-rug { fill: none; stroke: var(--plan-line-soft); stroke-width: var(--pen-fine); }
+  .pl-rug-in { fill: none; stroke: var(--plan-line-soft); stroke-width: var(--pen-fine); stroke-dasharray: var(--dash-rug); }
+  .pl-item-label {
+    fill: var(--plan-label-soft);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-xs);
+    text-anchor: middle;
+    dominant-baseline: middle;
+    pointer-events: none;
+  }
+
+  /* lettering */
+  .pl-letters,
+  .pl-dims { pointer-events: none; }
+  .pl-room-name {
+    fill: var(--plan-label);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    text-anchor: middle;
+  }
+  .pl-room-area,
+  .pl-room-flag {
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-sm);
+    font-variant-numeric: tabular-nums;
+    text-anchor: middle;
+  }
+  .pl-room-area { fill: var(--plan-label-soft); }
+  .pl-room-flag { fill: var(--color-text-error); font-weight: var(--font-weight-semibold); }
+  .pl-halo { paint-order: stroke; stroke: var(--plan-paper); stroke-width: var(--pen-halo); stroke-linejoin: round; }
+  .pl-halo--oak { stroke: var(--plan-floor-oak); }
+  .pl-halo--carpet { stroke: var(--plan-floor-carpet); }
+  .pl-halo--tile { stroke: var(--plan-floor-tile); }
+  .pl-halo--concrete { stroke: var(--plan-floor-concrete); }
+  .pl-halo--furniture { stroke: var(--plan-furniture); }
+
+  /* dimension chains */
+  .pl-dim-line { stroke: var(--plan-dim); stroke-width: var(--pen-fine); fill: none; }
+  .pl-dim-ext { stroke: var(--plan-line-soft); stroke-width: var(--pen-hair); fill: none; }
+  .pl-dim-tick { stroke: var(--plan-dim); stroke-width: var(--pen-firm); fill: none; }
+  .pl-dim-text {
+    fill: var(--plan-dim);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-sm);
+    font-variant-numeric: tabular-nums;
+    text-anchor: middle;
+  }
+
+  /* selection and hover */
+  .pl-sel-outline { fill: none; stroke: var(--plan-selection); stroke-width: var(--pen-firm); pointer-events: none; }
+  .pl-hover-outline { fill: none; stroke: var(--plan-line-soft); stroke-width: var(--pen-fine); stroke-dasharray: var(--dash-ghost); pointer-events: none; }
+  .pl-handle { fill: var(--color-background-card); stroke: var(--plan-selection); stroke-width: var(--pen-firm); }
+  .pl-handle-reach { fill: transparent; }
+  .pl-pill { pointer-events: none; }
+  .pl-pill-text {
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    font-variant-numeric: tabular-nums;
+    text-anchor: middle;
+  }
+  .pl-pill--selection .pl-pill-box,
+  .pl-pill--live .pl-pill-box { fill: var(--plan-selection); }
+  .pl-pill--selection .pl-pill-text,
+  .pl-pill--live .pl-pill-text { fill: var(--color-on-accent); }
+  .pl-pill--quiet .pl-pill-box { fill: var(--color-background-card); stroke: var(--plan-line-soft); stroke-width: var(--pen-fine); }
+  .pl-pill--quiet .pl-pill-text { fill: var(--plan-dim); }
+
+  /* drawing previews, ghosts, the snap cursor */
+  .pl-preview-wall,
+  .pl-preview-room,
+  .pl-ghost-opening,
+  .pl-ghost-item,
+  .pl-cursor { pointer-events: none; }
+  .pl-preview { stroke: var(--plan-preview); stroke-dasharray: var(--dash-preview); stroke-linecap: square; fill: none; opacity: var(--opacity-quiet); }
+  .pl-preview-dot { fill: var(--plan-preview); }
+  .pl-preview-area { fill: var(--plan-selection-muted); stroke: var(--plan-preview); stroke-width: var(--pen-firm); stroke-dasharray: var(--dash-preview); }
+  .pl-preview-room[data-refused] .pl-preview-area { stroke: var(--plan-line-soft); fill: none; }
+  .pl-preview-room[data-refused] .pl-pill-box { fill: var(--plan-line-soft); }
+  .pl-ghost-outline { fill: var(--plan-selection-muted); fill-opacity: var(--opacity-quiet); stroke: var(--plan-preview); stroke-width: var(--pen-firm); stroke-dasharray: var(--dash-ghost); }
+  .pl-ghost-opening[data-refused] .pl-ghost-outline { fill: var(--plan-destructive-muted); stroke: var(--plan-destructive); }
+  .pl-ghost-opening[data-refused] .pl-leaf,
+  .pl-ghost-opening[data-refused] .pl-swing,
+  .pl-ghost-opening[data-refused] .pl-glass { stroke: var(--plan-destructive); }
+  .pl-ghost-item { opacity: var(--opacity-quiet); }
+  .pl-ghost-item .pl-f { fill: var(--plan-selection-muted); stroke: var(--plan-preview); stroke-dasharray: var(--dash-ghost); }
+  .pl-cursor-arms { stroke: var(--plan-preview); stroke-width: var(--pen-fine); fill: none; }
+  .pl-cursor-ring { fill: var(--plan-preview); }
+  .pl-cursor-end { fill: none; stroke: var(--plan-preview); stroke-width: var(--pen-firm); }
+
+  /* the agent's recent changes: revision cloud and numbered delta */
+  .pl-revisions { pointer-events: none; }
+  .pl-cloud { fill: none; stroke: var(--plan-agent); stroke-width: var(--pen-firm); stroke-linejoin: round; }
+  .pl-delta { fill: var(--plan-paper); stroke: var(--plan-agent); stroke-width: var(--pen-firm); stroke-linejoin: round; }
+  .pl-delta-num {
+    fill: var(--color-text-agent);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    font-variant-numeric: tabular-nums;
+    text-anchor: middle;
+  }
+
+  /* what a pending destructive request would remove: hatched and outlined in the error colour */
+  .pl-pending-marks { pointer-events: none; }
+  .pl-pending { pointer-events: none; }
+  .pl-hatch { stroke: var(--plan-destructive-hatch); stroke-width: var(--pen-medium); fill: none; }
+  .pl-pending-outline { stroke: var(--plan-destructive); stroke-width: var(--pen-firm); stroke-linejoin: round; }
+  rect.pl-pending-outline { fill: none; }
+  .pl-pending-outline--plan { stroke-dasharray: var(--dash-preview); }
+
+  /* ---------------------------------------------------------------- floating controls */
+  .zoom-dock {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-2);
+  }
+  .canvas__slot--zoom > .zoom-dock { pointer-events: none; }
+  .zoom-dock .zoom { pointer-events: auto; }
+
+  .scalebar { margin: 0; display: grid; gap: var(--spacing-0-5); justify-items: stretch; align-content: end; min-height: var(--size-scalebar); }
+  .scalebar__bar { display: block; }
+  .scalebar__dark { fill: var(--plan-ink); stroke: var(--plan-ink); stroke-width: var(--pen-fine); }
+  .scalebar__light { fill: var(--plan-paper); stroke: var(--plan-ink); stroke-width: var(--pen-fine); }
+  .scalebar__figures {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--font-size-sm);
+    color: var(--plan-dim);
+    line-height: var(--text-tight-leading);
+  }
+
+  .zoom {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-0-5);
+    padding: var(--spacing-0-5);
+    background: var(--color-background-card);
+    border-radius: var(--radius-container);
+    box-shadow: var(--shadow-med);
+  }
+  .zoom .icon-btn { width: var(--size-control-sm); height: var(--size-control-sm); }
+  .zoom .btn { height: var(--size-control-sm); border-color: transparent; }
+  .zoom__value {
+    min-width: calc(var(--size-control) * 1.5);
+    height: var(--size-control-sm);
+    padding: 0 var(--spacing-1);
+    border: 0;
+    border-radius: var(--radius-element);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    text-align: center;
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  @media (hover: hover) {
+    .zoom__value:hover { background: var(--color-background-muted); color: var(--color-text-primary); }
+  }
+  .zoom__value:active { transform: translateY(var(--press-offset)); }
+  .zoom__sep { width: var(--size-hairline); height: var(--spacing-4); background: var(--color-border); }
+
+  .hint {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-3);
+    min-height: calc(var(--size-control) + var(--spacing-1));
+    max-width: 100%;
+    padding: 0 var(--spacing-4);
+    overflow: hidden;
+    background: var(--color-background-card);
+    border-radius: var(--radius-container);
+    box-shadow: var(--shadow-med);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
+  .hint__tool { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
+  .hint__item { display: inline-flex; align-items: center; gap: var(--spacing-1); }
+  .hint__sep { width: var(--size-hairline); height: var(--size-icon-xs); margin-right: var(--spacing-2); background: var(--color-border); }
+
+  .legend-dock {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--spacing-3);
+  }
+  .canvas__slot--legend > .legend-dock { pointer-events: none; }
+  .legend-dock .legend { pointer-events: auto; }
+
+  .north { width: var(--size-control); height: auto; overflow: visible; }
+  .north__ring { fill: none; stroke: var(--plan-dim); stroke-width: var(--size-hairline); }
+  .north__fill { fill: var(--plan-dim); }
+  .north__letter {
+    fill: var(--plan-dim);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    text-anchor: middle;
+  }
+
+  .legend {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+    padding: var(--spacing-2) var(--spacing-3);
+    background: var(--color-background-card);
+    border-radius: var(--radius-container);
+    box-shadow: var(--shadow-med);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+  .legend__keys { display: grid; gap: var(--spacing-1-5); margin: 0; padding: 0; list-style: none; }
+  .legend__key { display: flex; align-items: center; gap: var(--spacing-2); white-space: nowrap; }
+  .legend__swatch { width: calc(var(--size-icon) * 1.5); height: var(--size-icon); flex: none; }
+  .legend__cloud { fill: none; stroke: var(--plan-agent); stroke-width: var(--size-icon-stroke); stroke-linejoin: round; }
+  .legend__delta { fill: var(--plan-paper); stroke: var(--plan-agent); stroke-width: var(--size-icon-stroke); stroke-linejoin: round; }
+  .legend__hatch { fill: none; stroke: var(--plan-destructive-hatch); stroke-width: var(--size-icon-stroke); }
+  .legend__pending { fill: none; stroke: var(--plan-destructive); stroke-width: var(--size-icon-stroke); }
+  .legend__switch { padding-top: var(--spacing-2); border-top: var(--size-hairline) solid var(--color-border); color: var(--color-text-primary); }
+
+  /* under the drawer breakpoint the hint keeps its first two actions; a phone is for review, with no
+     keyboard to name and no room beside the zoom, so the hint goes */
+  @media (max-width: 64rem) {
+    .hint .hint__item ~ .hint__item ~ .hint__item { display: none; }
+  }
+  @media (max-width: 40rem) {
+    .hint { display: none; }
+    .north { width: var(--size-control-sm); }
+  }
+}

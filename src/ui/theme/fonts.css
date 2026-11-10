@@ -1,0 +1,9 @@
+/*
+ * Self-hosted faces (the CSP names no font origin, so nothing is fetched from a font service).
+ * Latin subset, two weights: 400 and 600 for the UI and the drawing, 400 for code.
+ */
+@import "@fontsource/ibm-plex-sans/latin-400.css";
+@import "@fontsource/ibm-plex-sans/latin-600.css";
+@import "@fontsource/barlow-semi-condensed/latin-400.css";
+@import "@fontsource/barlow-semi-condensed/latin-600.css";
+@import "@fontsource/ibm-plex-mono/latin-400.css";

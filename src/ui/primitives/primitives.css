@@ -1,0 +1,272 @@
+/*
+ * The shared primitives. Tokens only (src/ui/theme/tokens.ts): no literal colour, size, radius
+ * or duration below. Transitions name their properties; nothing transitions `all`.
+ */
+@layer alza-components {
+  /* ---------------------------------------------------------------- icons */
+  .icon {
+    flex: none;
+    width: var(--size-icon);
+    height: var(--size-icon);
+    fill: none;
+    stroke: currentColor;
+    stroke-width: var(--size-icon-stroke);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .icon--xs { width: var(--size-icon-xs); height: var(--size-icon-xs); }
+  .icon--sm { width: var(--size-icon-sm); height: var(--size-icon-sm); }
+  .icon--lg { width: var(--size-icon-lg); height: var(--size-icon-lg); }
+
+  .brand-mark { width: var(--size-icon-lg); height: var(--size-icon-lg); flex: none; }
+  .brand-mark__rise { fill: var(--color-text-primary); }
+  .brand-mark__cut { fill: var(--color-accent); }
+  .brand-mark__ground { fill: none; stroke: var(--color-text-primary); stroke-width: var(--size-icon-stroke); stroke-linecap: round; }
+
+  /* the revision delta: same shape as the mark */
+  .delta { width: var(--size-icon-lg); height: var(--size-icon-lg); flex: none; overflow: visible; }
+  .delta__tri { stroke-width: var(--size-icon-stroke); stroke-linejoin: round; }
+  .delta__num { font-family: var(--font-family-drawing); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); }
+  .delta--agent .delta__tri { fill: var(--color-agent-muted); stroke: var(--color-agent); }
+  .delta--agent .delta__num { fill: var(--color-text-agent); }
+  .delta--human .delta__tri { fill: var(--color-accent-muted); stroke: var(--color-accent); }
+  .delta--human .delta__num { fill: var(--color-text-accent); }
+  .delta--destructive .delta__tri { fill: var(--color-error-muted); stroke: var(--color-error); }
+  .delta--destructive .delta__num { fill: var(--color-text-error); }
+
+  /* ---------------------------------------------------------------- tooltip content */
+  .tip { display: inline-flex; align-items: center; gap: var(--spacing-2); flex-wrap: wrap; max-width: var(--size-measure); }
+  .tip__sub { flex-basis: 100%; font-weight: var(--font-weight-regular); opacity: var(--opacity-quiet); }
+  .tip__kbd { color: inherit; }
+
+  /* ---------------------------------------------------------------- buttons */
+  .btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-2);
+    height: var(--size-control);
+    padding: 0 var(--spacing-3);
+    border: var(--size-hairline) solid var(--color-border-emphasized);
+    border-radius: var(--radius-element);
+    background: var(--color-background-card);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--text-tight-leading);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background-color var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+  .btn:active:not([aria-disabled="true"]):not(:disabled) { transform: translateY(var(--press-offset)); }
+  .btn:disabled,
+  .btn[aria-disabled="true"] { opacity: var(--opacity-disabled); cursor: not-allowed; }
+  .btn--sm { height: var(--size-control-sm); padding: 0 var(--spacing-2); font-size: var(--font-size-sm); }
+  .btn--block { width: 100%; justify-content: flex-start; }
+  .btn--block .btn__label { flex: 1; text-align: start; }
+  .btn--ghost { border-color: transparent; background: transparent; }
+  .btn--ghost .icon { color: var(--color-icon-secondary); }
+  .btn--primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-on-accent); }
+  .btn--danger { background: var(--color-error); border-color: var(--color-error); color: var(--color-on-error); }
+  .btn--danger-quiet { border-color: transparent; background: transparent; color: var(--color-text-error); }
+  .btn__label { overflow: hidden; text-overflow: ellipsis; }
+  .btn__end { color: var(--color-icon-secondary); }
+  .btn--primary .btn__kbd,
+  .btn--danger .btn__kbd { color: inherit; }
+
+  @media (hover: hover) {
+    .btn:not([aria-disabled="true"]):not(:disabled):hover { background: var(--color-background-muted); }
+    .btn--primary:not([aria-disabled="true"]):not(:disabled):hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+    .btn--danger:not([aria-disabled="true"]):not(:disabled):hover { background: var(--color-error-hover); border-color: var(--color-error-hover); }
+    .btn--danger-quiet:not([aria-disabled="true"]):not(:disabled):hover { background: var(--color-error-muted); }
+  }
+
+  /* Astryx's own buttons (the actions inside AlertDialog and Dialog) take the same shape and
+     the same filled red for a destructive action; the stone theme paints them as pale pills */
+  .astryx-button { border-radius: var(--radius-element); }
+  .astryx-button[data-variant="destructive"] { background-color: var(--color-error); color: var(--color-on-error); }
+  .astryx-button[data-variant="primary"] { background-color: var(--color-accent); color: var(--color-on-accent); }
+  @media (hover: hover) {
+    .astryx-button[data-variant="destructive"]:where(:not(:disabled, [aria-disabled="true"])):hover { background-color: var(--color-error-hover); }
+    .astryx-button[data-variant="primary"]:where(:not(:disabled, [aria-disabled="true"])):hover { background-color: var(--color-accent-hover); }
+  }
+
+  /* ---------------------------------------------------------------- icon buttons */
+  .icon-btn {
+    position: relative;
+    display: inline-grid;
+    grid-auto-flow: column;
+    place-items: center;
+    gap: var(--spacing-1);
+    min-width: var(--size-control);
+    height: var(--size-control);
+    padding: 0 var(--spacing-1-5);
+    border: var(--size-hairline) solid transparent;
+    border-radius: var(--radius-element);
+    background: transparent;
+    color: var(--color-icon-secondary);
+    font: inherit;
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    cursor: pointer;
+    transition:
+      background-color var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+  /* the finger's target is bigger than the drawn box */
+  .icon-btn::before {
+    content: "";
+    position: absolute;
+    inset: calc((var(--size-control) - var(--size-hit)) / 2);
+  }
+  .icon-btn--secondary { border-color: var(--color-border-emphasized); background: var(--color-background-card); color: var(--color-text-primary); }
+  .icon-btn--rail { width: var(--size-rail-button); height: var(--size-rail-button); padding: 0; }
+  .icon-btn--rail::before { inset: calc((var(--size-rail-button) - var(--size-hit)) / 2); }
+  .icon-btn[aria-pressed="true"],
+  .icon-btn[aria-expanded="true"] { background: var(--color-accent-muted); color: var(--color-text-accent); }
+  .icon-btn:active:not([aria-disabled="true"]) { transform: translateY(var(--press-offset)); }
+  .icon-btn[aria-disabled="true"] { opacity: var(--opacity-disabled); cursor: not-allowed; }
+  @media (hover: hover) {
+    .icon-btn:not([aria-disabled="true"]):not([aria-pressed="true"]):hover { background: var(--color-background-muted); color: var(--color-text-primary); }
+  }
+
+  /* ---------------------------------------------------------------- fields */
+  .field { display: flex; flex-direction: column; gap: var(--spacing-1); min-width: 0; }
+  .field__label-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--spacing-2); }
+  .field__label { font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: var(--text-label-leading); }
+  .field__help,
+  .field__error { margin: 0; min-height: 1lh; font-size: var(--font-size-sm); line-height: var(--text-label-leading); color: var(--color-text-secondary); }
+  .field__help:empty,
+  .field__error:empty { min-height: 0; }
+  .field__error { color: var(--color-text-error); }
+
+  .input {
+    width: 100%;
+    min-width: 0;
+    height: var(--size-control);
+    padding: 0 var(--spacing-3);
+    border: var(--size-hairline) solid var(--color-border-emphasized);
+    border-radius: var(--radius-element);
+    outline: var(--size-focus-ring) solid transparent;
+    outline-offset: calc(-1 * var(--size-hairline));
+    background: var(--color-background-card);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-base);
+    transition: background-color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+  }
+  .input::placeholder { color: var(--color-text-secondary); }
+  .input:focus-visible { outline-color: var(--color-focus); outline-offset: calc(-1 * var(--size-hairline)); }
+  .input[aria-invalid="true"] { border-color: var(--color-error); }
+  .input:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+  .input--area { height: auto; min-height: calc(var(--size-control) * 2.5); padding: var(--spacing-2) var(--spacing-3); resize: vertical; line-height: var(--text-body-leading); }
+  @media (hover: hover) {
+    .input:not(:disabled):not(:focus-visible):hover { background: var(--color-background-surface); }
+  }
+
+  /* Astryx NumberInput: the figures in the drawing face */
+  .number-field input { font-family: var(--font-family-drawing); font-size: var(--font-size-md); font-variant-numeric: tabular-nums; }
+
+  /* ---------------------------------------------------------------- panel, section */
+  .panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-5);
+    min-height: 0;
+    padding: var(--spacing-4);
+    overflow: auto;
+  }
+  .section { display: flex; flex-direction: column; gap: var(--spacing-3); }
+  .section + .section { padding-top: var(--spacing-5); border-top: var(--size-hairline) solid var(--color-border); }
+  .section__head { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-2); }
+  .section__title { margin: 0; font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); line-height: var(--text-label-leading); color: var(--color-text-primary); }
+
+  /* ---------------------------------------------------------------- badge */
+  .badge {
+    display: inline-grid;
+    place-items: center;
+    min-width: var(--size-kbd);
+    height: var(--size-kbd);
+    padding: 0 var(--spacing-1);
+    border-radius: var(--radius-full);
+    background: var(--color-background-muted);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .badge--accent { background: var(--color-accent-muted); color: var(--color-text-accent); }
+  .badge--agent { background: var(--color-agent-muted); color: var(--color-text-agent); }
+  .badge--error { background: var(--color-error-muted); color: var(--color-text-error); }
+  .badge--warning { background: var(--color-warning-muted); color: var(--color-text-warning); }
+
+  /* ---------------------------------------------------------------- kbd word keys */
+  /* Del and Space, drawn by Kbd.tsx beside Astryx's own chips: the same declarations, from the
+     same tokens, as Astryx's Kbd key (tests/theme.test.ts holds the two to each other) */
+  .kbd { display: inline-flex; flex-shrink: 0; align-items: center; gap: var(--spacing-1); }
+  .kbd__word {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--spacing-5);
+    height: var(--spacing-5);
+    min-height: 1lh;
+    padding-inline: var(--spacing-1);
+    border-radius: var(--radius-inner);
+    background-color: var(--color-neutral);
+    border-bottom: var(--size-kbd-edge) solid var(--color-border-emphasized);
+    color: var(--color-text-primary);
+    font-family: var(--font-family-body);
+    font-size: var(--text-supporting-size);
+    font-weight: var(--font-weight-medium);
+    line-height: var(--text-supporting-leading);
+    white-space: nowrap;
+    user-select: none;
+  }
+
+  /* ---------------------------------------------------------------- empty state */
+  .empty { display: flex; flex-direction: column; gap: var(--spacing-2); color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+  .empty__icon { color: var(--color-icon-secondary); }
+  .empty__title { margin: 0; color: var(--color-text-primary); font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); text-wrap: balance; }
+  .empty__body { margin: 0; max-width: var(--size-measure); line-height: var(--text-body-leading); text-wrap: pretty; }
+  .empty__actions { display: flex; flex-wrap: wrap; gap: var(--spacing-2); margin-top: var(--spacing-1); }
+  .empty--region { align-items: center; text-align: center; gap: var(--spacing-3); padding: var(--spacing-8) var(--spacing-4); }
+  .empty--region .empty__title { font-size: var(--font-size-xl); line-height: var(--text-tight-leading); }
+  .empty--region .empty__body { font-size: var(--font-size-md); }
+  .empty--region .empty__actions { justify-content: center; }
+
+  /* ---------------------------------------------------------------- finger targets */
+  /* Under a finger, or at phone width, the small controls answer a 44px band around their box
+     without moving it: as tall as --size-hit, and as wide when the box is narrower. Rows of
+     them (the zoom bar, a segmented switch) grow only in height, so no band takes a
+     neighbour's taps. Astryx's own segments measure their bands; they get the width. */
+  @media (pointer: coarse), (max-width: 40rem) {
+    .btn--sm::before,
+    .text-link::before,
+    .presence::before,
+    .zoom__value::before,
+    .zoom .icon-btn::before {
+      content: "";
+      position: absolute;
+      inset: auto;
+      top: 50%;
+      left: 50%;
+      width: 100%;
+      height: max(100%, var(--size-hit));
+      translate: -50% -50%;
+    }
+    .text-link::before,
+    .presence::before { width: max(100%, var(--size-hit)); }
+    .text-link,
+    .presence,
+    .zoom__value { position: relative; }
+    .astryx-segmented-control-item { min-inline-size: var(--size-hit); }
+  }
+}

@@ -6,8 +6,11 @@
  * domain rules and live in model/limits.ts; the look of each surface lives in build.ts and
  * furniture.ts with the geometry it belongs to.
  *
- * Lengths are metres, times seconds, angles radians, colours CSS strings.
+ * Lengths are metres, times seconds, angles radians, colours CSS strings. The backdrop is the
+ * design tokens' --scene-backdrop, which the 3D view's loading state paints too.
  */
+
+import { MATERIAL } from "../ui/theme/tokens";
 
 /** A light: its colour, its intensity, and — for a directional one — where it shines from. */
 interface LightSpec {
@@ -37,8 +40,8 @@ export const RENDERER = Object.freeze({
 
 /** The space around the plan: a dark backdrop the far side of the model fades into. */
 export const SCENE = Object.freeze({
-  background: "#24282c",
-  fog: Object.freeze({ color: "#24282c", near: 45, far: 120 }),
+  background: MATERIAL.backdrop.hex,
+  fog: Object.freeze({ color: MATERIAL.backdrop.hex, near: 45, far: 120 }),
 });
 
 /** Soft sky, a warm sun that casts the shadows, and a cool fill from the opposite side. */

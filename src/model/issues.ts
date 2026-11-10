@@ -514,7 +514,7 @@ export function checkModel(model: PlanModel, rules: readonly Rule[] = RULES): Is
 const issuesByModel = new WeakMap<PlanModel, readonly Issue[]>();
 
 /**
- * The plan's issues under every rule: the derived value the sidebar's badge, its Check tab and
+ * The plan's issues under every rule: the derived value the Issues tab, its count badge and
  * the get_issues tool all read. It is computed the first time a plan object is asked about and
  * kept for as long as that object lives, so a render, a tab switch or an agent asking twice
  * costs nothing. Frozen, because every reader shares the one list.

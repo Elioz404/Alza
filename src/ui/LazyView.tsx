@@ -2,7 +2,7 @@
  * A view whose code is fetched the first time it is shown, which can fail to arrive: a
  * stale hashed chunk after a redeploy, a dropped connection, an offline tab. React rethrows a
  * rejected lazy import while rendering, and Suspense does not catch it — without a boundary the
- * whole root unmounts, and the editor, the sidebar and the approval bar go with the one view
+ * whole root unmounts, and the editor, the side panel and the approval card go with the one view
  * that failed. Here the failure stays inside the view's own box, which offers to try again.
  *
  * React keeps a lazy component's rejected import for good, so trying again makes a new lazy

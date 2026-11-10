@@ -1,0 +1,139 @@
+/*
+ * The 3D view's chrome and states: the camera switch, the hint bar, the loading skeleton and
+ * the error card, floating over the scene's own dark backdrop (--scene-backdrop). Tokens only
+ * (src/ui/theme/tokens.ts); floating pieces carry the one shadow, the backdrop none.
+ */
+@layer alza-surfaces {
+  /* ---------------------------------------------------------------- chrome over the scene */
+  .scene-overlays {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .scene-overlays__toolbar,
+  .scene-overlays__hint {
+    position: absolute;
+    pointer-events: auto;
+  }
+  .scene-overlays__toolbar { top: var(--spacing-4); left: var(--spacing-4); }
+  .scene-overlays__hint {
+    left: 50%;
+    bottom: var(--spacing-4);
+    translate: -50% 0;
+    width: max-content;
+    max-width: calc(100% - 2 * var(--spacing-4));
+  }
+
+  .scene-float {
+    background: var(--color-background-card);
+    border-radius: var(--radius-container);
+    box-shadow: var(--shadow-med);
+  }
+
+  .scene-toolbar { padding: var(--spacing-0-5); }
+
+  /* ---------------------------------------------------------------- hint bar */
+  .scene-hint {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-1) var(--spacing-4);
+    min-height: calc(var(--size-control) + var(--spacing-1));
+    padding: var(--spacing-1) var(--spacing-4);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: var(--text-label-leading);
+    white-space: nowrap;
+  }
+  .scene-hint__tool { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
+  .scene-hint__item { display: inline-flex; align-items: center; gap: var(--spacing-1); }
+  .scene-hint__sep {
+    flex: none;
+    width: var(--size-hairline);
+    height: var(--size-icon-xs);
+    background: var(--color-border);
+  }
+  .scene-hint--placing { padding-right: var(--spacing-1); }
+  .scene-hint--placing .scene-hint__tool { color: var(--color-text-accent); }
+
+  @media (max-width: 64rem) {
+    .scene-hint { flex-wrap: wrap; justify-content: center; white-space: normal; text-align: center; }
+  }
+  @media (max-width: 40rem) {
+    .scene-overlays__toolbar { top: var(--spacing-3); left: var(--spacing-3); }
+    .scene-overlays__hint { bottom: var(--spacing-3); max-width: calc(100% - 2 * var(--spacing-3)); }
+    .scene-hint { padding: var(--spacing-1-5) var(--spacing-3); }
+    .scene-hint .scene-hint__sep { display: none; }
+  }
+
+  /* ---------------------------------------------------------------- loading and errors */
+  .scene-state {
+    position: relative;
+    display: grid;
+    place-items: center;
+    padding: var(--spacing-4);
+    background: var(--scene-backdrop);
+    color: var(--scene-ink);
+  }
+
+  .scene-state__line {
+    font-size: var(--font-size-sm);
+    color: var(--scene-ink-soft);
+  }
+
+  .scene-skeleton {
+    position: absolute;
+    border-radius: var(--radius-container);
+    background: var(--scene-skeleton);
+    animation: scene-skeleton-pulse var(--duration-pulse) var(--ease-out) infinite alternate;
+  }
+  /* shaped like the camera switch and the hint bar that are about to appear */
+  .scene-skeleton--toolbar {
+    top: var(--spacing-4);
+    left: var(--spacing-4);
+    width: calc(var(--size-activity) - var(--spacing-12));
+    height: calc(var(--size-control-sm) + var(--spacing-1));
+  }
+  .scene-skeleton--hint {
+    left: 50%;
+    bottom: var(--spacing-4);
+    translate: -50% 0;
+    width: min(calc(var(--size-panel) + 2 * var(--spacing-12)), calc(100% - 2 * var(--spacing-4)));
+    height: calc(var(--size-control) + var(--spacing-1));
+  }
+  @keyframes scene-skeleton-pulse {
+    from { opacity: 1; }
+    to { opacity: var(--opacity-quiet); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .scene-skeleton { animation: none; }
+  }
+
+  .scene-state__card {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-3);
+    max-width: calc(var(--size-measure) + var(--spacing-12));
+    padding: var(--spacing-5);
+    border-radius: var(--radius-container);
+    background: var(--color-background-card);
+    box-shadow: var(--shadow-high);
+    color: var(--color-text-primary);
+  }
+  .scene-state__icon { flex: none; color: var(--color-error); }
+  .scene-state__text { display: flex; flex-direction: column; gap: var(--spacing-2); min-width: 0; }
+  .scene-state__title {
+    margin: 0;
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--text-tight-leading);
+    text-wrap: balance;
+  }
+  .scene-state__body {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-base);
+    line-height: var(--text-body-leading);
+    text-wrap: pretty;
+  }
+  .scene-state__actions { display: flex; flex-wrap: wrap; gap: var(--spacing-2); margin-top: var(--spacing-2); }
+}

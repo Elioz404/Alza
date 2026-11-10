@@ -18,17 +18,19 @@ import type { Item, Opening, PlanModel, Room, Wall } from "../model/types";
 import { catalogOf, type Catalog } from "../model/catalog";
 import { segLen } from "../model/geometry";
 import { openingSpan } from "../model/issues";
-import { WALL_DEFAULTS, type FloorFinish } from "../model/limits";
+import { DOUBLE_DOOR_CLEAR, WALL_DEFAULTS, type FloorFinish } from "../model/limits";
 import { keepStatic } from "./materials";
 import { FLOOR_TOP } from "./config";
+// every surface colour comes from the design tokens (src/ui/theme/tokens.ts → MATERIAL)
+import { MATERIAL } from "../ui/theme/tokens";
 
 const standard = (params: THREE.MeshStandardMaterialParameters) => keepStatic(new THREE.MeshStandardMaterial(params));
 
-export const wallMaterial = standard({ color: "#f2ede4", roughness: 0.93, metalness: 0.0 });
-export const wallTopMaterial = standard({ color: "#d9d2c5", roughness: 0.9 });
+export const wallMaterial = standard({ color: MATERIAL.wall.hex, roughness: 0.93, metalness: 0.0 });
+export const wallTopMaterial = standard({ color: MATERIAL.wallTop.hex, roughness: 0.9 });
 export const glassMaterial = keepStatic(
   new THREE.MeshPhysicalMaterial({
-    color: "#bcd8e8",
+    color: MATERIAL.glass.hex,
     roughness: 0.05,
     metalness: 0,
     transparent: true,
@@ -36,24 +38,24 @@ export const glassMaterial = keepStatic(
     side: THREE.DoubleSide,
   }),
 );
-export const frameMaterial = standard({ color: "#6b5d4f", roughness: 0.6 });
+export const frameMaterial = standard({ color: MATERIAL.frame.hex, roughness: 0.6 });
 
-export const doorLeafMaterial = standard({ color: "#e5ddd0", roughness: 0.5 });
-export const doorPanelMaterial = standard({ color: "#d8cfc0", roughness: 0.55 });
-export const skirtingMaterial = standard({ color: "#fbf8f2", roughness: 0.55 });
-export const handleMaterial = standard({ color: "#b9a26a", roughness: 0.3, metalness: 0.8 });
+export const doorLeafMaterial = standard({ color: MATERIAL.doorLeaf.hex, roughness: 0.5 });
+export const doorPanelMaterial = standard({ color: MATERIAL.doorPanel.hex, roughness: 0.55 });
+export const skirtingMaterial = standard({ color: MATERIAL.skirting.hex, roughness: 0.55 });
+export const handleMaterial = standard({ color: MATERIAL.handle.hex, roughness: 0.3, metalness: 0.8 });
 
-export const sillMaterial = standard({ color: "#efeae0", roughness: 0.6 });
-export const curtainMaterial = standard({ color: "#ded5c6", roughness: 0.97 });
+export const sillMaterial = standard({ color: MATERIAL.sill.hex, roughness: 0.6 });
+export const curtainMaterial = standard({ color: MATERIAL.curtain.hex, roughness: 0.97 });
 // double-sided: the shade is an open cone, seen from below as well as from above
 export const lampShadeMaterial = standard({
-  color: "#fdf6e6",
+  color: MATERIAL.lampShade.hex,
   roughness: 0.6,
-  emissive: new THREE.Color("#ffe9bd"),
+  emissive: new THREE.Color(MATERIAL.lampGlow.hex),
   emissiveIntensity: 0.9,
   side: THREE.DoubleSide,
 });
-export const cableMaterial = standard({ color: "#3a3733", roughness: 0.8 });
+export const cableMaterial = standard({ color: MATERIAL.cable.hex, roughness: 0.8 });
 
 const SKIRTING_H = 0.09;
 const DOOR_SWING = (82 * Math.PI) / 180;
@@ -83,7 +85,7 @@ function floorTexture(kind: FloorFinish): THREE.CanvasTexture | null {
     return "rgb(" + cl(r) + "," + cl(g) + "," + cl(b) + ")";
   };
   if (kind === "oak") {
-    x.fillStyle = "#c39a67";
+    x.fillStyle = MATERIAL.floor.oak.hex;
     x.fillRect(0, 0, S, S);
     const rows = 8;
     const rh = S / rows;
@@ -91,13 +93,13 @@ function floorTexture(kind: FloorFinish): THREE.CanvasTexture | null {
       let px = -Math.random() * 180;
       while (px < S) {
         const pw = 130 + Math.random() * 190;
-        x.fillStyle = jitter("#c39a67", 26);
+        x.fillStyle = jitter(MATERIAL.floor.oak.hex, 26);
         x.fillRect(px, i * rh, pw, rh - 1.5);
-        x.strokeStyle = "rgba(90,63,36,0.32)";
+        x.strokeStyle = MATERIAL.oakSeam.css;
         x.lineWidth = 1.5;
         x.strokeRect(px, i * rh, pw, rh - 1.5);
         for (let gi = 0; gi < 5; gi++) {
-          x.strokeStyle = "rgba(120,88,52,0.16)";
+          x.strokeStyle = MATERIAL.oakGrain.css;
           x.lineWidth = 1;
           const gy = i * rh + 4 + Math.random() * (rh - 10);
           x.beginPath();
@@ -109,18 +111,18 @@ function floorTexture(kind: FloorFinish): THREE.CanvasTexture | null {
       }
     }
   } else if (kind === "tile") {
-    x.fillStyle = "#c0bab0";
+    x.fillStyle = MATERIAL.tileGrout.hex;
     x.fillRect(0, 0, S, S);
     const n = 4;
     const t = S / n;
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {
-        x.fillStyle = jitter("#dcd6cb", 14);
+        x.fillStyle = jitter(MATERIAL.floor.tile.hex, 14);
         x.fillRect(i * t + 3, j * t + 3, t - 6, t - 6);
       }
     }
   } else if (kind === "carpet") {
-    x.fillStyle = "#a9b39e";
+    x.fillStyle = MATERIAL.floor.carpet.hex;
     x.fillRect(0, 0, S, S);
     for (let i = 0; i < 26000; i++) {
       const w = Math.random() > 0.5 ? "255,255,255" : "0,0,0";
@@ -128,7 +130,7 @@ function floorTexture(kind: FloorFinish): THREE.CanvasTexture | null {
       x.fillRect(Math.random() * S, Math.random() * S, 2, 2);
     }
   } else {
-    x.fillStyle = "#a5a5a0";
+    x.fillStyle = MATERIAL.floor.concrete.hex;
     x.fillRect(0, 0, S, S);
     for (let i = 0; i < 220; i++) {
       const w = Math.random() > 0.5 ? "255,255,255" : "0,0,0";
@@ -151,10 +153,10 @@ function floorTexture(kind: FloorFinish): THREE.CanvasTexture | null {
 const FLOOR_SCALE: Record<FloorFinish, number> = { oak: 2.4, tile: 1.2, carpet: 2, concrete: 3 };
 
 const FLOOR_COLORS: Record<FloorFinish, string> = {
-  oak: "#c39a67",
-  tile: "#dcd6cb",
-  carpet: "#a9b39e",
-  concrete: "#a5a5a0",
+  oak: MATERIAL.floor.oak.hex,
+  tile: MATERIAL.floor.tile.hex,
+  carpet: MATERIAL.floor.carpet.hex,
+  concrete: MATERIAL.floor.concrete.hex,
 };
 
 /**
@@ -338,7 +340,7 @@ export function buildWall(
       // hinged leaf (or two, for a double door) — clickable + animatable in Scene3D
       const clear = x1 - x0 - 0.04;
       const left = o.side === "left";
-      if (clear > 1.15) {
+      if (clear > DOUBLE_DOOR_CLEAR) {
         // double door: one leaf per jamb, both swinging to the same side
         addLeaf(x0 + 0.02, 1, clear / 2, o.height, o.id, left);
         addLeaf(x1 - 0.02, -1, clear / 2, o.height, o.id, left);
@@ -384,7 +386,7 @@ export function buildFloor(room: Room): THREE.Mesh {
     const sc = FLOOR_SCALE[room.floor];
     tex.repeat.set(room.w / sc, room.h / sc);
     mat.map = tex;
-    mat.color.set("#ffffff");
+    mat.color.set(MATERIAL.untinted.hex);
     if (room.floor === "tile") mat.roughness = 0.4;
   }
   const geo = new THREE.BoxGeometry(room.w, FLOOR_TOP, room.h);
@@ -410,7 +412,7 @@ export function buildPendant(room: Room, ceiling: number): THREE.Group {
   g.add(bulb);
   // brightness scaled to the room so a corridor is not lit like a living room
   const area = Math.max(4, room.w * room.h);
-  const light = new THREE.PointLight("#ffe0ae", Math.min(8, 2.2 + area * 0.26), Math.max(5, room.w + room.h), 2);
+  const light = new THREE.PointLight(MATERIAL.pendantLight.hex, Math.min(8, 2.2 + area * 0.26), Math.max(5, room.w + room.h), 2);
   light.position.set(0, shadeY - 0.12, 0);
   g.add(light);
   g.position.set(room.x + room.w / 2, 0, room.y + room.h / 2);
@@ -472,7 +474,7 @@ export const ceilingOf = (model: PlanModel): number => model.walls[0]?.height ??
 export function buildGround(): THREE.Mesh {
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(40, 64),
-    new THREE.MeshStandardMaterial({ color: "#565b52", roughness: 1 }),
+    new THREE.MeshStandardMaterial({ color: MATERIAL.ground.hex, roughness: 1 }),
   );
   ground.name = "ground";
   ground.rotation.x = -Math.PI / 2;

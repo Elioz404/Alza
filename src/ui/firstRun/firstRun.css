@@ -1,0 +1,121 @@
+/*
+ * The first-run state on the empty sheet. It sits on the paper, not in a card: the text is
+ * part of the drawing and lets the pointer through; only its controls and the agent card take
+ * pointer events. Tokens only (src/ui/theme/tokens.ts).
+ */
+@layer alza-surfaces {
+  .first-run {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-4);
+    width: min(100%, calc(var(--size-measure) + var(--spacing-12) * 2));
+    max-height: 100%;
+    padding: var(--spacing-6) var(--spacing-4);
+    overflow-y: auto;
+    text-align: center;
+    pointer-events: none;
+  }
+  .first-run :is(button, a, input, .first-run__agent) { pointer-events: auto; }
+
+  /* ---- the ghost room, drawn like a selection on the sheet */
+  .first-run__sketch {
+    width: calc(var(--size-panel) * 2 / 3);
+    max-width: 100%;
+    height: auto;
+    aspect-ratio: 220 / 150;
+    overflow: visible;
+  }
+  .first-run__ghost-fill { fill: var(--plan-selection-muted); }
+  .first-run__ghost {
+    fill: none;
+    stroke: var(--plan-selection);
+    stroke-width: var(--size-icon-stroke);
+    stroke-dasharray: var(--spacing-1-5) var(--spacing-1);
+  }
+  .first-run__ghost-dot { fill: var(--plan-selection); }
+  .first-run__ghost-text,
+  .first-run__dim-text {
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-sm);
+    font-variant-numeric: tabular-nums;
+    text-anchor: middle;
+  }
+  .first-run__ghost-text { fill: var(--color-text-accent); font-weight: var(--font-weight-semibold); dominant-baseline: middle; }
+  .first-run__dim-text { fill: var(--plan-dim); }
+  .first-run__dim-line { fill: none; stroke: var(--plan-dim); stroke-width: var(--size-hairline); }
+  .first-run__dim-tick { fill: none; stroke: var(--plan-dim); stroke-width: var(--size-icon-stroke); }
+
+  /* ---- words */
+  .first-run__title {
+    margin: var(--spacing-2) 0 0;
+    color: var(--color-text-primary);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--text-tight-leading);
+    text-wrap: balance;
+  }
+  .first-run__body {
+    margin: 0;
+    max-width: var(--size-measure);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-md);
+    line-height: var(--text-body-leading);
+    text-wrap: pretty;
+  }
+
+  /* ---- actions */
+  .first-run__actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--spacing-2); }
+  .first-run__links { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--spacing-2) var(--spacing-5); }
+  .first-run__link {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--size-control-sm);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-text-accent);
+    font: inherit;
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    text-decoration: underline;
+    text-decoration-thickness: var(--size-hairline);
+    text-underline-offset: var(--link-underline-offset);
+    cursor: pointer;
+    transition: text-decoration-color var(--duration-fast) var(--ease-out);
+  }
+  .first-run__link:focus-visible {
+    outline: var(--size-focus-ring) solid var(--color-focus);
+    outline-offset: var(--size-focus-ring);
+    border-radius: var(--radius-inner);
+  }
+  @media (hover: hover) {
+    .first-run__link:hover { text-decoration-color: transparent; }
+  }
+
+  /* ---- the agent card: floats over the sheet, so it carries the shadow */
+  .first-run__agent {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-3);
+    margin-top: var(--spacing-3);
+    padding: var(--spacing-3) var(--spacing-4);
+    border-radius: var(--radius-container);
+    background: var(--color-background-card);
+    box-shadow: var(--shadow-low), 0 0 0 var(--size-hairline) var(--color-border);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: var(--text-body-leading);
+    text-align: start;
+  }
+  .first-run__agent-icon { flex: none; margin-top: var(--spacing-0-5); color: var(--color-agent); }
+  .first-run__agent-title { display: block; color: var(--color-text-primary); font-size: var(--font-size-base); }
+  .first-run__agent-body { margin: 0; text-wrap: pretty; }
+
+  @media (max-width: 40rem) {
+    .first-run { gap: var(--spacing-3); padding: var(--spacing-4) var(--spacing-3); }
+    .first-run__sketch { display: none; }
+    .first-run__title { font-size: var(--font-size-lg); }
+    .first-run__body { font-size: var(--font-size-base); }
+  }
+}

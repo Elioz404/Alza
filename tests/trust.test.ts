@@ -191,19 +191,30 @@ describe("the partner's shop window", () => {
     const name = '<img src=x onerror="window.__pwned=1"><b>bold</b>';
     renderProducts(list, [product({ name, sku: "<script>x</script>" })]);
     expect(list.querySelector("img, b, script")).toBeNull();
-    expect(list.querySelector(".name")?.textContent).toBe(name);
-    expect(list.querySelector(".dims")?.textContent).toContain("<script>x</script>");
+    expect(list.querySelector(".product__name")?.textContent).toBe(name);
+    expect(list.querySelector(".product__sku")?.textContent).toBe("<script>x</script>");
+  });
+
+  it("renders a category it does not know as text too", () => {
+    const list = document.createElement("ul");
+    const category = "<img src=x onerror=\"window.__pwned=1\">";
+    renderProducts(list, [product({ category })]);
+    expect(list.querySelector("img")).toBeNull();
+    expect(list.querySelector(".group__title")?.textContent).toBe(category);
   });
 
   it("shows stock, price and swatch, and replaces the previous rows", () => {
     const list = document.createElement("ul");
     renderProducts(list, [product(), product({ sku: "NK-OOS-01", stock: 0 })]);
     renderProducts(list, [product(), product({ sku: "NK-OOS-01", stock: 0 })]);
-    expect(list.children).toHaveLength(2);
-    const [inStock, out] = [...list.children];
-    expect(inStock.querySelector(".dims")?.textContent).toBe("NK-TST-01 · 2.00 × 0.90 m · 3 in stock");
-    expect(out.querySelector(".oos")?.textContent).toBe("out of stock");
-    expect(inStock.querySelector(".price")?.textContent).toBe("€500");
-    expect((inStock.querySelector(".swatch") as HTMLElement).style.background).not.toBe("");
+    const rows = [...list.querySelectorAll(".product")];
+    expect(rows).toHaveLength(2);
+    const [inStock, out] = rows;
+    expect(inStock.querySelector(".product__sku")?.textContent).toBe("NK-TST-01");
+    expect(inStock.querySelector(".product__dims")?.textContent).toBe("2.00 × 0.90 m");
+    expect(inStock.querySelector(".product__stock")?.textContent).toBe("3 in stock");
+    expect(out.querySelector(".product__stock--out")?.textContent).toBe("Out of stock");
+    expect(inStock.querySelector(".product__price")?.textContent).toBe("€500");
+    expect((inStock.querySelector(".product__swatch") as HTMLElement).style.background).not.toBe("");
   });
 });

@@ -1,0 +1,307 @@
+/*
+ * The shell: the page's frame and its three layouts.
+ *
+ *   over 64rem (1024px)    grid: top bar / rail | canvas | side panel
+ *   64rem and under        the side panel becomes a drawer over the canvas, toggled from the top bar
+ *   40rem (640px) and under one column: top bar / canvas / rail as a bottom toolbar; the side
+ *                           panel becomes a bottom sheet
+ *
+ * The breakpoints are BREAKPOINT in src/ui/theme/tokens.ts (a media query cannot read a custom
+ * property); tests/theme.test.ts keeps the two in step. Tokens only otherwise.
+ */
+@layer alza-components {
+  .shell {
+    position: relative;
+    display: grid;
+    height: 100dvh;
+    grid-template-columns: var(--size-rail) minmax(0, 1fr) var(--size-panel);
+    grid-template-rows: var(--size-topbar) minmax(0, 1fr);
+    grid-template-areas:
+      "top top top"
+      "rail canvas side";
+    background: var(--color-background-body);
+    overflow: clip;
+  }
+
+  .skip-link {
+    position: absolute;
+    top: var(--spacing-2);
+    left: var(--spacing-2);
+    z-index: var(--z-tooltip);
+    padding: var(--spacing-2) var(--spacing-3);
+    border-radius: var(--radius-element);
+    background: var(--color-background-card);
+    box-shadow: var(--shadow-med);
+    color: var(--color-text-accent);
+    font-weight: var(--font-weight-semibold);
+  }
+  /* off the page, shadow and all, until the keyboard reaches it */
+  .skip-link:not(:focus-visible) { clip-path: inset(50%); opacity: 0; pointer-events: none; }
+
+  /* ---------------------------------------------------------------- top bar */
+  .topbar {
+    grid-area: top;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--spacing-2);
+    padding: 0 var(--spacing-3);
+    background: var(--color-background-surface);
+    border-bottom: var(--size-hairline) solid var(--color-border);
+  }
+  .topbar__start,
+  .topbar__end { display: flex; align-items: center; gap: var(--spacing-2); min-width: 0; }
+  .topbar__end { justify-content: flex-end; gap: var(--spacing-1); }
+  .topbar__center { display: flex; justify-content: center; }
+  .topbar__divider { flex: none; width: var(--size-hairline); height: var(--size-divider); background: var(--color-border); }
+
+  .brand { display: inline-flex; align-items: center; gap: var(--spacing-2); padding: 0 var(--spacing-1); flex: none; }
+  .brand__word { font-family: var(--font-family-drawing); font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); line-height: 1; }
+
+  .plan-name {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1);
+    min-width: 0;
+    height: var(--size-control);
+    padding: 0 var(--spacing-2);
+    border: 0;
+    border-radius: var(--radius-element);
+    background: transparent;
+    color: var(--color-text-primary);
+    font: inherit;
+    font-weight: var(--font-weight-semibold);
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out);
+  }
+  .plan-name .icon { color: var(--color-icon-secondary); }
+  .plan-name__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .plan-name[aria-expanded="true"] { background: var(--color-background-muted); }
+  .save-state { flex: none; color: var(--color-text-secondary); font-size: var(--font-size-sm); white-space: nowrap; border-radius: var(--radius-inner); }
+
+  .topbar__export { padding: 0 var(--spacing-2); }
+
+  /* scoped under their region: the primitives set display on .icon-btn and .btn */
+  .topbar .topbar__panel-toggle { display: none; }
+
+  @media (hover: hover) {
+    .plan-name:hover { background: var(--color-background-muted); }
+  }
+
+  /* ---------------------------------------------------------------- tool rail */
+  .rail {
+    grid-area: rail;
+    position: relative;
+    z-index: var(--z-raised);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-1);
+    padding: var(--spacing-2) 0;
+    background: var(--color-background-surface);
+    border-right: var(--size-hairline) solid var(--color-border);
+  }
+  /* each tool's key, in the button's corner (aria-keyshortcuts already says it) */
+  .rail__key {
+    position: absolute;
+    right: var(--spacing-0-5);
+    bottom: var(--spacing-0-5);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1;
+    color: inherit;
+    pointer-events: none;
+  }
+  /* between the groups: Select and Pan, the drawing tools, furniture */
+  .rail__sep {
+    flex: none;
+    width: var(--size-divider);
+    height: var(--size-hairline);
+    margin: var(--spacing-1) 0;
+    background: var(--color-border);
+  }
+
+  /* ---------------------------------------------------------------- canvas */
+  .canvas {
+    grid-area: canvas;
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: clip;
+    background: var(--plan-paper);
+  }
+  .canvas[data-view="3d"] { background: var(--scene-backdrop); }
+  /* the skip link's target: its ring sits inside, where the frame does not clip it */
+  .canvas:focus-visible { outline-offset: calc(-1 * var(--size-focus-ring)); }
+  .editor-svg { display: block; width: 100%; height: 100%; background: var(--plan-paper); touch-action: none; }
+
+  .canvas__overlays { position: absolute; inset: 0; z-index: var(--z-raised); pointer-events: none; }
+  .canvas__slot { position: absolute; }
+  .canvas__slot > * { pointer-events: auto; }
+  .canvas__slot--marks { inset: 0; }
+  .canvas__slot--marks > * { pointer-events: none; }
+  .canvas__slot--legend { top: var(--spacing-4); right: var(--spacing-4); }
+  .canvas__slot--center { inset: 0; display: grid; place-items: center; }
+  .canvas__slot--center:empty { display: none; }
+  .canvas__slot--zoom { left: var(--spacing-4); bottom: var(--spacing-4); }
+  .canvas__slot--hint { left: 50%; bottom: var(--spacing-4); translate: -50% 0; max-width: calc(100% - 2 * var(--spacing-4)); }
+
+  .scene3d-wrap { position: absolute; inset: 0; }
+  .scene3d { width: 100%; height: 100%; }
+
+  /* ---------------------------------------------------------------- side panel */
+  .side {
+    grid-area: side;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-width: 0;
+    min-height: 0;
+    background: var(--color-background-surface);
+    border-left: var(--size-hairline) solid var(--color-border);
+  }
+  .side__head {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-1);
+    min-width: 0;
+    padding: 0 var(--spacing-2) 0 var(--spacing-3);
+    border-bottom: var(--size-hairline) solid var(--color-border);
+  }
+  .side__tabs { flex: 1; min-width: 0; }
+  .side .side__close { display: none; }
+  .side__body { min-height: 0; overflow: auto; }
+
+  /* head, then the scrolling body, then the note composer pinned to the foot: the queue, the
+     policy, the feed and Developer tools scroll above it, and it stays when Activity folds */
+  .activity {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "head" "body" "compose";
+    min-height: 0;
+    border-top: var(--size-hairline) solid var(--color-border);
+    background: var(--color-background-surface);
+  }
+  .activity[data-open="true"] { height: var(--size-activity); }
+  .activity__head { grid-area: head; margin: 0; font-size: var(--font-size-base); }
+  .activity__toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    width: 100%;
+    min-height: var(--size-tab);
+    padding: 0 var(--spacing-4);
+    border: 0;
+    background: transparent;
+    color: var(--color-text-primary);
+    font: inherit;
+    font-weight: var(--font-weight-semibold);
+    text-align: start;
+    cursor: pointer;
+  }
+  .activity__chevron { color: var(--color-icon-secondary); transition: rotate var(--duration-move) var(--ease-out); }
+  .activity[data-open="false"] .activity__chevron { rotate: -90deg; }
+  .activity__body { grid-area: body; min-height: 0; overflow: auto; }
+  .activity__compose { grid-area: compose; min-width: 0; }
+
+  @media (hover: hover) {
+    .activity__toggle:hover { background: var(--color-background-muted); }
+  }
+
+  /* the partner's transport frame: present for the agent, invisible to the person */
+  .supplier-bridge {
+    position: absolute;
+    width: var(--size-hairline);
+    height: var(--size-hairline);
+    border: 0;
+    opacity: 0;
+    pointer-events: none;
+    inset-inline-start: 0;
+    translate: -100% 0;
+  }
+
+  /* ---------------------------------------------------------------- notices and dialogs */
+  .notice__undo { color: inherit; text-decoration: underline; text-underline-offset: var(--link-underline-offset); }
+
+  .shortcuts { display: flex; flex-direction: column; gap: var(--spacing-5); }
+  .shortcuts__title { margin: 0 0 var(--spacing-2); font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); }
+  .shortcuts__list { display: flex; flex-direction: column; gap: var(--spacing-1-5); margin: 0; }
+  .shortcuts__row { display: grid; grid-template-columns: var(--size-key-column) minmax(0, 1fr); gap: var(--spacing-3); align-items: baseline; }
+  .shortcuts__keys { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-1); margin: 0; }
+  .shortcuts__key { display: inline-flex; align-items: center; gap: var(--spacing-1); }
+  .shortcuts__or,
+  .shortcuts__gesture { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+  .shortcuts__does { margin: 0; }
+
+  /* ---------------------------------------------------------------- 64rem and under: drawer */
+  @media (max-width: 64rem) {
+    .shell {
+      grid-template-columns: var(--size-rail) minmax(0, 1fr);
+      grid-template-areas:
+        "top top"
+        "rail canvas";
+    }
+    .topbar .topbar__panel-toggle,
+    .side .side__close { display: inline-grid; }
+    .side {
+      position: fixed;
+      top: var(--size-topbar);
+      right: 0;
+      bottom: 0;
+      z-index: var(--z-drawer);
+      width: min(var(--size-panel), calc(100% - var(--size-rail)));
+      box-shadow: var(--shadow-high);
+      translate: 100% 0;
+      visibility: hidden;
+      transition:
+        translate var(--duration-move) var(--ease-out),
+        visibility 0s linear var(--duration-move);
+    }
+    .side[data-open="true"] {
+      translate: none;
+      visibility: visible;
+      transition: translate var(--duration-move) var(--ease-out);
+    }
+  }
+
+  /* ---------------------------------------------------------------- 40rem and under: one column */
+  @media (max-width: 40rem) {
+    .shell {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: var(--size-topbar) minmax(0, 1fr) auto;
+      grid-template-areas:
+        "top"
+        "canvas"
+        "rail";
+    }
+    .topbar { gap: var(--spacing-1); padding: 0 var(--spacing-2); }
+    .topbar .brand__word,
+    .topbar .topbar__divider,
+    .topbar .save-state,
+    .topbar .topbar__help,
+    .topbar .topbar__export { display: none; }
+    .rail {
+      flex-direction: row;
+      justify-content: center;
+      padding: var(--spacing-1) var(--spacing-2);
+      border-right: 0;
+      border-top: var(--size-hairline) solid var(--color-border);
+      overflow-x: auto;
+    }
+    .rail__key { display: none; }
+    .rail__sep { width: var(--size-hairline); height: var(--size-divider); margin: 0 var(--spacing-1); }
+    .side {
+      top: auto;
+      left: 0;
+      width: auto;
+      height: var(--size-sheet);
+      max-height: calc(100dvh - var(--size-topbar));
+      border-left: 0;
+      border-top: var(--size-hairline) solid var(--color-border);
+      border-radius: var(--radius-container) var(--radius-container) 0 0;
+      translate: 0 100%;
+    }
+    /* the sheet's height is definite, so half of it is too: the tab body keeps the other half */
+    .activity[data-open="true"] { height: calc(var(--size-sheet) / 2); }
+  }
+}

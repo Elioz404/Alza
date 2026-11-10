@@ -24,6 +24,7 @@ import { bus, EVENTS, sceneProbe, type SceneStats, type SetDoorsPayload } from "
 import type { CameraMode } from "../model/limits";
 import type { PlanModel } from "../model/types";
 import { runToolManually } from "../mcp/tools";
+import { placeHeldPieceAt, planBounds, planCentre } from "../editor/canvasState";
 import { PlanScene } from "./planScene";
 import { frameLoop } from "./frames";
 import { WalkKeys, blockersFor, slide, type Blockers } from "./walk";
@@ -278,6 +279,20 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
   renderer.domElement.addEventListener("click", onClick);
   renderer.domElement.addEventListener("mousemove", onMove);
 
+  // ---- the keyboard's placement: the floor under the middle of the view ----
+  // the point the camera looks at, where its centre ray meets the floor inside the plan's
+  // extent; looking level (walking) or past the plan, the middle of the plan instead
+  const offPlace = bus.on(EVENTS.PLACE_AT_CENTRE, () => {
+    const current = store.getState().model;
+    ndc.set(0, 0);
+    ray.setFromCamera(ndc, cam);
+    const b = planBounds(current);
+    const onFloor = ray.ray.intersectPlane(floorPlane, hit) !== null;
+    const inPlan = onFloor && b !== null && hit.x >= b.minX && hit.x <= b.maxX && hit.z >= b.minY && hit.z <= b.maxY;
+    const at = inPlan ? { x: hit.x, y: hit.z } : planCentre(current);
+    if (placeHeldPieceAt(at.x, at.y)) invalidate();
+  });
+
   // ---- bus: doors, exports ----
   const offDoors = bus.on(EVENTS.SET_DOORS, (p) => {
     if (plan.setDoors(p as SetDoorsPayload)) invalidate();
@@ -341,6 +356,7 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       loop.stop();
       ro.disconnect();
       offDoors();
+      offPlace();
       offObj();
       offPng();
       window.removeEventListener("keydown", kd);

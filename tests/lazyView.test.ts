@@ -1,7 +1,7 @@
 /**
  * The 3D view is fetched on demand, and a fetch can fail: a stale chunk after a redeploy, a
  * dropped connection. A rejected lazy import used to reach the root and unmount everything —
- * editor, sidebar, approval bar — for the one view that failed. Now the failure stays in the
+ * editor, side panel, approval queue — for the one view that failed. Now the failure stays in the
  * canvas area, which offers to try again.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,13 +56,13 @@ describe("a 3D view that cannot be loaded", () => {
     await settle();
 
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Could not load the 3D view");
-    expect(host.querySelector(".header")).not.toBeNull();
-    expect(host.querySelector(".sidebar")).not.toBeNull();
+    expect(host.querySelector(".topbar")).not.toBeNull();
+    expect(host.querySelector(".side")).not.toBeNull();
 
     // and the way back to the editor still works
     await act(async () => pageActions.setView("2d"));
     expect(host.querySelector(".editor-svg")).not.toBeNull();
-    expect(host.querySelector(".sidebar")).not.toBeNull();
+    expect(host.querySelector(".side")).not.toBeNull();
   });
 });
 

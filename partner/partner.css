@@ -1,33 +1,197 @@
-/* Nordika's shop window. A stylesheet rather than an inline <style>, so the partner's CSP can
-   keep style-src to 'self'. */
-:root { color-scheme: light; }
+/* Nordika's shop window: its own brand, not Alza's (birch paper, pine green, warm ink). A
+   stylesheet rather than an inline <style>, so the partner's CSP can keep style-src to 'self'.
+   Every value is named once below; the rules use the names. */
+:root {
+  color-scheme: light;
+
+  /* colour */
+  --nk-paper: #f6f2ea;
+  --nk-surface: #fffdf8;
+  --nk-ink: #29241e;
+  --nk-ink-soft: #675d51;
+  --nk-line: #e3dbcd;
+  --nk-line-strong: #cfc4b2;
+  --nk-pine: #2e5b4c;
+  --nk-pine-tint: #e4eee8;
+  --nk-on-pine: #f6f2ea;
+  --nk-clay: #a03f29;
+  --nk-swatch-edge: #29241e1f;
+  --nk-focus: #2e5b4c;
+
+  /* type */
+  --nk-font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --nk-font-code: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --nk-size-xs: 0.6875rem;
+  --nk-size-sm: 0.75rem;
+  --nk-size-base: 0.8125rem;
+  --nk-size-md: 0.875rem;
+  --nk-weight-regular: 400;
+  --nk-weight-strong: 600;
+  --nk-leading: 1.45;
+
+  /* space and shape */
+  --nk-space-1: 0.25rem;
+  --nk-space-2: 0.5rem;
+  --nk-space-3: 0.75rem;
+  --nk-space-4: 1rem;
+  --nk-radius-sm: 0.25rem;
+  --nk-radius: 0.5rem;
+  --nk-radius-full: 999px;
+  --nk-swatch: 2.25rem;
+  --nk-mark: 1.375rem;
+  --nk-word: 1.0625rem;
+  --nk-dot: 0.375rem;
+  --nk-pill: 1.375rem;
+  --nk-faded: 0.45;
+  --nk-hairline: 1px;
+  --nk-stroke-word: 1.7;
+  --nk-stroke-fold: 2.2;
+  --nk-measure: 44rem;
+}
+
 * { box-sizing: border-box; }
+
 body {
   margin: 0;
-  font: 13px/1.45 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-  color: #2f2a24;
-  background: #fbf9f5;
+  font: var(--nk-weight-regular) var(--nk-size-base) / var(--nk-leading) var(--nk-font);
+  color: var(--nk-ink);
+  background: var(--nk-paper);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
 }
-header {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 12px; border-bottom: 1px solid #e6dfd4; background: #fff;
-  position: sticky; top: 0; z-index: 2;
+::selection { background: var(--nk-pine-tint); color: var(--nk-ink); }
+
+/* ---- masthead */
+.masthead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nk-space-3);
+  padding-block: var(--nk-space-2);
+  /* the masthead runs edge to edge; its content lines up with the catalogue's column */
+  padding-inline: max(var(--nk-space-3), calc((100% - var(--nk-measure)) / 2 + var(--nk-space-3)));
+  background: var(--nk-surface);
+  border-bottom: var(--nk-hairline) solid var(--nk-line);
 }
-.logo { width: 18px; height: 18px; border-radius: 5px; background: linear-gradient(135deg, #3f7d6a, #7fb8a3); }
-h1 { font-size: 13px; margin: 0; letter-spacing: -0.01em; }
-.sub { font-size: 11px; color: #857b6d; margin-left: auto; }
+.brand { display: inline-flex; align-items: center; gap: var(--nk-space-2); color: var(--nk-ink); }
+.brand__mark { width: var(--nk-mark); height: var(--nk-mark); flex: none; }
+.brand__tile { fill: var(--nk-pine); }
+.brand__fold {
+  fill: none;
+  stroke: var(--nk-on-pine);
+  stroke-width: var(--nk-stroke-fold);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.brand__word {
+  height: var(--nk-word);
+  width: auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: var(--nk-stroke-word);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  overflow: visible;
+}
+.brand__word .brand__dot { fill: currentColor; stroke: none; }
+
 .pill {
-  font-size: 10px; padding: 2px 7px; border-radius: 999px;
-  border: 1px solid #cfe3d9; background: #eef7f2; color: #2f6b56;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nk-space-1);
+  padding: 0 var(--nk-space-2);
+  min-height: var(--nk-pill);
+  border: var(--nk-hairline) solid var(--nk-line-strong);
+  border-radius: var(--nk-radius-full);
+  background: var(--nk-paper);
+  color: var(--nk-ink-soft);
+  font-size: var(--nk-size-xs);
+  white-space: nowrap;
 }
-.pill.off { border-color: #e6dfd4; background: #f5f2ec; color: #8a8073; }
-ul { list-style: none; margin: 0; padding: 8px; display: grid; gap: 6px; }
-li { display: grid; grid-template-columns: 34px 1fr auto; gap: 9px; align-items: center;
-     padding: 7px 9px; border: 1px solid #e6dfd4; border-radius: 9px; background: #fff; }
-.swatch { width: 34px; height: 34px; border-radius: 6px; border: 1px solid rgba(0,0,0,.09); }
-.name { font-weight: 560; }
-.dims { font-size: 11px; color: #857b6d; }
-.price { font-variant-numeric: tabular-nums; font-weight: 600; }
-.oos { color: #b4462f; font-size: 11px; }
-footer { padding: 8px 12px; font-size: 11px; color: #857b6d; border-top: 1px solid #e6dfd4; }
-code { background: #f1ede5; padding: 1px 4px; border-radius: 4px; font-size: 11px; }
+.pill::before {
+  content: "";
+  width: var(--nk-dot);
+  height: var(--nk-dot);
+  border-radius: var(--nk-radius-full);
+  border: var(--nk-hairline) solid currentColor;
+}
+.pill--on { border-color: var(--nk-pine); background: var(--nk-pine-tint); color: var(--nk-pine); }
+.pill--on::before { background: currentColor; }
+
+/* ---- the catalogue */
+main { max-width: var(--nk-measure); margin: 0 auto; }
+.catalogue,
+.group__list { list-style: none; margin: 0; padding: 0; }
+.catalogue { padding: var(--nk-space-1) var(--nk-space-3) var(--nk-space-3); }
+.group + .group { margin-top: var(--nk-space-2); }
+.group__title {
+  margin: 0;
+  padding: var(--nk-space-2) 0 var(--nk-space-1);
+  color: var(--nk-ink-soft);
+  font-size: var(--nk-size-sm);
+  font-weight: var(--nk-weight-strong);
+}
+.group__list {
+  border: var(--nk-hairline) solid var(--nk-line);
+  border-radius: var(--nk-radius);
+  background: var(--nk-surface);
+}
+
+.product {
+  display: grid;
+  grid-template-columns: var(--nk-swatch) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--nk-space-3);
+  padding: var(--nk-space-2) var(--nk-space-3);
+}
+.product + .product { border-top: var(--nk-hairline) solid var(--nk-line); }
+.product__swatch {
+  width: var(--nk-swatch);
+  height: var(--nk-swatch);
+  border-radius: var(--nk-radius-sm);
+  box-shadow: inset 0 0 0 var(--nk-hairline) var(--nk-swatch-edge);
+}
+.product__main { min-width: 0; }
+.product__name {
+  font-size: var(--nk-size-md);
+  font-weight: var(--nk-weight-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.product__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--nk-space-2);
+  color: var(--nk-ink-soft);
+  font-size: var(--nk-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+.product__sku { font-family: var(--nk-font-code); font-size: var(--nk-size-xs); letter-spacing: 0; }
+.product__end { text-align: end; font-variant-numeric: tabular-nums; }
+.product__price { font-size: var(--nk-size-md); font-weight: var(--nk-weight-strong); }
+.product__stock { color: var(--nk-ink-soft); font-size: var(--nk-size-sm); }
+.product__stock--out { color: var(--nk-clay); font-weight: var(--nk-weight-strong); }
+.product--out .product__swatch { opacity: var(--nk-faded); }
+.product--out .product__name,
+.product--out .product__price { color: var(--nk-ink-soft); }
+
+/* ---- colophon */
+.colophon {
+  max-width: var(--nk-measure);
+  margin: 0 auto;
+  padding: var(--nk-space-2) var(--nk-space-3) var(--nk-space-4);
+  color: var(--nk-ink-soft);
+  font-size: var(--nk-size-sm);
+}
+code {
+  padding: 0 var(--nk-space-1);
+  border-radius: var(--nk-radius-sm);
+  background: var(--nk-pine-tint);
+  color: var(--nk-pine);
+  font-family: var(--nk-font-code);
+  font-size: var(--nk-size-xs);
+}

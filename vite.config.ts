@@ -8,8 +8,86 @@ import { STUDIO_DEV_ORIGIN, STUDIO_DEV_PORT, resolveOrigins } from "./config/ori
 import { HEADERS_FILE, headerRules, renderHeadersFile } from "./config/headers.js";
 import { TEST_HOOK_ENV, assertTestHookOrigins, readFlag } from "./config/flags.js";
 import { SITES, SITE_PAGES, outputDirFor, type Site } from "./config/sites.js";
+import { renderTokenCss } from "./src/ui/theme/tokens";
+import { TOUCH_ACTION_RULE_MODULE, touchActionCss, touchActionRuleSource } from "./config/astryxTouchAction.js";
+import { atomicClassesIn, purgeAtomicCss } from "./config/purgeAtomicCss.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** The stylesheets the build writes itself (imported by src/ui/theme/index.ts). */
+export const VIRTUAL_STYLES = Object.freeze({
+  /** the design tokens, rendered from src/ui/theme/tokens.ts */
+  tokens: "virtual:alza-tokens.css",
+  /** the @position-try rules Astryx's anchored layers would otherwise inject as a <style> */
+  slideRules: "virtual:astryx-slide-rules.css",
+  /** the touch-action rules Astryx's gesture host would otherwise write at run time */
+  touchAction: "virtual:astryx-touch-action.css",
+});
+
+/**
+ * The installed Astryx's own `slideRulesCss()`. Astryx writes these rules into a <style> the
+ * first time a tooltip, popover or menu opens, and the CSP (style-src 'self') refuses that
+ * element: long menus would stop scrolling and edge placements stop sliding. Built here into a
+ * static sheet instead, from the very version that is installed, it can never drift from it;
+ * the marker element in index.html (id="astryx-layer-slide-rules") is what tells Astryx the
+ * rules are already on the page.
+ */
+async function astryxSlideRules(): Promise<string> {
+  const layerEntry = import.meta.resolve("@astryxdesign/core/Layer");
+  const mod = (await import(new URL("./layerSlideRules.js", layerEntry).href)) as { slideRulesCss: () => string };
+  return mod.slideRulesCss();
+}
+
+/**
+ * Serves VIRTUAL_STYLES as ordinary CSS modules, so they are bundled, hashed and attached to the
+ * studio's entry like any other stylesheet. A change to tokens.ts restarts the dev server (it is
+ * a dependency of this config), which re-renders the tokens.
+ */
+function alzaStyles(): Plugin {
+  const ids = new Map<string, () => string | Promise<string>>([
+    [VIRTUAL_STYLES.tokens, renderTokenCss],
+    [VIRTUAL_STYLES.slideRules, astryxSlideRules],
+    [VIRTUAL_STYLES.touchAction, touchActionCss],
+  ]);
+  const PREFIX = "\0";
+  return {
+    name: "alza-styles",
+    resolveId(id) {
+      return ids.has(id) ? PREFIX + id : undefined;
+    },
+    load(id) {
+      // Astryx's touch-action writer, replaced by one that only marks the element: its rules
+      // are already in VIRTUAL_STYLES.touchAction (config/astryxTouchAction.js)
+      if (id.split(sep).join("/").endsWith(TOUCH_ACTION_RULE_MODULE)) return touchActionRuleSource();
+      if (!id.startsWith(PREFIX)) return undefined;
+      return ids.get(id.slice(PREFIX.length))?.();
+    },
+  };
+}
+
+/**
+ * Leave out the Astryx rules no element can match (config/purgeAtomicCss.js): every component's
+ * atomic classes ship in astryx.css, and the page uses a dozen components. A rule stays when
+ * every atomic class it needs is named in some chunk of the bundle, lazy ones included.
+ */
+function purgeUnusedAtomicCss(): Plugin {
+  return {
+    name: "alza-purge-atomic-css",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const used = new Set<string>();
+      for (const output of Object.values(bundle)) if (output.type === "chunk") for (const name of atomicClassesIn(output.code)) used.add(name);
+      for (const output of Object.values(bundle)) {
+        if (output.type === "asset" && output.fileName.endsWith(".css") && typeof output.source === "string") {
+          output.source = purgeAtomicCss(output.source, used);
+        }
+      }
+    },
+  };
+}
+
+/** Never inline a font as a data: URI: the CSP's font fallback (default-src 'self') refuses data:. */
+const assetsInlineLimit = (file: string): boolean | undefined => (/\.(woff2?|ttf|otf)$/i.test(file) ? false : undefined);
 
 /** A page's file under the repo root (and under the bundle), from its path under its origin. */
 const pageFile = (pagePath: string) => pagePath.replace(/^\//, "");
@@ -122,7 +200,7 @@ export default defineConfig(({ command, mode }) => {
   const testHook = readFlag(env, TEST_HOOK_ENV);
   if (command === "build") assertTestHookOrigins(testHook, origins);
   return {
-    plugins: [react(), perSiteOutput(origins)],
+    plugins: [react(), alzaStyles(), purgeUnusedAtomicCss(), perSiteOutput(origins)],
     base: "./",
     // Pinned and strict: the partner only authorises the studio's dev port, and a silently
     // bumped port would be an origin nobody trusts.
@@ -132,6 +210,7 @@ export default defineConfig(({ command, mode }) => {
       outDir: outputDirFor(origins),
       // perSiteOutput copies public/ into each site itself
       copyPublicDir: false,
+      assetsInlineLimit,
       // one entry point per site: the studio, and the partner catalogue that ships as its own origin
       rollupOptions: {
         input: Object.fromEntries(SITES.map((site) => [site, resolve(__dirname, pageFile(SITE_PAGES[site]))])),
@@ -150,6 +229,10 @@ export default defineConfig(({ command, mode }) => {
       environment: "happy-dom",
       environmentOptions: { happyDOM: { url: `${STUDIO_DEV_ORIGIN}/` } },
       include: ["tests/**/*.test.ts"],
+      // Stylesheets imported for their effect stay empty (nothing is injected into the test DOM,
+      // which must show no <style>), but a stylesheet read as text (?raw) is its real text, so
+      // the tests that hold the stylesheets to the tokens read what ships.
+      css: { include: [/\.css\?raw$/] },
     },
   };
 });

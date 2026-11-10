@@ -144,8 +144,8 @@ renderProducts(/** @type {HTMLElement} */ (document.getElementById("list")), PRO
 const displayOnly = new URLSearchParams(location.search).get("display") === "1";
 const registered = displayOnly ? 0 : registerTools();
 const pill = /** @type {HTMLElement} */ (document.getElementById("pill"));
-pill.textContent = displayOnly ? "display only" : registered > 0 ? `${registered} tools shared` : "tools off";
-pill.className = registered > 0 ? "pill" : "pill off";
+pill.textContent = displayOnly ? "Display only" : registered > 0 ? `${registered} tools shared` : "Tools off";
+pill.className = registered > 0 ? "pill pill--on" : "pill";
 // The frame that owns the tools tells the studio they are in place, so it looks for them now
 // rather than after a fixed delay. A display-only copy registers nothing and says nothing.
 if (!displayOnly) announceReady({ self: window, parent: window.parent }, HOST_ORIGINS);

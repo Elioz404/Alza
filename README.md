@@ -76,19 +76,19 @@ More stills in [`shots/showcase/`](shots/showcase/).
 1. Open the live app (link at the top of this repo).
 2. **In ChatGPT desktop:** open the URL in the in-app browser. WebMCP works out of the box.
    **In Google Chrome 149+:** enable `chrome://flags/#enable-webmcp-testing` and restart.
-   The pill in the header turns green: **● Site tools live** (31 tools registered).
+   The agent status in the top bar turns green: **Agent tools on** (31 tools registered).
 3. Ask your agent, for example:
    - *"Add a 3 × 2.5 m study next to the bedroom, with a door and a window."*
    - *"The sofa placement feels off. Check the plan and fix any issues."*
    - *"Build the 3D and give me a walkthrough."*
-4. No WebMCP runtime? The app is still complete. Open the **Tools** tab and run the exact
-   same 32 tools manually; every call is logged in the activity feed at the bottom.
+4. No WebMCP runtime? The app is still complete. Open **Activity → Developer tools** in the side
+   panel and run the exact same 32 tools manually; every call is logged in Activity.
 
 ## Trace your own plan with the agent
 
 Have a floor-plan image (scan, photo, PDF export)? Let the agent rebuild it in 3D:
 
-1. Upload the image in **sidebar → Model → Blueprint underlay** (it appears on the 2D
+1. Upload the image in **Properties → Blueprint underlay** (it appears on the 2D
    canvas), and attach the same image in the chat so the agent can see it.
 2. Give the agent **one real dimension** from the plan, e.g. *"this wall is 4.6 m"*.
    It calls `calibrate_underlay` with two points on the image and that distance, and the
@@ -144,8 +144,8 @@ A few design notes:
   runtime emit `toolchange`.
 - `get_issues` runs a geometry constraint engine (below). Agents call it after editing
   and fix their own mistakes, which is the self-repair loop.
-- Without a WebMCP runtime the app loses nothing. The built-in ToolRunner executes the
-  same tools manually.
+- Without a WebMCP runtime the app loses nothing. **Activity → Developer tools** runs the
+  same tools by hand.
 
 ## Two things WebMCP makes possible that I had not seen elsewhere
 
@@ -153,15 +153,18 @@ A few design notes:
 
 The explainer lists per-call user confirmation as an **open question** ("a way for a tool
 to prompt the user for confirmation"). Alza answers it on the page. A tool annotated
-`destructiveHint` does not run when the agent calls it; it becomes a **request bar** at
-the bottom of the studio (*"AGENT WANTS TO erase the whole plan"*) and the agent's
-`execute()` stays pending until a human presses Approve or Reject. Reject returns a real
+`destructiveHint` does not run when the agent calls it; it becomes a **request card** on
+the plan, beside the thing it would remove (*"Your agent wants to clear the whole plan"*),
+with that target hatched in red and the request listed under **Waiting for you** in
+Activity. The agent's `execute()` stays pending until a human keeps the plan (Esc) or
+confirms (Ctrl+Enter). Reject returns a real
 failure the agent can act on ("the human declined … ask them what to do instead"), and the
 `AbortSignal` WebMCP passes to `execute()` releases the request if the agent gives up
 first.
 
-The gate is a toggle in **sidebar → Model**. It also guards the manual ToolRunner, because
-both paths run through the same wrapper.
+The gate is a switch in **Properties** (with nothing selected), and the policy is stated in
+words under the queue in Activity, with a Change link to the same switch. It also guards
+**Developer tools**, because both paths run through the same wrapper.
 
 ### 2. One agent, two origins, one plan
 
@@ -206,27 +209,36 @@ src/
             catalog.ts (31 built-in kinds + the plan's own kinds) · resolve.ts (id/name lookup)
             store.ts (shared actions, undo, activity) · commands.ts (dispatch: the one change path)
             assets.ts (underlay images, kept while the plan or its undo history names them)
-            sceneBus.ts · seed.ts
-  editor/   Editor.tsx — SVG: chained walls, rooms, openings with door arcs,
-            furniture drag, blueprint underlay, metric dimensions, 5 cm snap, pan/zoom
+            sceneBus.ts · seed.ts · provenance.ts (what each change touched; its revision number)
+  editor/   Editor.tsx — SVG drawing sheet: poché walls, chained walls (Shift keeps them
+            straight, ends snap to ends), rooms, doors (D) and windows (N) placed on a wall,
+            plan symbols for furniture, dimension chains, numbered revision marks for the
+            agent's changes, 5 cm snap, arrow-key nudge, pan (H, Space-drag) and zoom (+, -,
+            Shift+1 fits) · canvasState.ts (the view and the editor's own tools)
+            drawing.ts · symbols.tsx
   three/    (loaded on demand: the 2D editor's first chunk has no three.js)
             build.ts (extrusion with real openings, resolved joints, floors)
             furniture.ts (composite pieces + generic builder for imported products)
             planScene.ts (per-entity reconciliation of the plan) · materials.ts (shared materials, disposal)
             viewport.ts (one renderer per mount: orbit/top/walk + WASD, click-to-place, OBJ/PNG export)
             frames.ts (render on demand) · walk.ts (collision) · Scene3D.tsx · thumbnails.ts · config.ts
+            overlays/ (the camera switch, hint bar, and the loading and failure states)
   mcp/      registry.ts (registration + uniform logging) · tools.ts (31 + 1 dynamic)
             bootstrap.ts (runtime detection, dynamic tool lifecycle, toolchange)
-  ui/       App · Sidebar (Model/Check/Catalog/Supplier/Notes/Tools) · ToolRunner
-            ActivityFeed · ApprovalBar (human-in-the-loop gate) · SupplierPanel (cross-origin)
+  ui/       App · theme/ (design tokens, Astryx theme, fonts) · primitives/ (buttons, fields, icons)
+            shell/ (top bar, tool rail, canvas, side panel: Properties/Library/Issues/Notes + Activity)
+            one folder per surface: inspector · library (catalogue and Nordika) · issues · notes
+            activity (feed with linked names, Developer tools) · approvals (request card, queue,
+            policy) · canvas (zoom, hint bar, legend) · firstRun
             SupplierBridge (the partner frame the postMessage transport uses) · useAppStore · useGesture
             useThumbnails
 tests/      domain: geometry, checker (incl. seed = 0 issues regression), rules, catalog,
             resolve, store, invariants, commands (dispatch, gestures, undo), assets, checkerCost
             3D: planScene (reconciliation, GPU memory), frames, scene3d, thumbnails · editorKeys
             agent surface: tools, validation, approval gate, trust, untrusted partner text,
-            supplier, transport, discovery, underlay · page: derived (what the UI reads off the tools)
-            build and config: layering, config, sites, headers, production, serve-local
+            supplier, transport, discovery, underlay · page: derived (what the UI reads off the tools),
+            theme, shell, panels, canvas, provenance, activityApprovals, firstRun, lazyView
+            build and config: layering, config, sites, headers, production, serve-local, purge
 scripts/
   e2e-full.mjs  Playwright: drives the real app in Chromium with --enable-features=WebMCP,
               runs every tool, asserts zero console errors — 56 checks
@@ -243,7 +255,16 @@ scripts/
 ```
 
 Stack: Vite 7 · React 19 · TypeScript (strict) · zustand · Three.js (ACES tone mapping,
-PCF soft shadows) · SVG 2D · vitest · Playwright. Deploys as a fully static site.
+PCF soft shadows) · SVG 2D · Astryx (dialogs, menus, tooltips, tabs, switches) · vitest ·
+Playwright. Deploys as a fully static site.
+
+First load, measured on `npm run build:local`: the studio's entry script is about 1.11 MB
+minified (360 KB gzip) and its stylesheet 291 KB (43 KB gzip). Before the Astryx-based
+interface the entry script was 383 KB; most of the difference is Astryx's shared runtime
+(gestures, motion, anchored layers), which the tooltips, menus and switches need on first
+paint. The build drops every Astryx style rule no chunk can use, and the shortcut sheet and
+the Clear-plan confirmation load the first time they open; three.js still arrives only with
+the 3D view.
 
 ## What building this taught me about the spec
 

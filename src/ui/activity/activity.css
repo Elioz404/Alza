@@ -1,0 +1,162 @@
+/*
+ * The activity surface: the revision list (filter bar, rows, empty state), linked entity
+ * names, and Developer tools with the tool runner. Tokens only; see DESIGN.md.
+ */
+@layer alza-surfaces {
+  /* ---------------------------------------------------------------- the list */
+  .act { display: flex; flex-direction: column; min-width: 0; }
+  .act__bar {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-raised);
+    display: flex;
+    justify-content: flex-end;
+    padding: var(--spacing-2) var(--spacing-4);
+    background: var(--color-background-surface);
+  }
+  .act__rows { list-style: none; margin: 0; padding: 0 0 var(--spacing-2); }
+  .act__empty { padding: var(--spacing-2) var(--spacing-4) var(--spacing-4); }
+
+  .act-row {
+    display: grid;
+    grid-template-columns: var(--spacing-6) minmax(0, 1fr) auto;
+    gap: var(--spacing-1) var(--spacing-3);
+    padding: var(--spacing-2) var(--spacing-4);
+    transition: background-color var(--duration-fast) var(--ease-out);
+  }
+  .act-row__mark {
+    display: grid;
+    place-items: center;
+    height: calc(var(--font-size-base) * var(--text-label-leading));
+    color: var(--color-icon-secondary);
+  }
+  .act-row__body { display: flex; flex-direction: column; align-items: flex-start; gap: var(--spacing-0-5); min-width: 0; }
+  .act-row__text {
+    margin: 0;
+    font-size: var(--font-size-base);
+    line-height: var(--text-label-leading);
+    color: var(--color-text-primary);
+    overflow-wrap: anywhere;
+  }
+  .act-row__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--spacing-0-5) var(--spacing-2);
+    margin: 0;
+    font-size: var(--font-size-sm);
+    line-height: var(--text-label-leading);
+    color: var(--color-text-secondary);
+  }
+  .act-row__tool { font-size: var(--font-size-xs); overflow-wrap: anywhere; }
+  .act-row__time {
+    font-size: var(--font-size-sm);
+    line-height: var(--text-label-leading);
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
+  .act-row__review { margin-top: var(--spacing-1); }
+
+  /* who: a mark and a word, in the actor's colour */
+  .actor { display: inline-flex; align-items: center; gap: var(--spacing-1); font-weight: var(--font-weight-semibold); }
+  .actor--agent { color: var(--color-text-agent); }
+  .actor--human { color: var(--color-text-accent); }
+  .actor--system { color: var(--color-text-secondary); }
+
+  /* a request still waiting: the error colour, because every request removes something */
+  .act-row--pending {
+    background: var(--color-error-muted);
+    box-shadow: inset 0 var(--size-hairline) 0 var(--color-border), inset 0 calc(-1 * var(--size-hairline)) 0 var(--color-border);
+  }
+  .act-row--pending .act-row__text { font-weight: var(--font-weight-semibold); }
+  .act-row__waiting { color: var(--color-text-error); font-weight: var(--font-weight-semibold); }
+
+  /* refused or failed: nothing changed */
+  .act-row--failure .act-row__text,
+  .act-row--failure .act-row__mark { color: var(--color-text-error); }
+  .act-row--system .act-row__text { color: var(--color-text-secondary); }
+
+  @media (hover: hover) {
+    .act-row:not(.act-row--pending):hover { background: var(--color-background-muted); }
+  }
+
+  /* ---------------------------------------------------------------- linked entity names */
+  .entity-link {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--color-text-accent);
+    text-decoration: underline;
+    text-decoration-thickness: var(--size-hairline);
+    text-underline-offset: var(--link-underline-offset);
+    cursor: pointer;
+    border-radius: var(--radius-inner);
+  }
+  .entity-link:active { translate: 0 var(--press-offset); }
+  @media (hover: hover) {
+    .entity-link:hover { text-decoration-thickness: var(--size-focus-ring); }
+  }
+
+  /* ---------------------------------------------------------------- developer tools */
+  .dev-tools { border-top: var(--size-hairline) solid var(--color-border); }
+  .dev-tools__summary {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    min-height: var(--size-tab);
+    padding: 0 var(--spacing-4);
+    color: var(--color-text-secondary);
+    font-weight: var(--font-weight-semibold);
+    cursor: pointer;
+    list-style: none;
+  }
+  .dev-tools__summary::-webkit-details-marker { display: none; }
+  .dev-tools[open] .dev-tools__summary { color: var(--color-text-primary); }
+
+  @media (hover: hover) {
+    .dev-tools__summary:hover { background: var(--color-background-muted); }
+  }
+  .dev-tools__chevron {
+    margin-left: auto;
+    color: var(--color-icon-secondary);
+    transition: rotate var(--duration-move) var(--ease-out);
+  }
+  .dev-tools[open] .dev-tools__chevron { rotate: 90deg; }
+  .dev-tools__body { display: flex; flex-direction: column; gap: var(--spacing-3); padding: 0 var(--spacing-4) var(--spacing-4); }
+  .dev-tools__intro {
+    margin: 0;
+    max-width: var(--size-measure);
+    font-size: var(--font-size-sm);
+    line-height: var(--text-body-leading);
+    color: var(--color-text-secondary);
+  }
+
+  .runner { display: flex; flex-direction: column; gap: var(--spacing-3); }
+  .runner__row { display: flex; gap: var(--spacing-2); }
+  .runner__select { flex: 1; min-width: 0; font-size: var(--font-size-sm); color: var(--color-text-primary); }
+  .runner__args { font-family: var(--font-family-code); font-size: var(--font-size-sm); }
+  .runner__desc { margin: 0; line-height: var(--text-body-leading); }
+  .runner__waiting { margin: 0; color: var(--color-text-error); }
+  .runner__result {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-1);
+    padding: var(--spacing-2) var(--spacing-3);
+    border-radius: var(--radius-element);
+    background: var(--color-background-body);
+  }
+  .runner__result-head { margin: 0; font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
+  .runner__result-body {
+    margin: 0;
+    max-height: calc(var(--size-activity) / 2);
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--color-text-primary);
+  }
+  .runner__result--failed { background: var(--color-error-muted); }
+  .runner__result--failed .runner__result-head,
+  .runner__result--failed .runner__result-body { color: var(--color-text-error); }
+}

@@ -3,19 +3,39 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Nordika — furniture supplier</title>
+    <meta name="color-scheme" content="light" />
+    <title>Nordika furniture</title>
     <link rel="stylesheet" href="./partner.css" />
   </head>
   <body>
-    <header>
-      <span class="logo"></span>
-      <h1>Nordika</h1>
-      <span class="sub"><span class="pill off" id="pill">tools off</span></span>
+    <header class="masthead">
+      <span class="brand">
+        <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect class="brand__tile" x="1" y="1" width="22" height="22" rx="6" />
+          <path class="brand__fold" d="M7.5 17V7l9 10V7" />
+        </svg>
+        <svg class="brand__word" viewBox="-1.5 -1.5 69 17.5" role="img" aria-labelledby="brand-name" focusable="false">
+          <title id="brand-name">Nordika</title>
+          <path d="M1 5v9M1 9a4 4 0 0 1 8 0v5" />
+          <circle cx="16.5" cy="9.5" r="4.5" />
+          <path d="M24 5v9M24 9.5A4.5 4.5 0 0 1 28.5 5" />
+          <circle cx="35" cy="9.5" r="4.5" />
+          <path d="M39.5 0v14" />
+          <path d="M43 5v9" />
+          <circle class="brand__dot" cx="43" cy="1.4" r="1.2" />
+          <path d="M46.5 0v14M53 5l-6.5 5.5M49.4 8.2L53.6 14" />
+          <circle cx="60.5" cy="9.5" r="4.5" />
+          <path d="M65 5v9" />
+        </svg>
+      </span>
+      <span class="pill" id="pill">Tools off</span>
     </header>
-    <ul id="list"></ul>
-    <footer>
-      Independent origin. Publishes <code>nordika_list_products</code> and
-      <code>nordika_get_product</code> as WebMCP tools, shared with the host page through
+    <main>
+      <ul id="list" class="catalogue" aria-label="Products"></ul>
+    </main>
+    <footer class="colophon">
+      Nordika runs on its own origin. It publishes <code>nordika_list_products</code> and
+      <code>nordika_get_product</code> as WebMCP tools and shares them with the host page through
       <code>exposedTo</code>.
     </footer>
     <script type="module" src="./supplier.js"></script>

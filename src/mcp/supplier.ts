@@ -284,7 +284,7 @@ export async function connectSupplier(mc: ModelContextLike | null): Promise<void
     logActivity(
       "system",
       "cross-origin",
-      `Discovered ${found.length} tool(s) from ${SUPPLIER_ORIGIN}: ${found.map((t) => t.name).join(", ")}.`,
+      `Discovered ${found.length} ${found.length === 1 ? "tool" : "tools"} from ${SUPPLIER_ORIGIN}: ${found.map((t) => t.name).join(", ")}.`,
       true,
     );
   }

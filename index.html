@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-astryx-theme="stone" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -11,6 +11,13 @@
       name="description"
       content="Draw floor plans in 2D, walk them in 3D, and let your AI agent co-edit the same live page through WebMCP. Built for the WebMCP Challenge."
     />
+    <!--
+      Astryx's anchored layers write their slide rules into a <style id="astryx-layer-slide-rules">
+      unless an element with that id is already on the page. The rules ship in the bundled
+      stylesheet instead (virtual:astryx-slide-rules.css, see vite.config.ts), because the CSP
+      refuses a <style> element; this marker is what tells Astryx they are here.
+    -->
+    <meta id="astryx-layer-slide-rules" name="astryx-layer-slide-rules" content="bundled" />
   </head>
   <body>
     <div id="root"></div>

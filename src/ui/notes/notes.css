@@ -1,0 +1,59 @@
+/*
+ * Notes and the "Note for your agent" composer. Tokens only; see DESIGN.md. The author is a
+ * mark and a word; the agent's mark is in the agent's colour, the person's in the accent.
+ */
+@layer alza-surfaces {
+  .notes { display: flex; flex-direction: column; gap: var(--spacing-5); padding: var(--spacing-4); }
+
+  /* ---------------------------------------------------------------- composer */
+  .note-form { display: flex; flex-direction: column; gap: var(--spacing-1); }
+  .note-form--activity {
+    padding: var(--spacing-3) var(--spacing-4);
+    border-top: var(--size-hairline) solid var(--color-border);
+    background: var(--color-background-surface);
+  }
+  .note-form__text { font-family: var(--font-family-body); }
+  .note-form--activity .note-form__text { min-height: calc(var(--size-control) * 1.75); }
+  .note-form__foot { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-2); }
+  .note-form__hint,
+  .note-form__error {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-1);
+    margin: 0;
+    font-size: var(--font-size-sm);
+    line-height: var(--text-label-leading);
+    color: var(--color-text-secondary);
+  }
+  .note-form__error { color: var(--color-text-error); }
+
+  /* ---------------------------------------------------------------- list */
+  .notes__list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+  .note { display: flex; flex-direction: column; gap: var(--spacing-1); padding: var(--spacing-3) 0; }
+  .note + .note { border-top: var(--size-hairline) solid var(--color-border); }
+  .note:first-child { padding-top: 0; }
+  .note__meta { display: flex; align-items: center; gap: var(--spacing-1-5); font-size: var(--font-size-sm); }
+  .note__mark {
+    display: grid;
+    place-items: center;
+    width: var(--size-kbd);
+    height: var(--size-kbd);
+    border-radius: var(--radius-full);
+  }
+  .note--human .note__mark { background: var(--color-accent-muted); color: var(--color-text-accent); }
+  .note--agent .note__mark { background: var(--color-agent-muted); color: var(--color-text-agent); }
+  .note__author { font-weight: var(--font-weight-semibold); }
+  .note--human .note__author { color: var(--color-text-accent); }
+  .note--agent .note__author { color: var(--color-text-agent); }
+  .note__time { margin-left: auto; color: var(--color-text-secondary); font-family: var(--font-family-drawing); }
+  .note__text {
+    margin: 0;
+    max-width: var(--size-measure);
+    font-size: var(--font-size-base);
+    line-height: var(--text-body-leading);
+    color: var(--color-text-primary);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}

@@ -1,0 +1,273 @@
+/*
+ * The approvals surface: the "Waiting for you" queue and the policy line in Activity, the
+ * request card and the marks over the plan, and the agent status chip. Tokens only; see
+ * DESIGN.md. The card is the one thing here with a shadow: it floats over the sheet.
+ */
+@layer alza-surfaces {
+  /* ---------------------------------------------------------------- a link that acts */
+  .text-link {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-accent);
+    white-space: nowrap;
+    text-decoration: underline;
+    text-decoration-thickness: var(--size-hairline);
+    text-underline-offset: var(--link-underline-offset);
+    cursor: pointer;
+    border-radius: var(--radius-inner);
+  }
+  @media (hover: hover) {
+    .text-link:hover { text-decoration-thickness: var(--size-focus-ring); }
+  }
+  /* on its own in a row (the policy line, the card's foot), not in running text: a 44px band
+     around it, its look unchanged */
+  .policy .text-link,
+  .approval-card__foot .text-link { position: relative; }
+  .policy .text-link::before,
+  .approval-card__foot .text-link::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, var(--size-hit));
+    height: var(--size-hit);
+    translate: -50% -50%;
+  }
+
+  /* ---------------------------------------------------------------- waiting for you */
+  .queue {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-1);
+    padding: var(--spacing-3) 0 var(--spacing-2);
+    border-bottom: var(--size-hairline) solid var(--color-border);
+    background: var(--color-error-muted);
+  }
+  .queue[hidden] { display: none; }
+  .queue:focus-visible { outline-offset: calc(-1 * var(--size-focus-ring)); }
+  .queue__title {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    margin: 0;
+    padding: 0 var(--spacing-4);
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-error);
+  }
+  .queue__count {
+    display: inline-grid;
+    place-items: center;
+    min-width: var(--size-kbd);
+    height: var(--size-kbd);
+    padding: 0 var(--spacing-1);
+    border-radius: var(--radius-full);
+    background: var(--color-error);
+    color: var(--color-on-error);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+  }
+  .queue__list { list-style: none; margin: 0; padding: 0; }
+  .queue__row {
+    display: grid;
+    grid-template-columns: var(--spacing-6) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--spacing-3);
+    padding: var(--spacing-2) var(--spacing-4);
+  }
+  .queue__row + .queue__row { border-top: var(--size-hairline) solid var(--color-border); }
+  .queue__body { display: flex; flex-direction: column; gap: var(--spacing-0-5); min-width: 0; }
+  .queue__text {
+    margin: 0;
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--text-label-leading);
+    color: var(--color-text-primary);
+    overflow-wrap: anywhere;
+  }
+  .queue__name { font-weight: var(--font-weight-regular); }
+  .queue__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-0-5) var(--spacing-2);
+    margin: 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+
+  /* ---------------------------------------------------------------- the policy line */
+  .policy {
+    display: flex;
+    align-items: baseline;
+    gap: var(--spacing-2);
+    margin: 0;
+    padding: var(--spacing-2) var(--spacing-4);
+    border-bottom: var(--size-hairline) solid var(--color-border);
+    font-size: var(--font-size-sm);
+    line-height: var(--text-label-leading);
+    color: var(--color-text-secondary);
+  }
+  .policy__icon { flex: none; align-self: center; color: var(--color-agent); }
+  .policy__text { flex: 1; min-width: 0; }
+  .policy--off .policy__icon { color: var(--color-icon-warning); }
+  .policy--off .policy__text { color: var(--color-text-warning); }
+
+  .policy-form { display: flex; flex-direction: column; gap: var(--spacing-2); }
+  .policy-form__help,
+  .policy-form__tools {
+    margin: 0;
+    font-size: var(--font-size-sm);
+    line-height: var(--text-body-leading);
+    color: var(--color-text-secondary);
+  }
+  .policy-form__tools .code { font-size: var(--font-size-xs); }
+
+  /* ---------------------------------------------------------------- over the plan */
+  .plan-marks { position: absolute; inset: 0; pointer-events: none; }
+  .plan-marks__svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+  .plan-marks__leader line { stroke: var(--plan-destructive); stroke-width: var(--size-hairline); }
+  .plan-marks__leader circle { fill: var(--plan-destructive); }
+
+  /* ---------------------------------------------------------------- the request card */
+  .approval-card {
+    position: absolute;
+    z-index: var(--z-raised);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+    width: var(--size-request-card);
+    padding: var(--spacing-4);
+    border-radius: var(--radius-container);
+    background: var(--color-background-card);
+    box-shadow: var(--shadow-high);
+    color: var(--color-text-primary);
+    pointer-events: auto;
+    animation: approval-card-in var(--duration-medium) var(--ease-out);
+  }
+  .approval-card:focus-visible { outline-offset: var(--size-focus-ring); }
+  .approval-card--docked {
+    right: var(--spacing-4);
+    bottom: calc(var(--spacing-4) * 2 + var(--size-control));
+  }
+  @keyframes approval-card-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .approval-card__head { display: flex; align-items: flex-start; gap: var(--spacing-2); }
+  .approval-card__head .delta { margin-top: var(--spacing-0-5); }
+  .approval-card__heading { flex: 1; min-width: 0; }
+  .approval-card__title {
+    margin: 0;
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--text-label-leading);
+    text-wrap: balance;
+  }
+  .approval-card__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--spacing-0-5) var(--spacing-2);
+    margin: var(--spacing-0-5) 0 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+  .approval-card__pager { display: flex; flex: none; }
+  .approval-card .approval-card__prev .icon { rotate: 180deg; }
+
+  .approval-card__targets {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: var(--spacing-1) var(--spacing-3);
+    margin: 0;
+    padding: var(--spacing-2) var(--spacing-3);
+    border-radius: var(--radius-element);
+    background: var(--color-background-body);
+    font-size: var(--font-size-sm);
+    line-height: var(--text-label-leading);
+  }
+  .approval-card__fact { display: contents; }
+  .approval-card__fact dt { color: var(--color-text-secondary); }
+  .approval-card__fact dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .approval-card__fact dd:last-child:nth-child(2) { grid-column: span 2; }
+  .approval-card__name,
+  .approval-card__value { font-weight: var(--font-weight-semibold); }
+  .approval-card__id { font-size: var(--font-size-xs); text-align: end; }
+
+  .approval-card__effect {
+    margin: 0;
+    font-size: var(--font-size-sm);
+    line-height: var(--text-body-leading);
+    color: var(--color-text-secondary);
+    text-wrap: pretty;
+  }
+  .approval-card__actions { display: flex; gap: var(--spacing-2); }
+  .approval-card .approval-card__actions .btn { flex: 1; min-width: 0; padding: 0 var(--spacing-2); }
+  .approval-card__foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-2);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+  .approval-card__keys { display: inline-flex; align-items: center; gap: var(--spacing-1); white-space: nowrap; }
+
+  /* ---------------------------------------------------------------- agent status */
+  .presence {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    height: var(--size-control);
+    padding: 0 var(--spacing-3) 0 var(--spacing-2);
+    border: var(--size-hairline) solid var(--color-border-emphasized);
+    border-radius: var(--radius-element);
+    background: var(--color-background-card);
+    color: var(--color-text-secondary);
+    font: inherit;
+    font-weight: var(--font-weight-semibold);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  .presence:active { translate: 0 var(--press-offset); }
+  .presence__dot {
+    flex: none;
+    width: var(--size-dot);
+    height: var(--size-dot);
+    border-radius: var(--radius-full);
+    border: var(--size-dot-stroke) solid currentColor;
+  }
+  .presence__count { font-weight: var(--font-weight-regular); }
+  .presence--live { border-color: var(--color-border); background: var(--color-agent-muted); color: var(--color-text-agent); }
+  .presence--live .presence__dot { border-color: var(--color-agent); background: var(--color-agent); }
+  .presence--waiting { border-color: var(--color-error); }
+  .presence--waiting .presence__dot { border-color: var(--color-error); background: var(--color-error); }
+  .presence--waiting .presence__count { color: var(--color-text-error); font-weight: var(--font-weight-semibold); }
+  @media (hover: hover) {
+    .presence:hover { background: var(--color-background-muted); }
+    .presence--live:hover { background: var(--color-agent-muted); color: var(--color-text-primary); }
+  }
+
+  /* phone: the card docks to the bottom edge, full width; the chip keeps its dot and count */
+  @media (max-width: 40rem) {
+    /* clear of the zoom bar and the scale bar stacked over it (canvas.css), not just the zoom
+       bar: their figures are never painted under the card */
+    .approval-card--docked {
+      left: var(--spacing-3);
+      right: var(--spacing-3);
+      bottom: calc(var(--spacing-4) + var(--size-control-sm) + 2 * var(--spacing-0-5) + var(--spacing-2) + var(--size-scalebar) + var(--spacing-3));
+      width: auto;
+    }
+    .presence__text,
+    .presence__unit { display: none; }
+    /* the dot (and a count when one waits) in a square target, like the icon buttons beside it */
+    .presence { flex: none; min-width: var(--size-control); justify-content: center; gap: var(--spacing-1); padding: 0 var(--spacing-2); }
+  }
+}

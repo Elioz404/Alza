@@ -69,6 +69,11 @@ export const HINGES = WALL_ENDS;
 export type Hinge = WallEnd;
 export const SWING_SIDES = ["left", "right"] as const;
 export type SwingSide = (typeof SWING_SIDES)[number];
+/**
+ * A door whose clear opening is wider than this is hung as a pair of leaves, one on each jamb:
+ * the plan draws two swings and the 3D view builds two leaves, from this one number.
+ */
+export const DOUBLE_DOOR_CLEAR = 1.15;
 export const DOOR_SWING_DEFAULTS = Object.freeze({ hinge: "a", side: "right" } as const satisfies { hinge: Hinge; side: SwingSide });
 /** What set_doors can do to the leaves in the 3D scene. */
 export const DOOR_STATES = ["open", "closed", "toggle"] as const;
@@ -100,7 +105,7 @@ export const MAX_PARTS = 64;
 /**
  * Most kinds define_item_kind may add to the catalogue. Redefining an existing one is always
  * allowed; past this an agent loop would only grow memory and the catalogue every listing
- * and the sidebar carry.
+ * and the Library carry.
  */
 export const MAX_CUSTOM_KINDS = 100;
 export const PART_SHAPES = ["box", "cylinder", "sphere"] as const;

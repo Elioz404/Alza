@@ -19,7 +19,7 @@ import type { Opening, PlanModel } from "../model/types";
 import { catalogOf } from "../model/catalog";
 import { openingsByWall } from "./build";
 import { DOORS, WALK } from "./config";
-import { isTypingTarget } from "../ui/keys";
+import { isInsideOverlay, isTypingTarget } from "../ui/keys";
 
 interface WallBlocker {
   ax: number;
@@ -154,7 +154,7 @@ export class WalkKeys {
 
   /** A keydown. True when it was taken as a walk key (the caller has a frame to draw). */
   down(e: KeyboardEvent, walking: boolean): boolean {
-    if (!walking || isTypingTarget(e.target)) return false;
+    if (!walking || isTypingTarget(e.target) || isInsideOverlay(e.target)) return false;
     const key = walkKeyOf(e);
     if (!key) return false;
     this.keys.add(key);

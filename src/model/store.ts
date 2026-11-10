@@ -672,7 +672,7 @@ const planActions = {
     if (bad) return fail(bad);
     const m = store.getState().model;
     const u = m.underlay;
-    if (!u) return fail("No underlay loaded — ask the human to upload the plan image first (sidebar → Blueprint underlay).");
+    if (!u) return fail("No underlay loaded — ask the human to upload the plan image first (Properties → Blueprint underlay, with nothing selected).");
     // world distance between the two fractional image points at the CURRENT scale
     const frac = Math.hypot((u2 - u1) * u.w, (v2 - v1) * u.h);
     if (frac < 1e-6) return fail("The two calibration points coincide.");

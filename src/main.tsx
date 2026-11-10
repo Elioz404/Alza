@@ -1,3 +1,5 @@
+// the theme first: its stylesheet declares the cascade layers every other stylesheet uses
+import "./ui/theme";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./ui/App";
@@ -7,7 +9,6 @@ import { seedLoft } from "./model/seed";
 import { bootstrapWebMCP } from "./mcp/bootstrap";
 import { installTestHook } from "./testHook";
 import { testHookHandle } from "./testHookHandle";
-import "./styles.css";
 
 // First paint: the audited demo loft (0 issues) so the app opens with something beautiful.
 // The page loads it itself, and there is nothing before it to undo back to.

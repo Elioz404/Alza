@@ -5,9 +5,12 @@
  * plan through a store subscription, outside React's render.
  *
  * The viewport itself needs WebGL; here it is replaced by a recorder, which is all the
- * component's side of the contract needs.
+ * component's side of the contract needs. The recorder can also refuse to start, as
+ * three.js does when the browser gives the page no WebGL context.
+ *
+ * The view's own chrome (the camera switch and the hint bar) is checked here too.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Profiler, act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { pageActions, store } from "../src/model/store";
@@ -20,10 +23,13 @@ const viewport = vi.hoisted(() => ({
   disposed: 0,
   models: [] as unknown[],
   cameras: [] as string[],
+  /** when set, creating a viewport throws this, as WebGLRenderer does without a context */
+  failWith: null as Error | null,
 }));
 
 vi.mock("../src/three/viewport", () => ({
   createViewport: () => {
+    if (viewport.failWith) throw viewport.failWith;
     viewport.created++;
     return {
       setModel: (m: unknown) => viewport.models.push(m),
@@ -35,18 +41,28 @@ vi.mock("../src/three/viewport", () => ({
 
 const { Scene3D } = await import("../src/three/Scene3D");
 
+let host: HTMLDivElement;
 let root: Root;
 let renders = 0;
 
+// happy-dom's Animation.cancel() rejects a promise nobody observes when Astryx's segmented
+// control (the camera switch) unmounts. Without element.animate, Astryx sets each end state
+// directly, as it does for reduced motion (the same shim as tests/shell.test.ts).
+const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  Object.defineProperty(Element.prototype, "animate", { value: undefined, configurable: true, writable: true });
+});
+afterAll(() => {
+  if (animate) Object.defineProperty(Element.prototype, "animate", animate);
 });
 beforeEach(async () => {
   resetStore();
   dispatch({ type: "load_model", model: seedLoft() }, { actor: "system", undoable: false });
-  Object.assign(viewport, { created: 0, disposed: 0, models: [], cameras: [] });
+  Object.assign(viewport, { created: 0, disposed: 0, models: [], cameras: [], failWith: null });
   renders = 0;
-  root = createRoot(document.createElement("div"));
+  host = document.createElement("div");
+  root = createRoot(host);
   await act(async () =>
     root.render(createElement(Profiler, { id: "scene", onRender: () => void renders++ }, createElement(Scene3D))),
   );
@@ -88,5 +104,86 @@ describe("Scene3D", () => {
     dispatch({ type: "add_wall", ax: 30, ay: 0, bx: 34, by: 0 }, { actor: "agent" });
     expect(viewport.models).toHaveLength(0);
     root = createRoot(document.createElement("div")); // for afterEach
+  });
+});
+
+describe("the 3D view's chrome", () => {
+  const hint = () => host.querySelector(".scene-hint")?.textContent ?? "";
+  const press = (key: string) => window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+
+  it("offers the three cameras as one radio group, and follows the camera", async () => {
+    const radios = [...host.querySelectorAll('[role="radiogroup"][aria-label="Camera"] [role="radio"]')];
+    expect(radios.map((r) => r.textContent)).toEqual(["Orbit", "Top view", "Walk"]);
+    expect(radios.map((r) => r.getAttribute("aria-keyshortcuts"))).toEqual(["1", "2", "3"]);
+    await act(async () => pageActions.setCamera("walk"));
+    expect(host.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe("Walk");
+  });
+
+  it("teaches the current camera, and names doors only when the plan has one", async () => {
+    expect(hint()).toContain("Drag to orbit");
+    expect(hint()).toContain("Click a door to open or close it");
+    await act(async () => pageActions.setCamera("walk"));
+    expect(hint()).toContain("or the arrow keys to walk");
+    expect([...host.querySelectorAll(".scene-hint kbd")].length).toBeGreaterThanOrEqual(4);
+    await act(async () => {
+      for (const o of store.getState().model.openings.filter((x) => x.kind === "door")) {
+        dispatch({ type: "remove_opening", id: o.id }, { actor: "human" });
+      }
+    });
+    expect(hint()).not.toContain("door");
+  });
+
+  it("says how to finish placing, and Esc or Cancel stops it", async () => {
+    await act(async () => pageActions.setDrawMode("place", "sofa"));
+    expect(hint()).toContain("Placing Sofa");
+    await act(async () => press("Escape"));
+    expect(store.getState().editor.drawMode).toBe("select");
+
+    await act(async () => pageActions.setDrawMode("place", "sofa"));
+    const cancel = [...host.querySelectorAll("button")].find((b) => b.textContent === "Cancel");
+    await act(async () => cancel?.click());
+    expect(store.getState().editor.drawMode).toBe("select");
+  });
+
+  it("leaves Esc alone when nothing is being placed", async () => {
+    const e = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    window.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(false);
+  });
+});
+
+describe("the 3D view when the browser cannot draw it", () => {
+  it("says so in the canvas, and Try again starts the scene afresh", async () => {
+    await act(async () => root.unmount());
+    Object.assign(viewport, { created: 0, failWith: new Error("Error creating WebGL context.") });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    root = createRoot(host);
+    await act(async () => root.render(createElement(Scene3D)));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("This browser could not start 3D graphics");
+    expect(viewport.created).toBe(0);
+
+    viewport.failWith = null;
+    const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === "Try again");
+    await act(async () => retry?.click());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(viewport.created).toBe(1);
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
+  it("offers the way back to the plan", async () => {
+    await act(async () => root.unmount());
+    Object.assign(viewport, { created: 0, failWith: new Error("Error creating WebGL context.") });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await act(async () => pageActions.build3d());
+    root = createRoot(host);
+    await act(async () => root.render(createElement(Scene3D)));
+    const back = [...host.querySelectorAll("button")].find((b) => b.textContent === "Back to the plan");
+    await act(async () => back?.click());
+    expect(store.getState().editor.view).toBe("2d");
+    warn.mockRestore();
+    error.mockRestore();
   });
 });

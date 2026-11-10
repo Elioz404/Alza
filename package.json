@@ -21,6 +21,12 @@
     "deploy:partner": "npm run build && npx netlify deploy --prod --dir dist/partner"
   },
   "dependencies": {
+    "@astryxdesign/core": "0.7.11",
+    "@astryxdesign/theme-stone": "0.7.11",
+    "@fontsource/barlow-semi-condensed": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@stylexjs/stylex": "0.19.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "three": "^0.178.0",

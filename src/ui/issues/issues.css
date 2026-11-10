@@ -1,0 +1,51 @@
+/*
+ * The Issues tab. Tokens only; see DESIGN.md. Severity is an icon and a word (the group's
+ * title, and a hidden word on each row), never colour alone.
+ */
+@layer alza-surfaces {
+  .issues { display: flex; flex-direction: column; gap: var(--spacing-5); padding: var(--spacing-4); }
+  .issues__lead { margin: 0; font-size: var(--font-size-sm); line-height: var(--text-label-leading); color: var(--color-text-secondary); }
+  .issues__title { display: inline-flex; align-items: center; gap: var(--spacing-2); }
+  .issues__list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+
+  .issue,
+  .issue__button {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-2);
+    font-size: var(--font-size-base);
+    line-height: var(--text-label-leading);
+    color: var(--color-text-primary);
+  }
+  .issue { padding: var(--spacing-2) 0; }
+  .issue:has(.issue__button) { padding: 0; }
+  .issue + .issue { border-top: var(--size-hairline) solid var(--color-border); }
+  .issue__button {
+    flex: 1;
+    min-height: var(--size-hit);
+    margin: 0 calc(-1 * var(--spacing-2));
+    padding: var(--spacing-2);
+    border: 0;
+    border-radius: var(--radius-element);
+    background: transparent;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out);
+  }
+  .issue__text { flex: 1; min-width: 0; text-wrap: pretty; }
+  .issue__icon { margin-top: var(--spacing-0-5); }
+  .issue__icon--error { color: var(--color-icon-error); }
+  .issue__icon--warning { color: var(--color-icon-warning); }
+  .issue__go { margin-top: var(--spacing-0-5); color: var(--color-icon-secondary); opacity: 0; transition: opacity var(--duration-fast) var(--ease-out); }
+  .issue__button:focus-visible .issue__go { opacity: 1; }
+  .issue__button:active { transform: translateY(var(--press-offset)); }
+
+  @media (hover: hover) {
+    .issue__button:hover { background: var(--color-background-muted); }
+    .issue__button:hover .issue__go { opacity: 1; }
+  }
+  @media (hover: none) {
+    .issue__go { opacity: 1; }
+  }
+}
