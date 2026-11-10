@@ -12,8 +12,11 @@
  *
  *   node scripts/record6.mjs            # all beats
  *   node scripts/record6.mjs hook rise  # just these
+ *
+ * It needs ffmpeg with ddagrab (Windows): on PATH, or named by ALZA_FFMPEG_PATH. And a full,
+ * headed Chromium or Chrome: Playwright's own, or the one ALZA_CHROMIUM_PATH names
+ * (scripts/browser.mjs); a headless-shell build cannot open a window.
  */
-import { chromium } from "playwright";
 import { spawn } from "node:child_process";
 import { mkdirSync, existsSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +24,8 @@ import { join } from "node:path";
 import { WALLS, OPEN, ROOMS, FURN, DEFINE, DEFINED_ITEMS, NOTES } from "./trace.mjs";
 import { fromRoot } from "./paths.mjs";
 import { STUDIO_DEV_ORIGIN } from "../config/origins.js";
-import { requireTestHook } from "./test-hook.mjs";
+import { launchWindow } from "./browser.mjs";
+import { PLAN_SVG, SCENE_CANVAS, blueprintInput, fitPlan, librarySource, openDeveloperTools, openStudio, panelTab, requestCard, showView } from "./studio.mjs";
 
 // The beats are driven through the test hook, which deployed builds do not carry. So the film
 // is shot against the local origin: the dev server, or a production build that keeps the hook
@@ -29,7 +33,8 @@ import { requireTestHook } from "./test-hook.mjs";
 // the deployed studio does.
 const BASE = process.env.BASE_URL ?? STUDIO_DEV_ORIGIN;
 const OUT = fromRoot("videos/alza-webmcp/capture/footage6");
-const FFMPEG = "C:/Users/elias/.local/bin/ffmpeg.exe";
+/** ffmpeg: the one ALZA_FFMPEG_PATH names, or the one on PATH. */
+const FFMPEG = process.env.ALZA_FFMPEG_PATH?.trim() || "ffmpeg";
 mkdirSync(OUT, { recursive: true });
 
 const only = process.argv.slice(2);
@@ -39,11 +44,9 @@ const want = (n) => only.length === 0 || only.includes(n);
    launchPersistentContext with viewport:null is the part that matters: plain launch()
    pins an emulated 1280x720 viewport inside the window, so --kiosk yields a small page
    on a captured desktop. Probed: inner == outer == screen == 1920x1080 at 0,0. */
-const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), "alza-cap-")), {
-  headless: false,
+const ctx = await launchWindow(mkdtempSync(join(tmpdir(), "alza-cap-")), {
   viewport: null,
   args: [
-    "--enable-features=WebMCP",
     // Chrome offered to translate the page and its bubble sat over the opening shot
     "--disable-features=Translate,TranslateUI", "--lang=en-US",
     "--kiosk", "--start-fullscreen",
@@ -67,6 +70,7 @@ function startCapture(name) {
     "-f", "mpegts", join(OUT, `${name}.ts`),
   ]);
   p.stderr.on("data", (d) => { const s = String(d).trim(); if (s) console.log("   ffmpeg:", s.slice(0, 120)); });
+  p.on("error", (e) => { console.error(`   could not start ${FFMPEG} (set ALZA_FFMPEG_PATH): ${e.message}`); process.exitCode = 1; });
   return p;
 }
 // "q" on stdin is ffmpeg's own graceful shutdown: it drains the encoder and closes the file.
@@ -78,8 +82,8 @@ const stopCapture = (p) => new Promise((r) => {
 
 /** Pointer drag synthesised inside the page — one rAF loop, no CDP round-trips. */
 const drag3d = (page, dx, dy, ms) =>
-  page.evaluate(({ dx, dy, ms }) => new Promise((done) => {
-    const el = document.querySelector(".scene3d canvas"); if (!el) return done(false);
+  page.evaluate(({ dx, dy, ms, sel }) => new Promise((done) => {
+    const el = document.querySelector(sel); if (!el) return done(false);
     const r = el.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
     const ev = (t, x, y, b) => el.dispatchEvent(new PointerEvent(t, { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: b }));
     ev("pointerdown", cx, cy, 1);
@@ -90,11 +94,11 @@ const drag3d = (page, dx, dy, ms) =>
       ev("pointermove", cx + dx * e, cy + dy * e, 1);
       if (t < 1) requestAnimationFrame(step); else { ev("pointerup", cx + dx, cy + dy, 0); done(true); }
     })(performance.now());
-  }), { dx, dy, ms });
+  }), { dx, dy, ms, sel: SCENE_CANVAS });
 
 const zoom3d = (page, total, ms) =>
-  page.evaluate(({ total, ms }) => new Promise((done) => {
-    const el = document.querySelector(".scene3d canvas"); if (!el) return done(false);
+  page.evaluate(({ total, ms, sel }) => new Promise((done) => {
+    const el = document.querySelector(sel); if (!el) return done(false);
     const r = el.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
     const t0 = performance.now(); let last = 0;
     (function step(now) {
@@ -104,15 +108,15 @@ const zoom3d = (page, total, ms) =>
       el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: d, clientX: cx, clientY: cy }));
       if (t < 1) requestAnimationFrame(step); else done(true);
     })(performance.now());
-  }), { total, ms });
+  }), { total, ms, sel: SCENE_CANVAS });
 
 /** Wheel on the 2D canvas. The editor's handler is STEP based - it reads only the sign
  *  of deltaY and applies a fixed 1.12x - so one event per animation frame compounds
  *  into a runaway zoom. Fire a few discrete notches instead, the way a wheel really
  *  clicks. Positive = out. */
 const zoom2d = (page, steps, ms) =>
-  page.evaluate(({ steps, ms }) => new Promise((done) => {
-    const el = document.querySelector("svg"); if (!el) return done(false);
+  page.evaluate(({ steps, ms, sel }) => new Promise((done) => {
+    const el = document.querySelector(sel); if (!el) return done(false);
     const r = el.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
     let i = 0;
     const tick = () => {
@@ -120,7 +124,7 @@ const zoom2d = (page, steps, ms) =>
       if (++i < Math.abs(steps)) setTimeout(tick, ms / Math.abs(steps)); else done(true);
     };
     tick();
-  }), { steps, ms });
+  }), { steps, ms, sel: PLAN_SVG });
 
 /** Walk mode listens for w/a/s/d on `window`, so that is where the keys go. */
 const keyDown = (page, key) =>
@@ -134,9 +138,7 @@ async function open() {
   const page = sheet;
   page.run = (c) => page.hook.evaluate(async (h, l) => { const o = []; for (const [t, a] of l) o.push(await h.runTool(t, a ?? {})); return o.map(r => r.summary); }, c);
   page.pause_ = (ms) => page.waitForTimeout(ms);
-  await page.goto(BASE, { waitUntil: "networkidle" });
-  page.hook = await requireTestHook(page, BASE);
-  await page.waitForSelector("text=Build 3D");
+  page.hook = await openStudio(page, BASE);
   await page.pause_(900);
   await page.hook.evaluate((h) => h.actions.setRequireApproval(false));
   await page.run([["clear_model", {}], ["set_plan_name", { name: "Traced from a photo of the plan" }]]);
@@ -149,7 +151,8 @@ async function open() {
   await page.run(NOTES);   // rule 2: the ambiguous symbol is flagged, not silently decided
   await page.run([["build_3d", {}]]);
   await page.pause_(1200);
-  await page.click("button:has-text('Back to 2D')");   // remount => the editor re-fits the plan
+  await showView(page, "Plan");
+  await fitPlan(page);   // the plan view keeps its framing across views, so frame the new plan
   await page.pause_(700);
   return page;
 }
@@ -208,13 +211,13 @@ await beat("trace", async (page) => {
   await page.pause_(2200);
 }, async (page) => {
   // the editor is already framed for the whole plan; empty it before rolling
-  await page.click(".sidebar-tabs button:has-text('Model')");
+  await panelTab(page, "Properties");
   await page.run([["clear_model", {}]]);
   await page.pause_(600);
 });
 
 await beat("repair", async (page) => {
-  await page.click(".sidebar-tabs button:has-text('Check')");
+  await panelTab(page, "Issues");
   await page.pause_(1400);
   await page.run([["place_item", { kind: "wardrobe", x: 5.40, y: 8.60, rotation: 0 }]]);
   await page.pause_(1800);
@@ -231,9 +234,9 @@ await beat("repair", async (page) => {
 });
 
 await beat("crossorigin", async (page) => {
-  await page.click(".sidebar-tabs button:has-text('Supplier')");
+  await librarySource(page, "Nordika");
   await page.pause_(3600);                      // the partner iframe loads and registers
-  await page.click("button:has-text('Pull catalogue')");
+  await page.getByRole("button", { name: "Pull catalogue" }).click();
   await page.pause_(4200);                      // the catalogue fills in, readable
   await page.run([["place_supplier_product", { sku: "NK-ARM-01", x: 4.30, y: 9.50, rotation: 270 }]]);
   await page.pause_(6000);                      // the armchair lands in the plan
@@ -242,13 +245,14 @@ await beat("crossorigin", async (page) => {
 
 await beat("veto", async (page) => {
   await page.hook.evaluate((h) => h.actions.setRequireApproval(true));
-  await page.click(".sidebar-tabs button:has-text('Tools')");
+  await panelTab(page, "Properties");
   await page.pause_(1000);
   await page.hook.evaluate((h) => { window.__pending = h.runTool("clear_model", {}); });
   await page.pause_(5600);                      // the request waits, unanswered
-  await page.hover(".approval-actions .reject");
+  const keep = requestCard(page).getByRole("button", { name: /^Keep / });
+  await keep.hover();
   await page.pause_(1300);
-  await page.click(".approval-actions .reject");
+  await keep.click();
   await page.pause_(6200);                      // the refusal prints back to the agent
 });
 
@@ -285,9 +289,9 @@ await beat("brief", async (page) => {
   // Scene 1 — the product states the connection itself: 31 tools, discovered via WebMCP
   await page.pause_(3600);
   // Scene 2 — the one moment a human acts: the plan photo goes in
-  await page.click(".sidebar-tabs button:has-text('Model')");
+  await panelTab(page, "Properties");
   await page.pause_(500);
-  await page.setInputFiles('input[type="file"]', fromRoot("plan-source.jpeg"));
+  await blueprintInput(page).setInputFiles(fromRoot("plan-source.jpeg"));
   await page.pause_(2400);
   // Scene 3 — the agent reads it back, then fixes the scale from one real dimension
   await page.run([["get_underlay", {}]]);
@@ -298,7 +302,7 @@ await beat("brief", async (page) => {
   await page.pause_(1600);
 }, async (page) => {
   await page.run([["clear_model", {}]]);
-  await page.click(".sidebar-tabs button:has-text('Tools')");
+  await openDeveloperTools(page);
   await page.pause_(700);
 });
 
