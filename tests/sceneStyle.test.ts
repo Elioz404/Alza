@@ -29,7 +29,7 @@ import {
   wallMaterial,
 } from "../src/three/build";
 import { CUT_CAP, CUT_PLANE, POCHE, cutLevel, setCut } from "../src/three/cutaway";
-import { INK, INK_CLIPPED, INK_EDGE, addInkEdges, findCreases, removeInkEdges } from "../src/three/edges";
+import { INK, INK_CLIPPED, INK_EDGE, INK_STAIR, addInkEdges, findCreases, removeInkEdges } from "../src/three/edges";
 import { SceneMarks, markBox, hatch, hatchGeometry, hatchImage } from "../src/three/marks";
 import { labelAnchor, placeLabel } from "../src/three/labels";
 import { ScreenLineMaterial, screenLines } from "../src/three/screenLines";
@@ -41,7 +41,7 @@ import { disposeObject, materialsOf } from "../src/three/materials";
 import { CAMERA, CAMERA_FRAMING, CUTAWAY, EDGES, FLOOR_TOP, LABELS, MARKS, TRANSITIONS, WALK, WALK_ENTRY } from "../src/three/config";
 import { BUILT_IN_KINDS } from "../src/model/catalog";
 import { seedLoft } from "../src/model/seed";
-import { CUT_HEIGHT, SCENE_STYLE_DEFAULTS } from "../src/model/limits";
+import { CUT_HEIGHT, GROUND_LEVEL_ID, SCENE_STYLE_DEFAULTS } from "../src/model/limits";
 import { MATERIAL, SCENE_MARK } from "../src/ui/theme/sceneTokens";
 import { actions, pageActions, store } from "../src/model/store";
 import { dispatch } from "../src/model/commands";
@@ -75,9 +75,9 @@ describe("selection shared between the plan and the model", () => {
     const scene = new PlanScene();
     scene.update(seedLoft());
     // the dining table's top, a bare stretch of the living room's floor, the north wall's top
-    expect(clickDown(scene, 1.2, 2.6)).toEqual({ type: "item", id: "item_dining" });
-    expect(clickDown(scene, 3.6, 2.6)).toEqual({ type: "room", id: "room_living" });
-    expect(clickDown(scene, 6.5, 0)).toEqual({ type: "wall", id: "wall_n" });
+    expect(clickDown(scene, 1.2, 2.6)).toEqual({ type: "item", id: "item_dining", levelId: GROUND_LEVEL_ID });
+    expect(clickDown(scene, 3.6, 2.6)).toEqual({ type: "room", id: "room_living", levelId: GROUND_LEVEL_ID });
+    expect(clickDown(scene, 6.5, 0)).toEqual({ type: "wall", id: "wall_n", levelId: GROUND_LEVEL_ID });
     // outside the plan there is only the ground, which is nothing to select
     expect(clickDown(scene, 20, 20)).toBeNull();
     scene.dispose();
@@ -436,7 +436,7 @@ describe("ink edges", () => {
   });
 
   it("are drawn a hair nearer than their edge, so a face never breaks them, and the faces keep their depth", () => {
-    for (const ink of [INK, INK_CLIPPED]) {
+    for (const ink of [INK, INK_CLIPPED, INK_STAIR]) {
       const shader = { vertexShader: THREE.ShaderLib.basic.vertexShader, fragmentShader: "", uniforms: {} } as unknown as THREE.WebGLProgramParametersWithUniforms;
       ink.onBeforeCompile(shader, undefined as unknown as THREE.WebGLRenderer);
       // pulled along the line of sight: the same place on screen, a little nearer
@@ -515,7 +515,7 @@ describe("ink edges", () => {
       const key = o.userData.entity as string;
       if (!key.startsWith("item:") || key === "item:item_sofa") expect(lines(o).length, key).toBeGreaterThan(0);
     }
-    scene.update({ ...m, items: [...m.items, { id: "late", kind: "armchair", x: 3, y: 3, rotation: 0 }] });
+    scene.update({ ...m, items: [...m.items, { id: "late", levelId: "level_ground", kind: "armchair", x: 3, y: 3, rotation: 0 }] });
     const late = scene.objects.find((o) => o.userData.entity === "item:late")!;
     expect(lines(late)).toHaveLength(1);
     // furniture ink is never sliced by the cut
@@ -530,7 +530,7 @@ describe("ink edges", () => {
 // ---------------------------------------------------------------------------- room names
 
 describe("room names over the model", () => {
-  const room = { id: "r", x: 0, y: 0, w: 4, h: 4, label: "Studio", floor: "oak" as const };
+  const room = { id: "r", levelId: "level_ground", x: 0, y: 0, w: 4, h: 4, label: "Studio", floor: "oak" as const };
   const camera = (x: number, y: number, z: number) => {
     const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
     cam.position.set(x, y, z);
@@ -771,7 +771,7 @@ describe("where Walk sets the walker down", () => {
   it("steps aside when a piece stands on the first spot", () => {
     const base = { ...seedLoft(), items: [] };
     const first = walkEntry(base, blockersFor(base), () => 0)!;
-    const crowded = { ...base, items: [{ id: "x", kind: "armchair", x: first.x, y: first.z, rotation: 0 }] };
+    const crowded = { ...base, items: [{ id: "x", levelId: "level_ground", kind: "armchair", x: first.x, y: first.z, rotation: 0 }] };
     const b = blockersFor(crowded);
     const spot = walkEntry(crowded, b, () => 0)!;
     expect(spot).not.toEqual(first);

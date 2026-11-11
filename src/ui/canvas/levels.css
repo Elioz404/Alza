@@ -1,0 +1,40 @@
+/*
+ * The level switcher over the plan (LevelSwitcher.tsx), which brings this sheet with it after
+ * the first paint. Tokens only (src/ui/theme/tokens.ts).
+ */
+@layer alza-surfaces {
+  /* the level switcher: top storey first, as a section stacks them */
+  .levels {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-1);
+    min-height: 0;
+    padding: var(--spacing-1);
+    background: var(--color-background-card);
+    border-radius: var(--radius-container);
+    box-shadow: var(--shadow-med);
+  }
+  .levels .levels__list {
+    flex-direction: column;
+    align-items: stretch;
+    width: auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .levels .levels__item { justify-content: flex-start; }
+  .levels .levels__item--pending { box-shadow: inset 0 0 0 var(--size-hairline) var(--plan-destructive); color: var(--color-text-error); }
+  .levels__at {
+    margin: 0;
+    padding: 0 var(--spacing-2);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-xs);
+    color: var(--plan-dim);
+  }
+  .levels > .icon-btn { align-self: flex-start; }
+  /* stacked segments: under a finger each is a full finger tall, so no hit band reaches a neighbour */
+  @media (pointer: coarse), (max-width: 40rem) {
+    .levels .levels__item { height: var(--size-hit); }
+    .levels .levels__item::before { height: 100%; }
+  }
+}

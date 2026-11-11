@@ -42,7 +42,7 @@ describe("issuesOf", () => {
   });
 
   it("cannot be changed by one reader under another", () => {
-    const list = issuesOf({ ...emptyModel(), walls: [{ id: "w", ax: 0, ay: 0, bx: 0.1, by: 0, thickness: 0.15, height: 2.7 }] });
+    const list = issuesOf({ ...emptyModel(), walls: [{ id: "w", levelId: "level_ground", ax: 0, ay: 0, bx: 0.1, by: 0, thickness: 0.15, height: 2.7 }] });
     expect(() => (list as unknown[]).push({})).toThrow();
     expect(() => {
       (list[0] as { message: string }).message = "changed";
@@ -76,15 +76,15 @@ describe("the bounding-box first test", () => {
     const m: PlanModel = {
       ...emptyModel(),
       walls: [
-        { id: "w1", ax: 0, ay: 0, bx: 8, by: 0, thickness: 0.15, height: 2.7 },
-        { id: "w2", ax: 8, ay: 0, bx: 8, by: 6, thickness: 0.15, height: 2.7 },
-        { id: "w3", ax: 4, ay: -1, bx: 4, by: 3, thickness: 0.1, height: 2.7 },
+        { id: "w1", levelId: "level_ground", ax: 0, ay: 0, bx: 8, by: 0, thickness: 0.15, height: 2.7 },
+        { id: "w2", levelId: "level_ground", ax: 8, ay: 0, bx: 8, by: 6, thickness: 0.15, height: 2.7 },
+        { id: "w3", levelId: "level_ground", ax: 4, ay: -1, bx: 4, by: 3, thickness: 0.1, height: 2.7 },
       ],
       openings: [
         { id: "d1", kind: "door", wallId: "w1", t: 0.3, width: 0.9, sill: 0, height: 2.1 },
         { id: "win1", kind: "window", wallId: "w2", t: 0.5, width: 1.2, sill: 0.9, height: 1.2 },
       ],
-      items: Array.from({ length: 24 }, (_, i) => ({ id: `it${String(i).padStart(2, "0")}`, kind: i % 3 ? "plant" : "sofa", x: (i % 8) * 1.05, y: Math.floor(i / 8) * 0.9 + 0.2, rotation: (i * 37) % 360 })),
+      items: Array.from({ length: 24 }, (_, i) => ({ id: `it${String(i).padStart(2, "0")}`, levelId: "level_ground", kind: i % 3 ? "plant" : "sofa", x: (i % 8) * 1.05, y: Math.floor(i / 8) * 0.9 + 0.2, rotation: (i * 37) % 360 })),
     };
     const codes = checkModel(m).map((i) => `${i.code}:${i.refs.join(",")}`);
     expect(codes.filter((c) => c.startsWith("items_overlap")).length).toBeGreaterThan(0);

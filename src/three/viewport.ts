@@ -20,6 +20,14 @@
  * Under reduced motion a drag does not glide on after it is let go, and a door is open or shut
  * at once rather than swinging.
  *
+ * A plan of several storeys stands stacked at the levels' elevations. The view shows the levels
+ * from the ground up to the one the View panel names (levelView.ts: the level being worked on,
+ * by default), and the cutaway slices the topmost one shown; walking shows them all, and the
+ * walker climbs the stairs between them (walk.ts stride), the level it arrives on becoming the
+ * one being worked on. A click on something on another level makes that level the active one,
+ * and a piece placed with a click lands on the active level's floor. The OBJ export holds the
+ * levels shown.
+ *
  * Everything that costs a WebGL context or a shader compile — the renderer, the environment
  * map, the lights, the controls — is created once, when the view mounts, and lives until it
  * unmounts. The plan's content is a PlanScene that setModel() keeps
@@ -32,23 +40,24 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { OBJExporter } from "three/examples/jsm/exporters/OBJExporter.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { store, pageActions } from "../model/store";
+import { elevationOf, levelSlice, levelsOf, slabUnderside } from "../model/levels";
 import { dispatch } from "../model/commands";
-import { bus, EVENTS, sceneProbe, type ScenePoint, type SceneStats, type SetDoorsPayload } from "../model/sceneBus";
+import { bus, EVENTS, sceneProbe, type SceneLocatable, type ScenePoint, type SceneStats, type SetDoorsPayload } from "../model/sceneBus";
 import { SCENE_STYLE_DEFAULTS, type CameraMode, type SceneStyle } from "../model/limits";
 import type { PendingApproval, PlanModel } from "../model/types";
 import { runToolManually } from "../mcp/tools";
 import { placeHeldPieceAt, planBounds, planCentre } from "../editor/canvasState";
 import { PlanScene } from "./planScene";
-import { ceilingOf } from "./build";
 import { frameLoop } from "./frames";
-import { WalkKeys, blockersFor, slide, walkEntry, type Blockers } from "./walk";
+import { WalkKeys, stride, surfaceAt, walkEntry, walkLevelAt, walkWorld, type Walker, type WalkWorld } from "./walk";
+import { coveredByShown, shownLevels, type LevelsShown } from "./levelView";
 import { CAMERA, CAMERA_FRAMING, CLICK_SLOP_PX, CONTROLS, FLOOR_TOP, LIGHTS, RENDERER, SCENE, SHADOWS, WALK } from "./config";
 import { TONE_MAPPING } from "./surfaces";
 import { isAid } from "./edges";
-import { cutLevel, setCut } from "./cutaway";
-import { SceneMarks, markBox, setMarkResolution, type Selected } from "./marks";
+import { cutLevel, setCut, setStoreyTop, storeyTop } from "./cutaway";
+import { SceneMarks, markBox, roomLid, setMarkResolution, type Selected } from "./marks";
 import { RoomLabels } from "./labels";
-import { CameraMove, framedRadius, moveSeconds, newPose, prefersReducedMotion, type CameraPose } from "./transitions";
+import { CameraMove, framedRadius, moveSeconds, newPose, orbitPose, prefersReducedMotion, type CameraPose } from "./transitions";
 
 export interface Viewport {
   /** Show this plan: only what changed since the last one is rebuilt. */
@@ -61,6 +70,10 @@ export interface Viewport {
   setSelection(selected: Selected | null): void;
   /** Hatch what the pending destructive requests would remove. */
   setPending(approvals: readonly PendingApproval[]): void;
+  /** Work on another level: it is shown (up to it, by default), placed on, and walked on. */
+  setActiveLevel(levelId: string): void;
+  /** Show the levels up to this one (levelView.ts). */
+  setLevelsShown(upTo: LevelsShown): void;
   /** Free the context and everything on it. The viewport cannot be used afterwards. */
   dispose(): void;
 }
@@ -71,6 +84,10 @@ export interface ViewportOptions {
   style?: SceneStyle;
   selected?: Selected | null;
   approvals?: readonly PendingApproval[];
+  /** the level being worked on (default: the ground level) */
+  activeLevelId?: string;
+  /** the levels shown (default: up to the active one) */
+  levelsShown?: LevelsShown;
 }
 
 /** WebGL contexts this page has created and released for 3D views, for the development probe. */
@@ -130,10 +147,34 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
 
   // ---- content ----
   let model = initialModel;
+  let activeId = options.activeLevelId ?? model.levels[0]?.id ?? "";
+  let upTo: LevelsShown = options.levelsShown ?? "active";
+  let mode: CameraMode = initialMode;
   const plan = new PlanScene();
   scene.add(plan.root);
   plan.update(model);
-  let blockers: Blockers = blockersFor(model);
+  /** the levels the view shows now, by id, and how far up the topmost one's floor stands */
+  let shownIds: ReadonlySet<string> = new Set();
+  let topFloor = 0;
+  /** the lowest shown level's floor: with topFloor, the height of the stack of storeys on screen */
+  let bottomFloor = 0;
+  /** the active level's floor, metres up */
+  const activeFloor = () => elevationOf(model, activeId);
+  /** Show the levels the setting (and the camera) asks for. Returns whether any came or went. */
+  const applyLevels = (): boolean => {
+    const shown = shownLevels(model, activeId, upTo, mode === "walk");
+    shownIds = new Set(shown.map((l) => l.level.id));
+    const top = shown[shown.length - 1];
+    topFloor = top?.elevation ?? 0;
+    bottomFloor = shown[0]?.elevation ?? 0;
+    // the shown stack ends at the slab over its topmost storey: a stair there stops at it too
+    const capped = setStoreyTop(top ? top.elevation + slabUnderside(top.level.height) : null);
+    const changed = plan.setLevels(shownIds) || capped;
+    if (changed) renderer.shadowMap.needsUpdate = true;
+    return changed;
+  };
+  applyLevels();
+  let world: WalkWorld = walkWorld(model);
   /** what a click can hit to swing a door */
   let doorMeshes: THREE.Object3D[] = [];
   const collectDoorMeshes = () => {
@@ -141,8 +182,8 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     for (const leaf of plan.doors) leaf.hinge.traverse((c) => c instanceof THREE.Mesh && doorMeshes.push(c));
   };
   collectDoorMeshes();
-  /** the walls: what can stand between the camera and a room's name */
-  let walls = plan.walls;
+  /** the walls and slabs shown: what can stand between the camera and a room's name */
+  let occluders = plan.occluders;
 
   // ---- the plan's marks and names ----
   let style: SceneStyle = options.style ?? SCENE_STYLE_DEFAULTS;
@@ -156,13 +197,15 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
    * Bring the marks and the names in step with the plan, the selection and the requests; a
    * room's marks are drawn again at the top of its walls, or at the cut.
    */
+  const lidOf = (levelId: string) => roomLid(model, levelId, cutLevel());
   const remark = (): boolean => {
-    labels?.setRooms(model, selected?.type === "room" ? selected.id : null, approvals);
+    labels?.setRooms(model, selected?.type === "room" ? selected.id : null, approvals, shownIds);
     return marks.update(
       model,
       selected,
       approvals.flatMap((a) => a.targets),
-      cutLevel() ?? ceilingOf(model),
+      lidOf,
+      shownIds,
     );
   };
   remark();
@@ -201,9 +244,10 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
   };
   refit();
 
-  /** Where the walker is standing. Only WASD moves it; looking around never does. */
+  /** Where the walker's eye is. Only WASD moves it; looking around never does. */
   const walkPos = new THREE.Vector3();
-  let mode: CameraMode = initialMode;
+  /** Where the walker stands, and the height of the floor or tread under it. */
+  const walker: Walker = { x: 0, z: 0, height: 0 };
 
   /** Where a mode puts the camera, for the plan on screen. */
   const poseFor = (next: CameraMode, out: CameraPose): CameraPose => {
@@ -213,21 +257,26 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     if (next === "top") {
       const top = CAMERA_FRAMING.top;
       out.up.set(0, 0, -1); // north up, east right — matches the 2D editor exactly
-      out.position.set(center.x, radius * top.height, center.z + top.nudge);
-      out.target.set(center.x, 0, center.z);
+      out.position.set(center.x, topFloor + radius * top.height, center.z + top.nudge);
+      out.target.set(center.x, topFloor, center.z);
     } else if (next === "walk") {
       const walk = CAMERA_FRAMING.walk;
       out.up.set(0, 1, 0);
-      // inside the largest room, facing into it; with no room free to stand in, south of the
-      // plan's centre, facing north
-      const spot = walkEntry(model, blockers, plan.openness) ?? { x: center.x, z: center.z + fit.radius * walk.startSouth, dirX: 0, dirZ: -1 };
-      out.position.set(spot.x, CAMERA.eyeHeight, spot.z);
-      out.target.set(spot.x + spot.dirX * WALK.lookAhead, CAMERA.eyeHeight - walk.lookDrop, spot.z + spot.dirZ * WALK.lookAhead);
+      // on the active level: inside its largest room, facing into it, on a floor (not a stair);
+      // with no room free to stand in, south of the plan's centre, facing north
+      const floor = activeFloor();
+      const index = Math.max(0, levelsOf(model).findIndex((l) => l.level.id === activeId));
+      const here = world.levels[index];
+      const free = (x: number, z: number) => surfaceAt(world, x, z, floor) === floor;
+      const spot =
+        (here && walkEntry(levelSlice(model, activeId), here.blockers, plan.openness, free)) ?? { x: center.x, z: center.z + fit.radius * walk.startSouth, dirX: 0, dirZ: -1 };
+      walker.x = spot.x;
+      walker.z = spot.z;
+      walker.height = floor;
+      out.position.set(spot.x, floor + CAMERA.eyeHeight, spot.z);
+      out.target.set(spot.x + spot.dirX * WALK.lookAhead, floor + CAMERA.eyeHeight - walk.lookDrop, spot.z + spot.dirZ * WALK.lookAhead);
     } else {
-      const [east, up, south] = CAMERA_FRAMING.orbit.offset;
-      out.up.set(0, 1, 0);
-      out.position.set(center.x + radius * east, radius * up, center.z + radius * south);
-      out.target.set(center.x, CAMERA_FRAMING.orbit.targetHeight, center.z);
+      orbitPose(center, fit.radius, bottomFloor, topFloor, cam.aspect, out);
     }
     return out;
   };
@@ -252,7 +301,11 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     controls.maxPolarAngle = framing.maxPolar;
     controls.minDistance = framing.minDistance;
     controls.maxDistance = framing.maxDistance;
-    if (mode === "walk") walkPos.copy(cam.position);
+    if (mode === "walk") {
+      walkPos.copy(cam.position);
+      walker.x = walkPos.x;
+      walker.z = walkPos.z;
+    }
     controls.enabled = true;
     controls.update();
   };
@@ -263,8 +316,10 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
    * from no ceiling would only cross the rooms and their names.
    */
   const applyCut = () => {
+    // the storeys shown first: the cut slices the topmost of them
+    let moved = applyLevels();
     // the cut walls cast cut shadows (and so do curtains put away, and pendants shown or hidden)
-    let moved = setCut(style.cutaway && mode !== "walk" ? style.cutHeight : null);
+    if (setCut(style.cutaway && mode !== "walk" ? style.cutHeight : null, topFloor)) moved = true;
     if (plan.setFixtures(mode === "walk")) moved = true;
     if (moved) renderer.shadowMap.needsUpdate = true;
     plan.setCut(cutLevel());
@@ -287,8 +342,8 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     pose.position.copy(cam.position);
     pose.target.copy(controls.target);
     pose.up.copy(cam.up);
-    // the walls a move to or from Walk has to rise over
-    const wallTops = Math.max(0, ...model.walls.map((w) => w.height));
+    // the walls a move to or from Walk has to rise over: the tallest on the levels shown
+    const wallTops = Math.max(0, ...model.walls.filter((w) => shownIds.has(w.levelId)).map((w) => elevationOf(model, w.levelId) + w.height));
     if (ease && move.start(pose, destination, moveSeconds(prefersReducedMotion()), wallTops)) {
       moveClock = performance.now();
       // the controls stand aside while the camera travels; settle() hands it back to them
@@ -308,7 +363,21 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
   const right = new THREE.Vector3();
   const step3 = new THREE.Vector3();
   const back = new THREE.Vector3();
-  const step: [number, number] = [0, 0];
+
+  /** The level the walker is on, by id. */
+  const walkerLevel = () => world.levels[walkLevelAt(world, walker.height)]?.id ?? activeId;
+
+  /** Bring the eye to the height of what the walker stands on. Returns whether it is still on its way. */
+  const climb = (dt: number): boolean => {
+    const eye = walker.height + CAMERA.eyeHeight;
+    const gap = eye - walkPos.y;
+    if (Math.abs(gap) <= WALK.climbSettle || prefersReducedMotion()) {
+      walkPos.y = eye;
+      return false;
+    }
+    walkPos.y += gap * Math.min(1, dt * WALK.climbRate);
+    return true;
+  };
 
   const walk = (dt: number) => {
     cam.getWorldDirection(fwd);
@@ -322,13 +391,21 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     if (keys.held("right")) step3.add(right);
     if (step3.lengthSq() === 0) return;
     step3.normalize().multiplyScalar(WALK.speed * dt);
-    // full move first; if that lands in something, slide along whichever axis is free
-    const [dx, dz] = slide(blockers, cam.position.x, cam.position.z, step3.x, step3.z, plan.openness, step);
-    walkPos.x += dx;
-    walkPos.z += dz;
-    controls.target.x += dx;
-    controls.target.z += dz;
-    walkPos.y = CAMERA.eyeHeight;
+    // full stride first; if that lands in something (or off a stair), slide along whichever axis is free
+    const was = walkerLevel();
+    const x0 = walker.x;
+    const z0 = walker.z;
+    if (!stride(world, walker, step3.x, step3.z, plan.openness)) return;
+    walkPos.x = walker.x;
+    walkPos.z = walker.z;
+    controls.target.x += walker.x - x0;
+    controls.target.z += walker.z - z0;
+    // up or down a stair onto another storey: that is the level being worked on now
+    const now = walkerLevel();
+    if (now !== was) {
+      activeId = now;
+      pageActions.setActiveLevel(now);
+    }
   };
 
   /* OrbitControls orbits the camera around its target, which in first person means a look
@@ -359,6 +436,8 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
         walk(dt);
         again = true; // a held key walks on every frame until it is let go
       }
+      // the eye rises and falls with the treads, and asks for frames until it is there
+      if (mode === "walk" && climb(dt)) again = true;
       // true while the camera is still easing after a drag (damping)
       if (controls.update()) again = true;
       if (mode === "walk") anchorWalker();
@@ -368,7 +447,7 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       renderer.shadowMap.needsUpdate = true; // a swinging leaf moves its shadow
     }
     renderer.render(scene, cam);
-    labels?.place(cam, width, height, walls, cutLevel(), ceilingOf(model));
+    labels?.place(cam, width, height, occluders, cutLevel(), (room) => (coveredByShown(model, shownIds, room.levelId) ? null : lidOf(room.levelId)));
     return again;
   });
   const invalidate = () => loop.invalidate();
@@ -399,7 +478,12 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
 
   // ---- click to place furniture, click to swing a door, click to select ----
   const ray = new THREE.Raycaster();
+  /** the active level's floor, where a click puts a piece down */
   const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -FLOOR_TOP);
+  const placeFloor = () => {
+    floorPlane.constant = -(activeFloor() + FLOOR_TOP);
+  };
+  placeFloor();
   const ndc = new THREE.Vector2();
   const hit = new THREE.Vector3();
   const aim = (e: MouseEvent) => {
@@ -410,7 +494,8 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
   /** Was this hit on something drawn: shown, and not on a wall above the cut? */
   const drawn = (h: THREE.Intersection): boolean => {
     const cut = cutLevel();
-    if (cut !== null && h.point.y > cut && plan.entityOf(h.object)?.type === "wall") return false;
+    const type = cut !== null && h.point.y > cut ? plan.entityOf(h.object)?.type : undefined;
+    if (type === "wall" || type === "stair") return false;
     for (let n: THREE.Object3D | null = h.object; n; n = n.parent) if (!n.visible) return false;
     return true;
   };
@@ -441,10 +526,13 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
         void runToolManually("set_doors", { state: "toggle", id: doorId });
         return;
       }
-      // anything else selects what was clicked, as a click on the plan does; the ground, nothing
+      // anything else selects what was clicked, as a click on the plan does; the ground, nothing.
+      // Something on another storey makes that storey the one being worked on first
       const entity = picked ? plan.entityOf(picked.object) : null;
+      if (entity && entity.levelId !== activeId) pageActions.setActiveLevel(entity.levelId);
       if (entity?.type === "wall") pageActions.selectWall(entity.id);
       else if (entity?.type === "room") pageActions.selectRoom(entity.id);
+      else if (entity?.type === "stair") pageActions.selectStair(entity.id);
       else pageActions.selectItem(entity?.id ?? null);
       return;
     }
@@ -474,10 +562,10 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     const current = store.getState().model;
     ndc.set(0, 0);
     ray.setFromCamera(ndc, cam);
-    const b = planBounds(current);
+    const b = planBounds(levelSlice(current, activeId));
     const onFloor = ray.ray.intersectPlane(floorPlane, hit) !== null;
     const inPlan = onFloor && b !== null && hit.x >= b.minX && hit.x <= b.maxX && hit.z >= b.minY && hit.z <= b.maxY;
-    const at = inPlan ? { x: hit.x, y: hit.z } : planCentre(current);
+    const at = inPlan ? { x: hit.x, y: hit.z } : planCentre(levelSlice(current, activeId));
     if (placeHeldPieceAt(at.x, at.y)) invalidate();
   });
 
@@ -495,6 +583,8 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     plan.root.traverse((o) => {
       if (isAid(o) && o.parent) aids.push([o, o.parent]);
     });
+    // and only the levels shown: a hidden storey is left out of the file as it is of the view
+    for (const group of plan.levelGroups.values()) if (!group.visible) aids.push([group, plan.root]);
     for (const [o, parent] of aids) parent.remove(o);
     const obj = new OBJExporter().parse(plan.root);
     for (const [o, parent] of aids) parent.add(o);
@@ -521,6 +611,16 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
   ro.observe(mount);
 
   // ---- the development probe (testHookHandle.ts → sceneStats) ----
+  const corner = new THREE.Vector3();
+  /** Whether every corner of the box round the storeys shown projects inside the view. */
+  const inFrame = (): boolean => {
+    plan.bounds(scratchBox);
+    for (let i = 0; i < 8; i++) {
+      corner.set(i & 1 ? scratchBox.max.x : scratchBox.min.x, i & 2 ? scratchBox.max.y : scratchBox.min.y, i & 4 ? scratchBox.max.z : scratchBox.min.z).project(cam);
+      if (Math.abs(corner.x) > 1 || Math.abs(corner.y) > 1) return false;
+    }
+    return true;
+  };
   const stats = (): SceneStats => ({
     contextsCreated: contexts.created,
     contextsLive: contexts.created - contexts.released,
@@ -535,12 +635,18 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     marks: marks.counts,
     labels: labels?.counts ?? { total: 0, shown: 0 },
     cut: cutLevel(),
+    storeyTop: storeyTop(),
+    framed: inFrame(),
     edges: style.edges,
     moving: move.active,
+    levels: { total: model.levels.length, shown: [...shownIds] },
+    stairs: plan.counts.stairs,
+    slabs: plan.counts.slabs,
+    walker: mode === "walk" ? { level: walkerLevel(), floor: walker.height, eye: walkPos.y } : null,
   });
   sceneProbe.read = stats;
   const projected = new THREE.Vector3();
-  const locate = (type: "wall" | "room" | "item", id: string): ScenePoint | null => {
+  const locate = (type: SceneLocatable, id: string): ScenePoint | null => {
     const b = markBox(type, id, model);
     if (!b) return null;
     const cut = cutLevel();
@@ -552,7 +658,12 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     finishMove();
     cam.position.set(...position);
     controls.target.set(...target);
-    if (mode === "walk") walkPos.copy(cam.position);
+    if (mode === "walk") {
+      walkPos.copy(cam.position);
+      walker.x = walkPos.x;
+      walker.z = walkPos.z;
+      walker.height = walkPos.y - CAMERA.eyeHeight;
+    }
     controls.update();
     invalidate();
   };
@@ -582,9 +693,13 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       model = next;
       const hadContent = plan.hasContent;
       const change = plan.update(next);
-      blockers = blockersFor(next);
+      // a level that went: the store falls back to the ground, and so does the view
+      if (!next.levels.some((l) => l.id === activeId)) activeId = next.levels[0]?.id ?? "";
+      applyCut();
+      world = walkWorld(next);
+      placeFloor();
       collectDoorMeshes();
-      walls = plan.walls;
+      occluders = plan.occluders;
       remark();
       refit(); // and redraws the shadow map: the casters changed
       // a plan that replaced the one on screen (the demo loaded, a blank canvas drawn on) is
@@ -613,6 +728,25 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       remark();
       invalidate();
     },
+    setActiveLevel(next) {
+      if (next === activeId) return;
+      activeId = next;
+      placeFloor();
+      applyCut();
+      occluders = plan.occluders;
+      refit();
+      // walking, the walker goes to the level asked for (unless it just walked there itself)
+      if (mode === "walk" && walkerLevel() !== next) applyCamera("walk", true);
+      invalidate();
+    },
+    setLevelsShown(next) {
+      if (next === upTo) return;
+      upTo = next;
+      applyCut();
+      occluders = plan.occluders;
+      refit();
+      invalidate();
+    },
     dispose() {
       inkNow();
       loop.stop();
@@ -638,6 +772,7 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       marks.dispose();
       labels?.dispose();
       setCut(null);
+      setStoreyTop(null);
       envRT.dispose();
       sun.shadow.dispose();
       renderer.dispose();

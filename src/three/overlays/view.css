@@ -58,6 +58,17 @@
     .scene-view__slider { height: max(var(--size-control-sm), var(--size-hit)); }
   }
 
+  /* the storeys shown: a native select, on the fields' own .input look */
+  .scene-view__levels {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-1);
+  }
+  .scene-view__select { cursor: pointer; }
+  @media (pointer: coarse), (max-width: 40rem) {
+    .scene-view__select { height: max(var(--size-control), var(--size-hit)); }
+  }
+
   /* ---------------------------------------------------------------- room names over the model */
   /* placed by the viewport (labels.ts) through --label-x and --label-y, in canvas pixels */
   .scene-labels {

@@ -10,7 +10,7 @@
  * id happened to contain an underscore, and "remove the sofa" deleted the first sofa of three.
  */
 
-import type { Item, Opening, PlanModel, Room, Wall } from "./types";
+import type { Item, Level, Opening, PlanModel, Room, Stair, Wall } from "./types";
 import { catalogOf, kindName } from "./catalog";
 import { MAX_CANDIDATES, VALIDATION_REPORT } from "./limits";
 import { clip } from "./schemas";
@@ -86,3 +86,11 @@ export function lookupItem(model: PlanModel, ref: string): Lookup<Item> {
     },
   });
 }
+
+/** A level answers to its id and its name ("First floor"). */
+export const lookupLevel = (model: PlanModel, ref: string): Lookup<Level> =>
+  lookup(model.levels, ref, { noun: "level", nouns: "levels", names: (l) => [l.name], label: (l) => l.name });
+
+/** A stair answers to its id. */
+export const lookupStair = (model: PlanModel, ref: string): Lookup<Stair> =>
+  lookup(model.stairs, ref, { noun: "stair", nouns: "stairs", names: NO_NAMES, label: (s) => `${s.shape} stair on ${s.levelId}` });

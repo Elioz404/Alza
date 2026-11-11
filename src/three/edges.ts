@@ -20,8 +20,11 @@ import * as THREE from "three";
 import { keepStatic } from "./materials";
 import { CONTACT_SHADOW } from "./surfaces";
 import { EDGES } from "./config";
-import { CUT_CAP, clipToCut } from "./cutaway";
+import { CUT_CAP, clipToCut, clipToStoreyTop } from "./cutaway";
 import { SCENE_MARK } from "../ui/theme/sceneTokens";
+
+/** A mesh the ink leaves out (slabs.ts NO_INK: a flat face cut into pieces that are no edge of anything). */
+export const NO_INK = "noInk";
 
 export const INK_EDGE = "ink-edge";
 
@@ -40,7 +43,13 @@ gl_Position = projectionMatrix * vec4(mvPosition.xyz * ${(1 - EDGES.depthPull).t
   );
 };
 
-function inkMaterial(clipped: boolean): THREE.LineBasicMaterial {
+/**
+ * What a piece's lines are clipped by, as the piece is: nothing (loose furniture), the cutaway's
+ * cut (a wall), or the cut and the top of the storeys shown (a stair).
+ */
+export type InkClip = "none" | "cut" | "stair";
+
+function inkMaterial(clip: InkClip): THREE.LineBasicMaterial {
   const material = new THREE.LineBasicMaterial({
     color: SCENE_MARK.ink.hex,
     transparent: true,
@@ -49,21 +58,25 @@ function inkMaterial(clipped: boolean): THREE.LineBasicMaterial {
   });
   material.onBeforeCompile = pullInk;
   material.customProgramCacheKey = () => "ink-pulled";
-  // a cut wall's lines stop at the cut with it
-  if (clipped) clipToCut(material);
+  // a cut wall's lines stop at the cut with it, and a stair's at the top of the storeys shown too
+  if (clip === "cut") clipToCut(material);
+  else if (clip === "stair") clipToStoreyTop(material);
   return keepStatic(material);
 }
 
-/** The ink for loose pieces, and the ink for walls, which the cutaway slices. */
-export const INK = inkMaterial(false);
-export const INK_CLIPPED = inkMaterial(true);
+/** The ink for loose pieces, the ink for walls, which the cutaway slices, and the stairs' ink. */
+export const INK = inkMaterial("none");
+export const INK_CLIPPED = inkMaterial("cut");
+export const INK_STAIR = inkMaterial("stair");
+const INKS: Readonly<Record<InkClip, THREE.LineBasicMaterial>> = Object.freeze({ none: INK, cut: INK_CLIPPED, stair: INK_STAIR });
 
 /** Is this object part of what a piece is built from, rather than a drawing aid on it? */
 export const isAid = (o: THREE.Object3D): boolean => o.name === INK_EDGE || o.name === CONTACT_SHADOW || o.name === CUT_CAP;
 
 /** Does this mesh get edges of its own: drawn, opaque enough, and part of the piece? */
 function edged(mesh: THREE.Mesh): boolean {
-  if (isAid(mesh)) return false;
+  // a flat face cut into pieces (a slab, a floor with a stairwell): its rim is drawn by its sides
+  if (isAid(mesh) || mesh.userData?.[NO_INK]) return false;
   const m = mesh.material as THREE.Material | THREE.Material[];
   if (Array.isArray(m)) return true;
   return !m.transparent || m.opacity >= EDGES.minOpacity;
@@ -216,9 +229,10 @@ function partsOf(root: THREE.Object3D): Part[] {
 /**
  * Give `root` its ink edges (once: a piece that has them keeps them). See above for `wall`;
  * `neighbours` are the walls a wall's ends run into (at a corner or a T), whose boxes hide its
- * end faces' edges just as its own do.
+ * end faces' edges just as its own do. `clip`: what the lines stop at, as the piece does (a
+ * wall's at the cut; a stair's at the cut and at the top of the storeys shown).
  */
-export function addInkEdges(root: THREE.Object3D, wall = false, neighbours: readonly THREE.Object3D[] = []): number {
+export function addInkEdges(root: THREE.Object3D, wall = false, neighbours: readonly THREE.Object3D[] = [], clip: InkClip = wall ? "cut" : "none"): number {
   let has = false;
   root.traverse((o) => {
     if (o.name === INK_EDGE) has = true;
@@ -271,7 +285,7 @@ export function addInkEdges(root: THREE.Object3D, wall = false, neighbours: read
     if (positions.length === 0) continue;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    const lines = new THREE.LineSegments(geometry, wall ? INK_CLIPPED : INK);
+    const lines = new THREE.LineSegments(geometry, INKS[clip]);
     lines.name = INK_EDGE;
     lines.castShadow = false;
     lines.receiveShadow = false;

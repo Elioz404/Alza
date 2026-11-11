@@ -86,6 +86,12 @@ const sheet = {
   floorConcrete: oklch(92.6, 0.003, 85),
   agentHatch: oklch(80, 0.05, 192),
   destructiveHatch: oklch(80, 0.07, 27),
+  /**
+   * The level below, drawn under the one being worked on to line things up with: told apart
+   * from live linework by its cooler hue, finer pen and dash-dot pattern, not by fading it —
+   * it stays at the 3:1 a line that carries information needs on the paper.
+   */
+  ghost: oklch(63, 0.03, 220),
 } as const;
 
 // ============================================================================ dark rendering
@@ -123,6 +129,7 @@ const dark = {
   floorOak: oklch(27, 0.02, 70),
   floorCarpet: oklch(26, 0.015, 145),
   floorTile: oklch(26, 0.01, 230),
+  ghost: oklch(56, 0.03, 220),
   ringLow: oklch(30, 0.011, 255),
   ringMed: oklch(34, 0.011, 255),
   ringHigh: oklch(38, 0.011, 255),

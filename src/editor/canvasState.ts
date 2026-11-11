@@ -1,6 +1,7 @@
 /**
  * The plan canvas's own state, outside any component: where the view looks (pan and zoom), the
- * size of the canvas, the tool the editor adds to the store's draw modes (pan, door, window),
+ * size of the canvas, the tools the editor adds to the store's draw modes (pan, door, window,
+ * stair),
  * and whether the agent's revision marks are shown.
  *
  * It lives here rather than in Editor.tsx so the canvas overlays (zoom, hint bar, legend) and
@@ -16,6 +17,7 @@ import type { PlanModel } from "../model/types";
 import { catalogOf } from "../model/catalog";
 import { bus, EVENTS } from "../model/sceneBus";
 import { centreOf, type EntityRef } from "../ui/activity/entities";
+import { stairGeometryIn } from "../model/levels";
 
 /** The view: the world point at the canvas's top-left corner and the zoom, in pixels per metre. */
 export interface PlanView {
@@ -43,7 +45,7 @@ const FIT_MARGIN_PX = 96;
  * The tools the editor has beyond the store's draw modes. While one is set, the store's draw
  * mode is "select"; choosing a draw mode clears it.
  */
-export type PlanTool = "pan" | "door" | "window";
+export type PlanTool = "pan" | "door" | "window" | "stair";
 
 /** The tool in use, whichever of the two places holds it. */
 export type ActiveTool = "select" | "wall" | "room" | "place" | PlanTool;
@@ -60,6 +62,8 @@ export interface CanvasState {
   showAgentMarks: boolean;
   /** with the door or window tool over a wall: whether the opening fits there (null: not over a wall) */
   openingFits: boolean | null;
+  /** the way the stair tool's next stair climbs: degrees, 0 = +y, 90 = +x (a stair's rotation) */
+  stairRotation: number;
 }
 
 export const canvasStore = createStore<CanvasState>(() => ({
@@ -70,6 +74,7 @@ export const canvasStore = createStore<CanvasState>(() => ({
   spacePan: false,
   showAgentMarks: true,
   openingFits: null,
+  stairRotation: 0,
 }));
 
 /** Read a slice of the canvas state from React. */
@@ -113,6 +118,11 @@ export function setShowAgentMarks(on: boolean): void {
 
 export function setOpeningFits(fits: boolean | null): void {
   if (canvasStore.getState().openingFits !== fits) canvasStore.setState({ openingFits: fits });
+}
+
+/** Aim the stair tool: the next stair climbs this way (degrees, a stair's rotation). */
+export function setStairRotation(deg: number): void {
+  if (canvasStore.getState().stairRotation !== deg) canvasStore.setState({ stairRotation: deg });
 }
 
 export function setSpacePan(on: boolean): void {
@@ -174,6 +184,12 @@ export function planBounds(model: PlanModel): { minX: number; minY: number; maxX
     const reach = k ? Math.hypot(k.w, k.d) / 2 : 0;
     xs.push(it.x - reach, it.x + reach);
     ys.push(it.y - reach, it.y + reach);
+  }
+  for (const st of model.stairs) {
+    const g = stairGeometryIn(model, st);
+    if (!g) continue;
+    xs.push(g.box.minX, g.box.maxX);
+    ys.push(g.box.minY, g.box.maxY);
   }
   if (xs.length === 0) return null;
   return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
@@ -246,6 +262,19 @@ export function placeHeldPieceAt(x: number, y: number): boolean {
   if (!r.ok) return false;
   pageActions.setDrawMode("select");
   if (typeof r.id === "string") pageActions.selectItem(r.id);
+  return true;
+}
+
+/**
+ * Put a stair down with its bottom riser at (x, y), climbing the way the stair tool is aimed,
+ * on the level being worked on, as the human; then select it, so Properties shows its risers
+ * and the arrow keys nudge it, and go back to Select. True when a stair went down.
+ */
+export function placeStairAt(x: number, y: number): boolean {
+  const r = dispatch({ type: "add_stair", spec: { x, y, rotation: canvasStore.getState().stairRotation } }, { actor: "human" });
+  if (!r.ok) return false;
+  setPlanTool(null);
+  if (typeof r.id === "string") pageActions.selectStair(r.id);
   return true;
 }
 

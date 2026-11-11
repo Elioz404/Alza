@@ -4,8 +4,13 @@
  * Walls in solid poché, openings cut through them (door leaves with their swing, windows with
  * their glass line), rooms with their floor and their name and area, furniture as plan symbols,
  * dimension chains with ticks outside the walls. Chained wall drawing, rooms, doors and windows
- * placed on a wall, furniture, a blueprint underlay, 5 cm snap (and wall ends snap to wall ends),
- * pan and zoom. The agent's recent changes carry numbered revision clouds that match the activity
+ * placed on a wall, furniture, stairs, a blueprint underlay, 5 cm snap (and wall ends snap to
+ * wall ends), pan and zoom.
+ *
+ * It shows one level of the plan at a time, the one being worked on (activeLevelId), with the
+ * level below drawn faintly underneath to line walls up with. A stair is drawn with its plan
+ * symbol on the level it stands on, and its stairwell on the level it arrives at
+ * (stairSymbol.ts). The agent's recent changes carry numbered revision clouds that match the activity
  * feed; whatever a pending destructive request would remove is hatched in the error colour.
  *
  * Every change goes through dispatch() as the human, the same path the agent's tools take; a drag
@@ -15,11 +20,13 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
-import { store, pageActions } from "../model/store";
+import { activeLevelId, store, pageActions } from "../model/store";
+import { levelBelow, levelInfo, levelSlice, stairGeometryIn, stairwellsOf } from "../model/levels";
+import { stairGeometry, type StairGeometry } from "../model/stairs";
 import { useAppStore } from "../ui/useAppStore";
 import { dispatch, type Command } from "../model/commands";
-import type { ApprovalTarget, Item, Opening, PlanModel, Room, Wall } from "../model/types";
-import { snap, segLen, segPoint, pointSegDist, type Pt } from "../model/geometry";
+import type { ApprovalTarget, Item, Opening, PlanModel, Room, Stair, Wall } from "../model/types";
+import { rectCorners, snap, segLen, segPoint, pointSegDist, type Pt } from "../model/geometry";
 import { clampOpeningT, openingSpan } from "../model/issues";
 import { catalogOf } from "../model/catalog";
 import { assetUrl } from "../model/assets";
@@ -28,17 +35,31 @@ import { useGesture } from "../ui/useGesture";
 import { bus, EVENTS } from "../model/sceneBus";
 import { isInsideOverlay, isTypingTarget } from "../ui/keys";
 import { deselectAll, handleSelectionKey } from "./selectionKeys";
-import { DEFAULT_FLOOR, DOOR_DEFAULTS, DOUBLE_DOOR_CLEAR, ROOM_SIZE, SNAP, WALL_DEFAULTS, WALL_MIN_LENGTH, WINDOW_DEFAULTS } from "../model/limits";
+import {
+  DEFAULT_FLOOR,
+  DOOR_DEFAULTS,
+  DOUBLE_DOOR_CLEAR,
+  LEVEL_DEFAULTS,
+  ROOM_SIZE,
+  SNAP,
+  STAIR,
+  STAIR_DEFAULTS,
+  WALL_DEFAULTS,
+  WALL_MIN_LENGTH,
+  WINDOW_DEFAULTS,
+} from "../model/limits";
 import {
   activeTool,
   canvasStore,
   fitPlan,
   placeHeldPieceAt,
+  placeStairAt,
   planCentre,
   setCanvasSize,
   setOpeningFits,
   setPlanTool,
   setSpacePan,
+  setStairRotation,
   setView,
   useCanvas,
   worldAt,
@@ -51,7 +72,11 @@ import {
   NUDGE_SHIFT_FACTOR,
 } from "./canvasState";
 import { furnitureSymbol, hasSymbol } from "./symbols";
+import type { StairDrawingProps } from "./StairDrawing";
+import { deferred } from "../ui/deferred";
 import {
+  ARROW_CLIMB,
+  aimRotation,
   FLOOR_PATTERN,
   LETTER,
   MARK,
@@ -69,6 +94,18 @@ import {
 
 /** Canvas size assumed until the SVG has been laid out and measured. */
 const UNMEASURED_CANVAS = { w: 1200, h: 800 } as const;
+
+/**
+ * A stair's plan symbol (StairDrawing.tsx), fetched after the first paint with the rest of
+ * what it does not need: until it is here, and if it cannot be fetched, the stair is still
+ * drawn, as its footprint's outline.
+ */
+const StairDrawing = deferred<StairDrawingProps>(
+  "the stair symbols",
+  () => import("./StairDrawing").then((m) => m.StairDrawing),
+  ({ geometry, S, className }) => <StairOutline geometry={geometry} S={S} className={`${className} pl-stair-pending`} />,
+);
+
 
 const ARROWS: Readonly<Record<string, Pt>> = Object.freeze({
   ArrowLeft: { x: -1, y: 0 },
@@ -103,6 +140,10 @@ const isControlTarget = (target: EventTarget | null): boolean =>
 
 const nudgeCommand = (dx: number, dy: number): Command | null => {
   const { model, editor } = store.getState();
+  if (editor.selectedStairId) {
+    const st = model.stairs.find((i) => i.id === editor.selectedStairId);
+    return st ? { type: "move_stair", id: st.id, x: snap(st.x + dx), y: snap(st.y + dy) } : null;
+  }
   if (editor.selectedItemId) {
     const it = model.items.find((i) => i.id === editor.selectedItemId);
     return it ? { type: "move_item", id: it.id, x: snap(it.x + dx), y: snap(it.y + dy) } : null;
@@ -118,15 +159,34 @@ const nudgeCommand = (dx: number, dy: number): Command | null => {
   return null;
 };
 
+/** The middle of the plan as it is shown. */
+const viewCentre = (): Pt => {
+  const { view, size } = canvasStore.getState();
+  // until the canvas has been laid out, the middle of the plan itself
+  const c = size && size.w > 0 && size.h > 0 ? worldAt(view, size.w / 2, size.h / 2) : planCentre(store.getState().model);
+  return { x: snap(c.x), y: snap(c.y) };
+};
+
 /** Put the held piece down in the middle of the plan as it is shown (Enter, or Library's button). */
 const placeInView = (): boolean => {
-  const { view, size } = canvasStore.getState();
-  const c = size ? worldAt(view, size.w / 2, size.h / 2) : planCentre(store.getState().model);
+  const c = viewCentre();
   return placeHeldPieceAt(c.x, c.y);
 };
 
+/** The stair the stair tool would add with its bottom riser at `at`, on a level `rise` metres high. */
+const aimedStair = (at: Pt, rotation: number, levelId: string, rise: number): StairGeometry =>
+  stairGeometry({ id: "aim", levelId, shape: STAIR_DEFAULTS.shape, x: at.x, y: at.y, rotation, width: STAIR.defaultWidth } satisfies Stair, rise);
+
 export function Editor() {
-  const model = useAppStore((s) => s.model);
+  // the level being worked on: the plan shows its walls, rooms, pieces and stairs, over a ghost
+  // of the level below, and the stairwells of the stairs that arrive from there
+  const plan = useAppStore((s) => s.model);
+  const levelId = useAppStore(activeLevelId);
+  const model = levelSlice(plan, levelId);
+  const below = levelBelow(plan, levelId);
+  const ghost = below ? levelSlice(plan, below.level.id) : null;
+  const wells = useMemo(() => stairwellsOf(plan, levelId), [plan, levelId]);
+  const rise = levelInfo(plan, levelId)?.level.height ?? LEVEL_DEFAULTS.height;
   const editor = useAppStore((s) => s.editor);
   const approvals = useAppStore((s) => s.approvals);
   const revisions = useStore(provenance, (s) => s.revisions);
@@ -135,13 +195,17 @@ export function Editor() {
   const tool = useCanvas((s) => s.tool);
   const spacePan = useCanvas((s) => s.spacePan);
   const showAgentMarks = useCanvas((s) => s.showAgentMarks);
+  const stairRotation = useCanvas((s) => s.stairRotation);
 
   const [pointer, setPointer] = useState<Pointer | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [dragItem, setDragItem] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [dragRoom, setDragRoom] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [dragEnd, setDragEnd] = useState<{ id: string; end: "a" | "b" } | null>(null);
+  const [dragStair, setDragStair] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [roomStart, setRoomStart] = useState<Pt | null>(null);
+  /** with the stair tool: where the press went down, the stair's bottom riser */
+  const [stairStart, setStairStart] = useState<Pt | null>(null);
   const [panning, setPanning] = useState<{ px: number; py: number; vx: number; vy: number } | null>(null);
   const drag = useGesture();
   const nudge = useGesture();
@@ -192,6 +256,7 @@ export function Editor() {
         setPlanTool(null);
         pageActions.setDrawMode("select");
         setRoomStart(null);
+        setStairStart(null);
         return;
       }
       // Delete removes the selection, Ctrl/Cmd+Z undoes: the same keys as in the 3D view
@@ -202,6 +267,21 @@ export function Editor() {
         e.preventDefault();
         placeInView();
         return;
+      }
+      if (canvasStore.getState().tool === "stair" && !isControlTarget(e.target)) {
+        // the stair tool from the keyboard: the arrows aim it, Enter puts it in the middle of the view
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const c = viewCentre();
+          placeStairAt(c.x, c.y);
+          return;
+        }
+        const climb = ARROW_CLIMB[e.key];
+        if (climb !== undefined) {
+          e.preventDefault();
+          setStairRotation(climb);
+          return;
+        }
       }
       const arrow = ARROWS[e.key];
       if (arrow && !isControlTarget(e.target)) {
@@ -233,6 +313,9 @@ export function Editor() {
           break;
         case "n":
           setPlanTool("window");
+          break;
+        case "s":
+          setPlanTool("stair");
           break;
         case "v":
           // the same as the rail's Select (src/ui/shell/tools.ts), whichever listener runs first
@@ -356,6 +439,8 @@ export function Editor() {
       }));
       return;
     }
+    if (stairStart && Math.hypot(raw.x - stairStart.x, raw.y - stairStart.y) * S >= MARK.stairAim) setStairRotation(aimRotation(stairStart, raw));
+    if (dragStair) drag.update({ type: "move_stair", id: dragStair.id, x: snap(raw.x - dragStair.dx), y: snap(raw.y - dragStair.dy) });
     if (dragItem) drag.update({ type: "move_item", id: dragItem.id, x: snap(raw.x - dragItem.dx), y: snap(raw.y - dragItem.dy) });
     if (dragRoom) drag.update({ type: "update_room", id: dragRoom.id, patch: { x: snap(raw.x - dragRoom.dx), y: snap(raw.y - dragRoom.dy) } });
     if (dragEnd) {
@@ -400,6 +485,13 @@ export function Editor() {
       dispatch({ type: "place_item", kind: editor.placingKind, x: sp.x, y: sp.y, rotation: 0 }, { actor: "human" });
       return;
     }
+    if (tool$ === "stair") {
+      // where the press goes down is the bottom riser; dragging away from it aims the climb
+      const sp = snapPoint(raw);
+      setStairStart({ x: sp.x, y: sp.y });
+      capture(e);
+      return;
+    }
     if (tool$ === "door" || tool$ === "window") {
       const target = aimOpening(raw);
       if (target && target.t !== null) dispatch({ type: tool$ === "door" ? "add_door" : "add_window", wallId: target.wall.id, t: target.t }, { actor: "human" });
@@ -412,11 +504,16 @@ export function Editor() {
 
   const onPointerUp = (e: React.PointerEvent) => {
     if (panning) setPanning(null);
-    if (dragItem || dragRoom || dragEnd) {
+    if (dragItem || dragRoom || dragEnd || dragStair) {
       drag.end(); // the whole drag: one undo step, one line in the feed (nothing, if it never moved)
       setDragItem(null);
       setDragRoom(null);
       setDragEnd(null);
+      setDragStair(null);
+    }
+    if (stairStart) {
+      placeStairAt(stairStart.x, stairStart.y);
+      setStairStart(null);
     }
     if (roomStart) {
       const sp = snapPoint(toWorld(e.clientX, e.clientY));
@@ -451,6 +548,16 @@ export function Editor() {
     const p = toWorld(e.clientX, e.clientY);
     const it = model.items.find((i) => i.id === id)!;
     setDragItem({ id, dx: p.x - it.x, dy: p.y - it.y });
+    capture(e);
+  };
+
+  const onStairDown = (id: string, e: React.PointerEvent) => {
+    if (!selecting || e.button !== 0 || e.altKey) return;
+    e.stopPropagation();
+    pageActions.selectStair(id);
+    const p = toWorld(e.clientX, e.clientY);
+    const st = model.stairs.find((s) => s.id === id)!;
+    setDragStair({ id, dx: p.x - st.x, dy: p.y - st.y });
     capture(e);
   };
 
@@ -494,10 +601,17 @@ export function Editor() {
   const selectedWall = editor.selectedWallId ? wallById.get(editor.selectedWallId) : undefined;
   const selectedRoom = editor.selectedRoomId ? model.rooms.find((r) => r.id === editor.selectedRoomId) : undefined;
   const selectedItem = editor.selectedItemId ? model.items.find((i) => i.id === editor.selectedItemId) : undefined;
+  const selectedStair = editor.selectedStairId ? model.stairs.find((s) => s.id === editor.selectedStairId) : undefined;
+  const selectedStairGeometry = selectedStair ? stairGeometryIn(plan, selectedStair) : null;
+  const hoveredStair = hoverId && selecting && hoverId !== editor.selectedStairId ? model.stairs.find((s) => s.id === hoverId) : undefined;
+  const hoveredStairGeometry = hoveredStair ? stairGeometryIn(plan, hoveredStair) : null;
+  // with no pointer over the plan (the keyboard's way), the aim shows where Enter would put it
+  const stairAt = stairStart ?? (pointer ? pointer.at : tool$ === "stair" ? viewCentre() : null);
+  const aimed = tool$ === "stair" && stairAt && !panning ? aimedStair(stairAt, stairRotation, levelId, rise) : null;
   const hoveredWall = hoverId && selecting && hoverId !== editor.selectedWallId ? wallById.get(hoverId) : undefined;
 
   const placing = editor.drawMode === "place" && editor.placingKind ? catalog.get(editor.placingKind) : undefined;
-  const drawing = tool$ === "wall" || tool$ === "room" || tool$ === "place";
+  const drawing = tool$ === "wall" || tool$ === "room" || tool$ === "place" || tool$ === "stair";
 
   return (
     <svg
@@ -507,12 +621,13 @@ export function Editor() {
       data-panning={panning ? "" : undefined}
       viewBox={`${left} ${top} ${canvas.w} ${canvas.h}`}
       role="img"
-      aria-label={planDescription(model)}
+      aria-label={planDescription(model, plan.levels.length > 1 ? (levelInfo(plan, levelId)?.level.name ?? null) : null)}
+      data-level={levelId}
       onPointerMove={onPointerMove}
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
       onPointerLeave={() => {
-        if (panning || dragItem || dragRoom || dragEnd) return;
+        if (panning || dragItem || dragRoom || dragEnd || dragStair || stairStart) return;
         setPointer(null);
         setOpeningFits(null);
       }}
@@ -547,6 +662,26 @@ export function Editor() {
           {pending.has(r.id) ? <rect className="pl-pending" x={r.x * S} y={r.y * S} width={r.w * S} height={r.h * S} fill={`url(#${ref("hatch")})`} /> : null}
         </g>
       ))}
+
+      {/* the level below, faintly, to line this one up with */}
+      {ghost ? <GhostLevel model={ghost} S={S} /> : null}
+
+      {/* stairwells: the stairs arriving from below, seen through the void in this floor */}
+      {wells.map(({ stair, geometry }) => (
+        <StairDrawing key={`well:${stair.id}`} geometry={geometry} side="upper" S={S} className="pl-stair pl-stair--well" />
+      ))}
+
+      {/* stairs on this level */}
+      {model.stairs.map((st) => {
+        const g = stairGeometryIn(plan, st);
+        if (!g) return null;
+        return (
+          <g key={st.id} className="pl-stair-hit" data-stair={st.id} onPointerDown={(e) => onStairDown(st.id, e)} {...hover(st.id)}>
+            <StairDrawing geometry={g} side="lower" S={S} className={editor.selectedStairId === st.id ? "pl-stair pl-stair--selected" : "pl-stair"} />
+            {pending.has(st.id) ? <StairOutline geometry={g} S={S} className="pl-pending" fill={`url(#${ref("hatch")})`} /> : null}
+          </g>
+        );
+      })}
 
       {/* furniture */}
       {rugsFirst.map((it) => {
@@ -599,7 +734,7 @@ export function Editor() {
         {[...pending.values()].map(({ target }) => (
           <PendingMark key={`${target.type}:${target.id}`} target={target} model={model} wallById={wallById} S={S} hatch={`url(#${ref("hatch")})`} />
         ))}
-        {planPending ? <PlanPendingMark model={model} S={S} /> : null}
+        {planPending || pending.has(levelId) ? <PlanPendingMark model={model} S={S} /> : null}
       </g>
 
       {/* selection */}
@@ -614,6 +749,8 @@ export function Editor() {
             return k ? <ItemOutline item={it} w={k.w} d={k.d} S={S} className="pl-hover-outline" /> : null;
           })()
         : null}
+      {selectedStairGeometry ? <StairOutline geometry={selectedStairGeometry} S={S} className="pl-sel-outline" /> : null}
+      {hoveredStairGeometry ? <StairOutline geometry={hoveredStairGeometry} S={S} className="pl-hover-outline" /> : null}
       {hoveredWall ? <LengthPill a={{ x: hoveredWall.ax, y: hoveredWall.ay }} b={{ x: hoveredWall.bx, y: hoveredWall.by }} S={S} tone="quiet" /> : null}
       {selectedWall ? (
         <g className="pl-selection">
@@ -666,6 +803,7 @@ export function Editor() {
       ) : null}
       {roomStart && pointer ? <RoomPreview a={roomStart} b={pointer.at} S={S} /> : null}
       {aim ? <OpeningGhost aim={aim} kind={tool$ === "door" ? "door" : "window"} S={S} /> : null}
+      {aimed ? <StairDrawing geometry={aimed} side="lower" S={S} className="pl-stair pl-ghost-stair" /> : null}
       {placing && pointer && !dragItem ? (
         <g className="pl-ghost-item" transform={`translate(${pointer.at.x * S} ${pointer.at.y * S})`}>
           {furnitureSymbol(placing.kind, placing.w, placing.d, S)}
@@ -683,11 +821,13 @@ export function Editor() {
 // ---------------------------------------------------------------------------
 
 /** One sentence for assistive technology: what the plan holds. */
-function planDescription(model: PlanModel): string {
-  if (model.walls.length === 0 && model.rooms.length === 0 && model.items.length === 0) return `Plan of ${model.name}, empty`;
+function planDescription(model: PlanModel, level: string | null): string {
+  const of = `Plan of ${model.name}${level ? `, ${level}` : ""}`;
+  if (model.walls.length === 0 && model.rooms.length === 0 && model.items.length === 0 && model.stairs.length === 0) return `${of}, empty`;
   const rooms = model.rooms.map((r) => `${r.label} ${(r.w * r.h).toFixed(1)} square metres`).join(", ");
-  const counts = `${model.walls.length} walls, ${model.openings.length} doors and windows, ${model.items.length} pieces of furniture`;
-  return `Plan of ${model.name}: ${counts}${rooms ? `. Rooms: ${rooms}` : ""}`;
+  const stairs = model.stairs.length > 0 ? `, ${model.stairs.length} ${model.stairs.length === 1 ? "stair" : "stairs"}` : "";
+  const counts = `${model.walls.length} walls, ${model.openings.length} doors and windows, ${model.items.length} pieces of furniture${stairs}`;
+  return `${of}: ${counts}${rooms ? `. Rooms: ${rooms}` : ""}`;
 }
 
 const floorFill = (r: Room, ref: (name: string) => string): string | undefined =>
@@ -996,6 +1136,11 @@ function entityCorners(id: string, model: PlanModel, wallById: Map<string, Wall>
     const k = catalog.get(item.kind);
     return k ? footprintCorners(item.x, item.y, k.w, k.d, item.rotation) : null;
   }
+  const stair = model.stairs.find((s) => s.id === id);
+  if (stair) {
+    const g = stairGeometryIn(model, stair);
+    return g ? g.footprint.flatMap(rectCorners) : null;
+  }
   const opening = model.openings.find((o) => o.id === id);
   const host = opening ? wallById.get(opening.wallId) : undefined;
   return opening && host ? openingCorners(host, opening) : null;
@@ -1024,7 +1169,8 @@ function PendingMark({
   S: number;
   hatch: string;
 }) {
-  if (target.type === "plan") return null;
+  // a level is outlined whole (PlanPendingMark), a stair hatched with the stair itself
+  if (target.type === "plan" || target.type === "level" || target.type === "stair") return null;
   if (target.type === "room") {
     const r = model.rooms.find((i) => i.id === target.id);
     return r ? <rect className="pl-pending-outline" fill="none" x={r.x * S} y={r.y * S} width={r.w * S} height={r.h * S} /> : null;
@@ -1040,4 +1186,33 @@ function PlanPendingMark({ model, S }: { model: PlanModel; S: number }) {
   if (pts.length === 0) return null;
   const box = pixelBox(pts, S, MARK.cloudPad * 2);
   return <rect className="pl-pending-outline pl-pending-outline--plan" x={box.x} y={box.y} width={box.w} height={box.h} rx={MARK.pillRadius} />;
+}
+
+// ---------------------------------------------------------------------------
+// Levels and stairs
+// ---------------------------------------------------------------------------
+
+/** The level below the one shown, faintly: its walls' outlines and its rooms', to line up with. */
+function GhostLevel({ model, S }: { model: PlanModel; S: number }) {
+  return (
+    <g className="pl-ghost-level" aria-hidden="true">
+      {model.rooms.map((r) => (
+        <rect key={r.id} className="pl-ghost-room" x={r.x * S} y={r.y * S} width={r.w * S} height={r.h * S} />
+      ))}
+      {model.walls.map((w) => (
+        <polygon key={w.id} className="pl-ghost-wall" points={polygonPoints(wallCorners(w), S)} />
+      ))}
+    </g>
+  );
+}
+
+/** A stair's footprint outlined (selected, hovered) or hatched (a pending removal). */
+function StairOutline({ geometry, S, className, fill }: { geometry: StairGeometry; S: number; className: string; fill?: string }) {
+  return (
+    <g className={className} fill={fill}>
+      {geometry.footprint.map((r, i) => (
+        <polygon key={i} className={fill ? "pl-pending-outline" : undefined} points={polygonPoints(rectCorners(r), S)} />
+      ))}
+    </g>
+  );
 }

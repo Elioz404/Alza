@@ -15,7 +15,10 @@ const PUBLIC_NAMES = [
   "get_model", "get_issues", "get_item_catalog", "get_editor_state", "measure", "get_underlay",
   "calibrate_underlay", "add_wall", "edit_wall", "remove_wall", "add_door", "set_door_swing",
   "add_window", "move_opening", "remove_opening", "add_room", "update_room", "remove_room",
-  "place_item", "define_item_kind", "move_item", "remove_item", "set_plan_name", "clear_model",
+  "place_item", "define_item_kind", "move_item", "remove_item",
+  "list_levels", "add_level", "update_level", "remove_level", "set_active_level",
+  "add_stair", "update_stair", "remove_stair",
+  "set_plan_name", "clear_model",
   "build_3d", "set_camera", "set_3d_style", "set_doors", "get_supplier_catalog", "place_supplier_product",
   "leave_note", "get_notes",
 ];

@@ -8,7 +8,7 @@ import { z } from "zod";
 import { actions, store, type ActionResult } from "../src/model/store";
 import { executeWrapped, type ToolDef } from "../src/mcp/registry";
 import { TOOLS } from "../src/mcp/tools";
-import { seedLoft } from "../src/model/seed";
+import { seedTownhouse } from "../src/model/seed";
 import { flush, resetStore } from "./support/store";
 
 const tool = (name: string): ToolDef => {
@@ -167,25 +167,29 @@ describe("every destructive tool is gated", () => {
   const destructive = TOOLS.filter((t) => t.annotations?.destructiveHint).map((t) => t.name);
 
   it("covers the tools that delete things", () => {
-    expect(destructive.sort()).toEqual(["clear_model", "remove_item", "remove_opening", "remove_room", "remove_wall"]);
+    expect(destructive.sort()).toEqual(["clear_model", "remove_item", "remove_level", "remove_opening", "remove_room", "remove_stair", "remove_wall"]);
   });
 
-  // each aimed at a real entity of the demo loft, so it is the gate that stops it, not
-  // validation or resolution
+  // each aimed at a real entity of the two-storey townhouse, so it is the gate that stops it,
+  // not validation or resolution
   const TARGET: Record<string, Record<string, unknown>> = {
     clear_model: {},
-    remove_wall: { id: "wall_n" },
-    remove_opening: { id: "door_main" },
-    remove_room: { id: "room_bed" },
-    remove_item: { id: "item_sofa" },
+    remove_wall: { id: "g_wall_n" },
+    remove_opening: { id: "g_door_main" },
+    remove_room: { id: "f_room_bed" },
+    remove_item: { id: "g_item_sofa" },
+    remove_level: { id: "First floor" },
+    remove_stair: { id: "stair_main" },
   };
 
   it.each(destructive)("%s parks instead of running", async (name) => {
-    actions.loadModel(seedLoft());
+    actions.loadModel(seedTownhouse());
+    const before = store.getState().model;
     const call = executeWrapped(tool(name), input(TARGET[name]));
     await flush();
     expect(pending()).toHaveLength(1);
     actions.resolveApproval(pending()[0].id, false);
     expect((await call).ok).toBe(false);
+    expect(store.getState().model).toBe(before);
   });
 });

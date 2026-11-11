@@ -10,10 +10,11 @@
 
 import type { PlanModel, TargetType } from "../../model/types";
 import { catalogOf, kindName } from "../../model/catalog";
-import { openingName, wallName, type EntityRef as NamedEntityRef } from "../inspector/entities";
+import { openingName, stairName, wallName, type EntityRef as NamedEntityRef } from "../inspector/entities";
+import { stairGeometryIn } from "../../model/levels";
 
-/** Something on the plan a line can point at. */
-export type EntityRef = Pick<NamedEntityRef, "type" | "id">;
+/** Something on the plan a line can point at: an entity, or one of its levels. */
+export type EntityRef = Pick<NamedEntityRef, "id"> & { type: NamedEntityRef["type"] | "level" };
 
 export type Segment =
   | { kind: "text"; text: string }
@@ -29,6 +30,8 @@ export const TYPE_WORD: Record<TargetType, string> = {
   window: "window",
   room: "room",
   item: "item",
+  stair: "stair",
+  level: "level",
   plan: "plan",
 };
 
@@ -56,6 +59,12 @@ export function entityName(model: PlanModel, ref: EntityRef): string | null {
       const def = catalogOf(model).get(it.kind);
       return def ? kindName(def) : it.kind;
     }
+    case "stair": {
+      const st = model.stairs.find((x) => x.id === ref.id);
+      return st ? stairName(model, st) : null;
+    }
+    case "level":
+      return model.levels.find((x) => x.id === ref.id)?.name ?? null;
   }
 }
 
@@ -69,6 +78,8 @@ function indexOf(model: PlanModel): Map<string, EntityRef> {
   for (const o of model.openings) map.set(o.id, { type: o.kind, id: o.id });
   for (const r of model.rooms) map.set(r.id, { type: "room", id: r.id });
   for (const it of model.items) map.set(it.id, { type: "item", id: it.id });
+  for (const st of model.stairs) map.set(st.id, { type: "stair", id: st.id });
+  for (const l of model.levels) map.set(l.id, { type: "level", id: l.id });
   indexes.set(model, map);
   return map;
 }
@@ -79,7 +90,7 @@ function indexOf(model: PlanModel): Map<string, EntityRef> {
  * identifier in snake_case (wall_e, item_mwa30iob_b, extend_selected_wall).
  */
 const TOKEN =
-  /\b(?:Room|room) "([^"]+)"|\b(Wall|wall|Door|door|Window|window|Item|item|Room|room) ([\w:.-]*\w)|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g;
+  /\b(?:Room|room) "([^"]+)"|\b(Wall|wall|Door|door|Window|window|Item|item|Room|room|Stair|stair|Level|level) ([\w:.-]*\w)|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g;
 
 const SNAKE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
 
@@ -155,6 +166,13 @@ export function centreOf(model: PlanModel, ref: EntityRef): PlanPoint | null {
       const it = model.items.find((x) => x.id === ref.id);
       return it ? { x: it.x, y: it.y } : null;
     }
+    case "stair": {
+      const st = model.stairs.find((x) => x.id === ref.id);
+      const g = st ? stairGeometryIn(model, st) : null;
+      return g ? { x: (g.box.minX + g.box.maxX) / 2, y: (g.box.minY + g.box.maxY) / 2 } : null;
+    }
+    case "level":
+      return null;
   }
 }
 

@@ -87,7 +87,7 @@ describe("WalkKeys", () => {
 });
 
 describe("blockersFor", () => {
-  const wall = (id: string, ay: number) => ({ id, ax: 0, ay, bx: 4, by: ay, thickness: 0.15, height: 2.7 });
+  const wall = (id: string, ay: number) => ({ id, levelId: "level_ground", ax: 0, ay, bx: 4, by: ay, thickness: 0.15, height: 2.7 });
   const opening = (id: string, wallId: string, kind: Opening["kind"]): Opening => ({ id, kind, wallId, t: 0.5, width: 0.9, sill: kind === "door" ? 0 : 0.9, height: 2 });
   const plan: PlanModel = {
     ...emptyModel(),

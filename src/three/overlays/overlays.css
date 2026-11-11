@@ -40,8 +40,12 @@
   .scene-toolbar { padding: var(--spacing-0-5); }
 
   /* ---------------------------------------------------------------- hint bar */
+  /* one line while it fits; a longer hint (the level's name, a placing hint) wraps onto a
+     second line instead of running out of the canvas under the side panel */
   .scene-hint {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     align-items: center;
     gap: var(--spacing-1) var(--spacing-4);
     min-height: calc(var(--size-control) + var(--spacing-1));
@@ -52,6 +56,7 @@
     white-space: nowrap;
   }
   .scene-hint__tool { color: var(--color-text-primary); font-weight: var(--font-weight-semibold); }
+  .scene-hint__level { color: var(--color-text-primary); font-family: var(--font-family-drawing); }
   .scene-hint__item { display: inline-flex; align-items: center; gap: var(--spacing-1); }
   .scene-hint__sep {
     flex: none;
@@ -63,7 +68,7 @@
   .scene-hint--placing .scene-hint__tool { color: var(--color-text-accent); }
 
   @media (max-width: 64rem) {
-    .scene-hint { flex-wrap: wrap; justify-content: center; white-space: normal; text-align: center; }
+    .scene-hint { white-space: normal; text-align: center; }
   }
   @media (max-width: 40rem) {
     .scene-overlays__toolbar { top: var(--spacing-3); left: var(--spacing-3); }

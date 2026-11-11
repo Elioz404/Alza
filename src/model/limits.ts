@@ -96,6 +96,16 @@ export const DEFAULT_FLOOR: FloorFinish = "oak";
 
 /** Item rotation in degrees; one full turn either way. */
 export const ROTATION = range(-360, 360, "°");
+/** One full turn, and a quarter of one (the step of a Turn button and of a stair's aim), degrees. */
+export const FULL_TURN = ROTATION.max;
+export const QUARTER_TURN = FULL_TURN / 4;
+/** A heading turned a quarter, kept inside ROTATION: past one full turn, the same heading a turn back. */
+export const quarterTurned = (rotation: number): number => {
+  const next = rotation + QUARTER_TURN;
+  return next > ROTATION.max ? next - FULL_TURN : next;
+};
+/** A heading as the one equal to it in [0, FULL_TURN). */
+export const headingOf = (deg: number): number => ((deg % FULL_TURN) + FULL_TURN) % FULL_TURN;
 /** Footprint width/depth and height of a piece of furniture (a rug is 2 cm tall). */
 export const FURNITURE_DIM = range(0.01, 10);
 /** Offset of a custom part inside its piece's own frame. */
@@ -137,6 +147,120 @@ export const ITEM_CATEGORIES = ["living", "bedroom", "kitchen", "bath", "office"
 export type ItemCategory = (typeof ITEM_CATEGORIES)[number];
 /** Fallback colour for a custom kind defined without one. */
 export const DEFAULT_ITEM_COLOR = "#9a9186";
+
+// ---------------------------------------------------------------------------- kinds of things
+
+/** What a hole in a wall is. */
+export const OPENING_KINDS = ["door", "window"] as const;
+export type OpeningKind = (typeof OPENING_KINDS)[number];
+
+/**
+ * Where a kind of furniture comes from. "builtin" kinds ship with the app and have hand-modelled
+ * 3D builders; "custom" kinds were defined by an agent with define_item_kind; "supplier" kinds
+ * were adopted from the partner origin, so their text is third-party content.
+ */
+export const KIND_SOURCES = ["builtin", "custom", "supplier"] as const;
+export type KindSource = (typeof KIND_SOURCES)[number];
+
+// ---------------------------------------------------------------------------- levels
+
+/**
+ * The version of the plan's data format. A plan without a version (or with an older one) is
+ * migrated on load by model/planFormat.ts; a plan from a newer format is refused.
+ *   1 — one storey: walls, openings, rooms and items, no levels
+ *   2 — levels (storeys) and stairs; every wall, room and item names its level
+ */
+export const PLAN_FORMAT_VERSION = 2;
+
+/** The id of the level a fresh plan (and a migrated single-storey one) stands on. */
+export const GROUND_LEVEL_ID = "level_ground";
+
+/**
+ * Floor-to-floor height of a level: from its floor to the floor of the level above, the slab
+ * included. The minimum leaves a room of habitable height under the slab.
+ */
+export const LEVEL_HEIGHT = range(2.2, 10);
+/** Thickness of the floor slab between two levels; the 3D view builds the upper floors with it. */
+export const SLAB_THICKNESS = 0.2;
+/**
+ * How far a wall's top may sit from the underside of the slab over its level and still meet it.
+ * Past it, a wall under a level stops short of the slab (an open band shows in 3D) or runs up
+ * through it, and the checker reports it; a level's height change carries the walls that met
+ * its slab along within it.
+ */
+export const WALL_SLAB_TOLERANCE = 0.01;
+/**
+ * What a change of a level's height does to its walls that met the slab over it: they follow it
+ * to the new underside (the default, one undo step with the height), or keep their height.
+ */
+export const LEVEL_WALLS = ["follow", "keep"] as const;
+/**
+ * A new level's floor-to-floor height: a default wall (2.7 m) standing under a slab (0.2 m).
+ * Written out rather than summed, so it is the round number a person types and reads.
+ */
+export const LEVEL_DEFAULTS = Object.freeze({ height: 2.9 });
+/** Most levels a plan holds. */
+export const MAX_LEVELS = 12;
+/**
+ * What a level is called when it is added without a name, by its position from the ground up.
+ * There is one name per level the plan may hold.
+ */
+export const LEVEL_NAMES: readonly string[] = Object.freeze([
+  "Ground floor",
+  "First floor",
+  "Second floor",
+  "Third floor",
+  "Fourth floor",
+  "Fifth floor",
+  "Sixth floor",
+  "Seventh floor",
+  "Eighth floor",
+  "Ninth floor",
+  "Tenth floor",
+  "Eleventh floor",
+]);
+
+// ---------------------------------------------------------------------------- stairs
+
+/** A straight flight, or two flights at right angles with a square landing between them. */
+export const STAIR_SHAPES = ["straight", "l"] as const;
+export type StairShape = (typeof STAIR_SHAPES)[number];
+/** Which way an L-shaped stair's second flight turns, as seen by someone climbing it. */
+export const STAIR_TURNS = ["left", "right"] as const;
+export type StairTurn = (typeof STAIR_TURNS)[number];
+
+/**
+ * The rules a stair is drawn and judged by. A stair climbs one level's floor-to-floor height;
+ * by default its risers are the fewest that keep each one under `riser.max`, and its going
+ * (tread depth) is the one the step rule asks for (2R + G = stepRule.target), held to `tread`.
+ * Either may be set on the stair instead, and the checker then judges it against these ranges.
+ */
+export const STAIR = Object.freeze({
+  /** clear width of a flight */
+  width: range(0.6, 3),
+  defaultWidth: 0.9,
+  /** height of one riser */
+  riser: range(0.15, 0.19),
+  /** going: horizontal depth of one tread */
+  tread: range(0.25, 0.34),
+  /**
+   * What a stair's going may be set to. Wider than `tread` on purpose: a stair traced from a
+   * drawing is recorded as drawn, and the checker says when it falls outside `tread`.
+   */
+  treadSet: range(0.1, 0.6),
+  /** the comfort rule, 2 × riser + going (Blondel): its target and the band it may stray within */
+  stepRule: Object.freeze({ target: 0.63, min: 0.6, max: 0.65 }),
+  /** how many risers a stair may be set to have */
+  risers: range(2, 60, ""),
+  /** clear height a person needs above every tread, up to whatever is overhead */
+  headroom: 2.0,
+  /** the floor that must stay clear in front of the bottom riser and past the top one */
+  exitDepth: 0.8,
+});
+/** Most stairs a plan holds. */
+export const MAX_STAIRS = 40;
+/** A stair's default shape when it is added without one. */
+export const STAIR_DEFAULTS = Object.freeze({ shape: "straight" as StairShape, turn: "left" as StairTurn });
 
 // ---------------------------------------------------------------------------- underlay
 

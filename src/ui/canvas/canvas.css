@@ -20,7 +20,8 @@
   .editor-svg[data-tool="room"],
   .editor-svg[data-tool="place"],
   .editor-svg[data-tool="door"],
-  .editor-svg[data-tool="window"] { cursor: crosshair; }
+  .editor-svg[data-tool="window"],
+  .editor-svg[data-tool="stair"] { cursor: crosshair; }
   .editor-svg[data-tool="select"] .pl-room,
   .editor-svg[data-tool="select"] .pl-item { cursor: move; }
   .editor-svg[data-tool="select"] .pl-wall-hit { cursor: pointer; }
@@ -148,6 +149,20 @@
   .pl-cursor-arms { stroke: var(--plan-preview); stroke-width: var(--pen-fine); fill: none; }
   .pl-cursor-ring { fill: var(--plan-preview); }
   .pl-cursor-end { fill: none; stroke: var(--plan-preview); stroke-width: var(--pen-firm); }
+
+  /* the level below the one shown: a ghost to line up with, never in the way of a click */
+  .pl-ghost-level { pointer-events: none; }
+  .pl-ghost-wall { fill: none; stroke: var(--plan-ghost); stroke-width: var(--pen-fine); stroke-dasharray: var(--dash-level-below); stroke-linejoin: miter; }
+  .pl-ghost-room { fill: none; stroke: var(--plan-ghost); stroke-width: var(--pen-hair); stroke-dasharray: var(--dash-ghost); }
+
+  /* stairs: the symbol's pens are in stairs.css, which arrives with the symbol (StairDrawing.tsx);
+     until then a stair is its footprint's outline. A stairwell and the stair tool's aim never
+     take a click. */
+  .editor-svg[data-tool="select"] .pl-stair-hit { cursor: move; }
+  .pl-stair--well,
+  .pl-ghost-stair { pointer-events: none; }
+  .pl-stair-pending polygon { fill: var(--plan-stair); stroke: var(--plan-line); stroke-width: var(--pen-medium); }
+  .pl-stair-pending.pl-stair--well polygon { fill: var(--plan-paper); stroke: var(--plan-ink); stroke-width: var(--pen-firm); }
 
   /* the agent's recent changes: revision cloud and numbered delta */
   .pl-revisions { pointer-events: none; }

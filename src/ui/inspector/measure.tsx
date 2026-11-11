@@ -7,6 +7,9 @@
 import { useId } from "react";
 import { NumberField } from "../primitives/NumberField";
 
+/** A rotation field's step: rotations are typed to the degree. */
+export const ROTATION_STEP = 1;
+
 /** A number in metres (or another unit) that commits on Enter or when the field is left. */
 export function MeasureField({
   label,

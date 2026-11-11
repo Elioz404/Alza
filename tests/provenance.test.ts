@@ -27,7 +27,7 @@ describe("changedEntities", () => {
       ...before,
       walls: before.walls.slice(1),
       items: before.items.map((i, n) => (n === 0 ? { ...i, x: i.x + 1 } : i)),
-      rooms: [...before.rooms, { id: "room_new", x: 0, y: 0, w: 1, h: 1, label: "Nook", floor: "oak" as const }],
+      rooms: [...before.rooms, { id: "room_new", levelId: "level_ground", x: 0, y: 0, w: 1, h: 1, label: "Nook", floor: "oak" as const }],
     };
     const change = changedEntities(before, after);
     expect(change.touched).toEqual(["room_new", before.items[0].id]);

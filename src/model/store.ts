@@ -17,12 +17,14 @@ import type {
   ApprovalTarget,
   Item,
   KindDef,
+  Level,
   Note,
   Opening,
   OpeningKind,
   PendingApproval,
   PlanModel,
   Room,
+  Stair,
   Underlay,
   Wall,
 } from "./types";
@@ -39,7 +41,9 @@ import {
   supplierKind,
   type SupplierProductData,
 } from "./catalog";
-import { lookupItem, lookupOpening, lookupRoom, lookupWall, type Lookup } from "./resolve";
+import { lookupItem, lookupLevel, lookupOpening, lookupRoom, lookupStair, lookupWall, type Lookup } from "./resolve";
+import { elevationOf, freeLevelName, levelContents, levelIdOf, levelInfo, levelNameTaken, meetsSlab, slabUnderside, levelRemovalError, rerouteText, stairGeometryIn, stairsRerouted } from "./levels";
+import { migratePlan, type PlanInput } from "./planFormat";
 import { clip, describeIssues, partList, type PartInput } from "./schemas";
 import {
   CALIBRATION_METERS,
@@ -52,14 +56,20 @@ import {
   DOOR_SWING_DEFAULTS,
   FLOOR_FINISHES,
   FURNITURE_DIM,
+  GROUND_LEVEL_ID,
   HEX_COLOR,
   HINGES,
   IMAGE_FRACTION,
   ITEM_CATEGORIES,
+  LEVEL_DEFAULTS,
+  LEVEL_HEIGHT,
+  LEVEL_WALLS,
   MAX_CUSTOM_KINDS,
+  MAX_LEVELS,
   MAX_NOTES,
   MAX_PARTS,
   MAX_PENDING_APPROVALS,
+  MAX_STAIRS,
   NOTE_AUTHORS,
   NOTE_EXCERPT_CHARS,
   OPACITY,
@@ -70,6 +80,10 @@ import {
   ROOM_SIZE,
   ROTATION,
   SCENE_STYLE_DEFAULTS,
+  STAIR,
+  STAIR_DEFAULTS,
+  STAIR_SHAPES,
+  STAIR_TURNS,
   SUPPLIER,
   SWING_SIDES,
   TEXT,
@@ -88,6 +102,8 @@ import {
   type ItemCategory,
   type Range,
   type SceneStyle,
+  type StairShape,
+  type StairTurn,
   type SwingSide,
 } from "./limits";
 
@@ -119,6 +135,13 @@ export interface EditorState {
   selectedWallId: string | null;
   selectedItemId: string | null;
   selectedRoomId: string | null;
+  selectedStairId: string | null;
+  /**
+   * The level the human is working on: what the plan shows and where a new wall, room, piece or
+   * stair goes when none is named. A view setting, never in the undo history; read it through
+   * activeLevelId(), which falls back to the ground level when the plan no longer has this one.
+   */
+  activeLevelId: string;
   drawMode: "select" | "wall" | "room" | "place";
   placingKind: string | null;
   pendingWallStart: { x: number; y: number } | null;
@@ -157,6 +180,8 @@ const initialEditor: EditorState = {
   selectedWallId: null,
   selectedItemId: null,
   selectedRoomId: null,
+  selectedStairId: null,
+  activeLevelId: GROUND_LEVEL_ID,
   drawMode: "select",
   placingKind: null,
   pendingWallStart: null,
@@ -319,8 +344,9 @@ function underlayError(u: Underlay): string | null {
 /** Patchable fields, listed once: a patch is built from these keys and nothing else. */
 const WALL_PATCH_KEYS = ["ax", "ay", "bx", "by", "thickness", "height"] as const;
 const ROOM_PATCH_KEYS = ["x", "y", "w", "h", "label", "floor"] as const;
-export type WallPatch = Partial<Pick<Wall, (typeof WALL_PATCH_KEYS)[number]>>;
-export type RoomPatch = Partial<Pick<Room, (typeof ROOM_PATCH_KEYS)[number]>>;
+/** `levelId` (an id or a level's name) moves the entity to that level, keeping where it is on the plan. */
+export type WallPatch = Partial<Pick<Wall, (typeof WALL_PATCH_KEYS)[number]>> & { levelId?: string };
+export type RoomPatch = Partial<Pick<Room, (typeof ROOM_PATCH_KEYS)[number]>> & { levelId?: string };
 
 /** A piece of furniture as define_item_kind describes it, before it is checked and frozen. */
 export interface ItemKindSpec {
@@ -335,12 +361,107 @@ export interface ItemKindSpec {
 }
 
 /** A failed lookup as an action result: nothing changed, and the candidates travel with it. */
+/** Why a level name is refused: another level already answers to it. */
+const nameTaken = (name: string): string =>
+  `Another level is already called ${JSON.stringify(clip(name, NOTE_EXCERPT_CHARS))}; give this one a name of its own, so a level's name always names one level.`;
+
 const lookupFailed = (found: Extract<Lookup<unknown>, { ok: false }>): ActionResult =>
   fail(found.summary, found.candidates.length > 0 ? { candidates: found.candidates } : {});
 
 /** The plan's kinds with `def` in place of the kind of the same id, or appended when it is new. */
 const withKind = (kinds: readonly KindDef[], def: KindDef): KindDef[] =>
   kinds.some((k) => k.kind === def.kind) ? kinds.map((k) => (k.kind === def.kind ? def : k)) : [...kinds, def];
+
+// ---------------------------------------------------------------------------
+// Levels: which one is being worked on
+// ---------------------------------------------------------------------------
+
+/**
+ * The id of the level being worked on. The editor's choice while the plan has that level;
+ * otherwise (it was removed, or another plan was loaded) the ground level.
+ */
+export function activeLevelId(state: Pick<AppState, "model" | "editor">): string {
+  const { levels } = state.model;
+  return levels.some((l) => l.id === state.editor.activeLevelId) ? state.editor.activeLevelId : levels[0].id;
+}
+
+/** The level being worked on. */
+export const activeLevel = (state: Pick<AppState, "model" | "editor">): Level => {
+  const id = activeLevelId(state);
+  return state.model.levels.find((l) => l.id === id) ?? state.model.levels[0];
+};
+
+/** The level `ref` names (id or name), or the level being worked on when it names none. */
+const levelFor = (ref: string | undefined): Lookup<Level> => {
+  const state = store.getState();
+  if (ref === undefined) return { ok: true, entity: activeLevel(state) };
+  const bad = textError("level", ref, TEXT.ref);
+  if (bad) return { ok: false, summary: bad, candidates: [] };
+  return lookupLevel(state.model, ref);
+};
+
+/** " on First floor" for a plan with several levels; nothing for a one-storey plan. */
+const onLevel = (model: PlanModel, levelId: string): string => {
+  if (model.levels.length < 2) return "";
+  const level = model.levels.find((l) => l.id === levelId);
+  return level ? ` on ${level.name}` : "";
+};
+
+/** A whole number inside a range, or the reason it is not one. */
+const countError = (name: string, value: unknown, r: Range): string | null =>
+  value === undefined ? null : Number.isInteger(value) ? rangeError(name, value, r) : `${name} must be a whole number.`;
+
+/** Patchable fields of a level and a stair, listed once. */
+const STAIR_PATCH_KEYS = ["x", "y", "rotation", "width", "shape", "turn", "split", "risers", "tread"] as const;
+export type StairPatch = Partial<Pick<Stair, (typeof STAIR_PATCH_KEYS)[number]>> & { levelId?: string };
+export interface LevelPatch {
+  name?: string;
+  height?: number;
+  /** move the level to this place in the stack (0 = the ground level) */
+  order?: number;
+  /** with a new height: whether its walls that met the slab over it follow it ("follow", the default) */
+  walls?: (typeof LEVEL_WALLS)[number];
+}
+
+/** A stair as add_stair describes it, before it is checked. */
+export interface StairSpec {
+  /** the level it stands on (id or name); the level being worked on by default */
+  level?: string;
+  x: number;
+  y: number;
+  rotation?: number;
+  width?: number;
+  shape?: StairShape;
+  turn?: StairTurn;
+  split?: number;
+  risers?: number;
+  tread?: number;
+}
+
+/** What is wrong with a stair's own numbers, or null. Checked the same way for an add and an update. */
+function stairError(s: Partial<Stair>): string | null {
+  return firstError(
+    numbersError(["x", s.x, COORD], ["y", s.y, COORD], ["rotation", s.rotation, ROTATION], ["width", s.width, STAIR.width], ["tread", s.tread, STAIR.treadSet]),
+    countError("risers", s.risers, STAIR.risers),
+    countError("split", s.split, STAIR.risers),
+    oneOfError("shape", s.shape, STAIR_SHAPES),
+    oneOfError("turn", s.turn, STAIR_TURNS),
+  );
+}
+
+/** The numbers a stair works out to, as a result reports them. */
+function stairFacts(model: PlanModel, stair: Stair): Record<string, unknown> {
+  const g = stairGeometryIn(model, stair);
+  if (!g) return {};
+  const round = (v: number) => Number(v.toFixed(3));
+  return {
+    risers: g.risers,
+    riserHeight: round(g.riserHeight),
+    going: round(g.going),
+    stepRule: round(g.stepRule),
+    run: round(g.flights.reduce((sum, f) => sum + 2 * f.hd, 0)),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Plan actions — what dispatch() runs, for either actor
@@ -355,21 +476,25 @@ const planActions = {
     by: number,
     thickness: number = WALL_DEFAULTS.thickness,
     height: number = WALL_DEFAULTS.height,
+    level?: string,
   ): ActionResult {
     const bad = numbersError(
       ["ax", ax, COORD], ["ay", ay, COORD], ["bx", bx, COORD], ["by", by, COORD],
       ["thickness", thickness, WALL_THICKNESS], ["height", height, WALL_HEIGHT],
     );
     if (bad) return fail(bad);
+    const on = levelFor(level);
+    if (!on.ok) return lookupFailed(on);
     ax = snap(ax); ay = snap(ay); bx = snap(bx); by = snap(by);
     const len = segLen(ax, ay, bx, by);
     if (len < WALL_MIN_LENGTH) {
       return fail(`Wall too short (${(len * 100).toFixed(0)} cm, min ${(WALL_MIN_LENGTH * 100).toFixed(0)} cm).`);
     }
-    const wall: Wall = { id: uid("wall"), ax, ay, bx, by, thickness, height };
+    const wall: Wall = { id: uid("wall"), levelId: on.entity.id, ax, ay, bx, by, thickness, height };
     pushUndo();
-    setModel({ ...store.getState().model, walls: [...store.getState().model.walls, wall] });
-    return ok(`Wall added (${len.toFixed(2)} m).`, { id: wall.id, length: len });
+    const model = store.getState().model;
+    setModel({ ...model, walls: [...model.walls, wall] });
+    return ok(`Wall added (${len.toFixed(2)} m)${onLevel(model, wall.levelId)}.`, { id: wall.id, length: len, levelId: wall.levelId });
   },
 
   editWall(id: string, patch: WallPatch): ActionResult {
@@ -384,8 +509,10 @@ const planActions = {
     const found = lookupWall(store.getState().model, id);
     if (!found.ok) return lookupFailed(found);
     const wall = found.entity;
+    const on = patch.levelId === undefined ? null : levelFor(patch.levelId);
+    if (on && !on.ok) return lookupFailed(on);
     // Built key by key from the allowed list, so nothing else in `patch` (an id, say) can land.
-    const next: Wall = { ...wall };
+    const next: Wall = { ...wall, levelId: on ? on.entity.id : wall.levelId };
     for (const k of WALL_PATCH_KEYS) {
       const v = patch[k];
       if (v === undefined) continue;
@@ -399,7 +526,8 @@ const planActions = {
       ...store.getState().model,
       walls: store.getState().model.walls.map((w) => (w.id === wall.id ? next : w)),
     });
-    return ok(`Wall ${wall.id} updated.`, { id: wall.id });
+    const moved = next.levelId !== wall.levelId ? ` and moved, with its openings, to ${on?.ok ? on.entity.name : next.levelId}` : "";
+    return ok(`Wall ${wall.id} updated${moved}.`, { id: wall.id, levelId: next.levelId });
   },
 
   removeWall(id: string): ActionResult {
@@ -512,7 +640,7 @@ const planActions = {
   },
 
   // ---- rooms ----
-  addRoom(x: number, y: number, w: number, h: number, label: string, floor: string = DEFAULT_FLOOR): ActionResult {
+  addRoom(x: number, y: number, w: number, h: number, label: string, floor: string = DEFAULT_FLOOR, level?: string): ActionResult {
     // The size is judged as given, the same rule the add_room schema and updateRoom apply;
     // snapping cannot then take it under the minimum (see ROOM_SIZE).
     const bad = firstError(
@@ -521,11 +649,14 @@ const planActions = {
     );
     if (bad) return fail(bad);
     if (!isOneOf(floor, FLOOR_FINISHES)) return fail(notOneOf("floor", FLOOR_FINISHES));
+    const on = levelFor(level);
+    if (!on.ok) return lookupFailed(on);
     x = snap(x); y = snap(y); w = snap(w); h = snap(h);
-    const room: Room = { id: uid("room"), x, y, w, h, label, floor };
+    const room: Room = { id: uid("room"), levelId: on.entity.id, x, y, w, h, label, floor };
     pushUndo();
-    setModel({ ...store.getState().model, rooms: [...store.getState().model.rooms, room] });
-    return ok(`Room "${label}" added (${w.toFixed(2)} × ${h.toFixed(2)} m).`, { id: room.id });
+    const model = store.getState().model;
+    setModel({ ...model, rooms: [...model.rooms, room] });
+    return ok(`Room "${label}" added (${w.toFixed(2)} × ${h.toFixed(2)} m)${onLevel(model, room.levelId)}.`, { id: room.id, levelId: room.levelId });
   },
 
   updateRoom(idOrLabel: string, patch: RoomPatch): ActionResult {
@@ -539,9 +670,11 @@ const planActions = {
     const found = lookupRoom(store.getState().model, idOrLabel);
     if (!found.ok) return lookupFailed(found);
     const room = found.entity;
+    const on = patch.levelId === undefined ? null : levelFor(patch.levelId);
+    if (on && !on.ok) return lookupFailed(on);
     // Only the patchable fields are copied. Spreading the whole patch let the lookup key in
     // it replace the room's real id: update_room { id: "bedroom" } renamed the id to "bedroom".
-    const next: Room = { ...room };
+    const next: Room = { ...room, levelId: on ? on.entity.id : room.levelId };
     for (const k of ROOM_PATCH_KEYS) {
       const v = patch[k];
       if (v !== undefined) (next as Record<(typeof ROOM_PATCH_KEYS)[number], unknown>)[k] = v;
@@ -551,7 +684,8 @@ const planActions = {
       ...store.getState().model,
       rooms: store.getState().model.rooms.map((r) => (r.id === room.id ? next : r)),
     });
-    return ok(`Room "${next.label}" updated.`, { id: room.id });
+    const moved = next.levelId !== room.levelId && on?.ok ? ` and moved to ${on.entity.name}` : "";
+    return ok(`Room "${next.label}" updated${moved}.`, { id: room.id, levelId: next.levelId });
   },
 
   removeRoom(idOrLabel: string): ActionResult {
@@ -566,7 +700,7 @@ const planActions = {
   },
 
   // ---- furniture ----
-  placeItem(kind: string, x: number, y: number, rotation = 0): ActionResult {
+  placeItem(kind: string, x: number, y: number, rotation = 0, level?: string): ActionResult {
     const bad = firstError(
       textError("kind", kind, TEXT.kind),
       numbersError(["x", x, COORD], ["y", y, COORD], ["rotation", rotation, ROTATION]),
@@ -575,13 +709,15 @@ const planActions = {
     const model = store.getState().model;
     const cat = catalogOf(model).get(kind);
     if (!cat) return fail(`Unknown furniture kind ${JSON.stringify(kind)}. Use get_item_catalog.`);
-    const item: Item = { id: uid("item"), kind: cat.kind, x: snap(x), y: snap(y), rotation };
+    const on = levelFor(level);
+    if (!on.ok) return lookupFailed(on);
+    const item: Item = { id: uid("item"), levelId: on.entity.id, kind: cat.kind, x: snap(x), y: snap(y), rotation };
     pushUndo();
     setModel({ ...model, items: [...model.items, item] });
-    return ok(`${kindName(cat)} placed at (${item.x.toFixed(2)}, ${item.y.toFixed(2)}).`, { id: item.id });
+    return ok(`${kindName(cat)} placed at (${item.x.toFixed(2)}, ${item.y.toFixed(2)})${onLevel(model, item.levelId)}.`, { id: item.id, levelId: item.levelId });
   },
 
-  moveItem(idOrKind: string, x?: number, y?: number, rotation?: number): ActionResult {
+  moveItem(idOrKind: string, x?: number, y?: number, rotation?: number, level?: string): ActionResult {
     const bad = firstError(
       textError("id", idOrKind, TEXT.ref),
       numbersError(["x", x, COORD], ["y", y, COORD], ["rotation", rotation, ROTATION]),
@@ -590,8 +726,11 @@ const planActions = {
     const found = lookupItem(store.getState().model, idOrKind);
     if (!found.ok) return lookupFailed(found);
     const item = found.entity;
+    const on = level === undefined ? null : levelFor(level);
+    if (on && !on.ok) return lookupFailed(on);
     const next: Item = {
       ...item,
+      levelId: on ? on.entity.id : item.levelId,
       x: x !== undefined ? snap(x) : item.x,
       y: y !== undefined ? snap(y) : item.y,
       rotation: rotation !== undefined ? rotation : item.rotation,
@@ -601,7 +740,8 @@ const planActions = {
       ...store.getState().model,
       items: store.getState().model.items.map((i) => (i.id === item.id ? next : i)),
     });
-    return ok(`Item ${item.id} moved to (${next.x.toFixed(2)}, ${next.y.toFixed(2)}).`, { id: item.id });
+    const moved = next.levelId !== item.levelId && on?.ok ? ` on ${on.entity.name}` : "";
+    return ok(`Item ${item.id} moved to (${next.x.toFixed(2)}, ${next.y.toFixed(2)})${moved}.`, { id: item.id, levelId: next.levelId });
   },
 
   removeItem(idOrKind: string): ActionResult {
@@ -638,11 +778,187 @@ const planActions = {
    * Its underlay is kept only if it is one setUnderlay would accept: a plan saved in another
    * session names an image by an id this page does not hold, and the bytes do not travel with it.
    */
-  loadModel(model: PlanModel): ActionResult {
+  loadModel(input: PlanInput): ActionResult {
+    // a plan in an older format is brought up to date first (model/planFormat.ts)
+    const migrated = migratePlan(input);
+    if (!migrated.ok) return fail(migrated.summary);
+    const model = migrated.model;
     const underlay = model.underlay && !underlayError(model.underlay) ? model.underlay : null;
     pushUndo();
     setModel({ ...model, kinds: model.kinds.map(freezeKind), underlay });
-    return ok(`Plan "${model.name}" loaded: ${model.walls.length} walls, ${model.rooms.length} rooms, ${model.items.length} items.`);
+    const storeys = model.levels.length > 1 ? `${model.levels.length} levels, ` : "";
+    const stairs = model.stairs.length > 0 ? `, ${model.stairs.length} stairs` : "";
+    return ok(
+      `Plan "${model.name}" loaded: ${storeys}${model.walls.length} walls, ${model.rooms.length} rooms, ${model.items.length} items${stairs}.`,
+      migrated.from < model.version ? { migratedFrom: migrated.from } : {},
+    );
+  },
+
+  // ---- levels ----
+  /** Add a level on top of the others. Unnamed, it is called by its place ("First floor"). */
+  addLevel(name?: string, height: number = LEVEL_DEFAULTS.height): ActionResult {
+    const bad = firstError(name === undefined ? null : textError("name", name, TEXT.label), numbersError(["height", height, LEVEL_HEIGHT]));
+    if (bad) return fail(bad);
+    const model = store.getState().model;
+    if (model.levels.length >= MAX_LEVELS) return fail(`The plan already has ${MAX_LEVELS} levels, the most it holds.`);
+    if (name !== undefined && levelNameTaken(model, name)) return fail(nameTaken(name));
+    const level: Level = { id: uid("level"), name: name ?? freeLevelName(model), height };
+    pushUndo();
+    setModel({ ...model, levels: [...model.levels, level] });
+    const below = model.levels[model.levels.length - 1];
+    return ok(`Level "${level.name}" added on top, ${(levelInfo(model, below.id)?.top ?? 0).toFixed(2)} m up.`, { id: level.id });
+  },
+
+  /** Rename a level, change its floor-to-floor height, or move it to another place in the stack. */
+  updateLevel(ref: string, patch: LevelPatch): ActionResult {
+    const bad = firstError(
+      textError("id", ref, TEXT.ref),
+      patch.name === undefined ? null : textError("name", patch.name, TEXT.label),
+      numbersError(["height", patch.height, LEVEL_HEIGHT]),
+      countError("order", patch.order, { min: 0, max: MAX_LEVELS - 1, unit: "" }),
+      patch.walls === undefined || isOneOf(patch.walls, LEVEL_WALLS) ? null : notOneOf("walls", LEVEL_WALLS),
+    );
+    if (bad) return fail(bad);
+    const model = store.getState().model;
+    const found = lookupLevel(model, ref);
+    if (!found.ok) return lookupFailed(found);
+    const level = found.entity;
+    if (patch.name !== undefined && levelNameTaken(model, patch.name, level.id)) return fail(nameTaken(patch.name));
+    const next: Level = { ...level, name: patch.name ?? level.name, height: patch.height ?? level.height };
+    const others = model.levels.filter((l) => l.id !== level.id);
+    const at = patch.order === undefined ? model.levels.indexOf(level) : Math.min(patch.order, others.length);
+    // the walls that met the slab over the level meet it at its new height too: same undo step
+    const follow = (patch.walls ?? LEVEL_WALLS[0]) === "follow" && next.height !== level.height;
+    const underside = slabUnderside(next.height);
+    let carried = 0;
+    const walls = follow
+      ? model.walls.map((w) => {
+          if (w.levelId !== level.id || !meetsSlab(w.height, level.height)) return w;
+          carried++;
+          return { ...w, height: underside };
+        })
+      : model.walls;
+    pushUndo();
+    setModel({ ...model, levels: [...others.slice(0, at), next, ...others.slice(at)], walls });
+    const raised = carried > 0 ? ` ${carried} walls that met the slab over it now stand ${underside.toFixed(2)} m tall, meeting it again.` : "";
+    return ok(
+      `Level "${next.name}" updated: ${next.height.toFixed(2)} m floor to floor, ${at === 0 ? "the ground level" : `level ${at} from the ground`}.${raised}`,
+      { id: level.id, wallsCarried: carried },
+    );
+  },
+
+  /**
+   * Remove a level and everything on it: its walls (their openings with them), rooms, items and
+   * the stairs that start on it. A stair from the level below then climbs to whatever is next
+   * above it, or to nothing, which the checker reports. The last level cannot go.
+   */
+  removeLevel(ref: string): ActionResult {
+    const bad = textError("id", ref, TEXT.ref);
+    if (bad) return fail(bad);
+    const model = store.getState().model;
+    const found = lookupLevel(model, ref);
+    if (!found.ok) return lookupFailed(found);
+    const level = found.entity;
+    const refused = levelRemovalError(model, level);
+    if (refused) return fail(refused);
+    const gone = levelContents(model, level.id);
+    const rerouted = stairsRerouted(model, level.id);
+    const wallIds = new Set(gone.walls.map((w) => w.id));
+    pushUndo();
+    setModel({
+      ...model,
+      levels: model.levels.filter((l) => l.id !== level.id),
+      walls: model.walls.filter((w) => w.levelId !== level.id),
+      openings: model.openings.filter((o) => !wallIds.has(o.wallId)),
+      rooms: model.rooms.filter((r) => r.levelId !== level.id),
+      items: model.items.filter((i) => i.levelId !== level.id),
+      stairs: model.stairs.filter((s) => s.levelId !== level.id),
+    });
+    return ok(
+      `Level "${level.name}" removed with ${gone.walls.length} walls, ${gone.openings.length} openings, ${gone.rooms.length} rooms, ${gone.items.length} items and ${gone.stairs.length} stairs.` +
+        rerouted.map((r) => ` ${rerouteText(model, r, "done")}.`).join(""),
+      { id: level.id },
+    );
+  },
+
+  // ---- stairs ----
+  addStair(spec: StairSpec): ActionResult {
+    const shape = spec.shape ?? STAIR_DEFAULTS.shape;
+    const draft: Partial<Stair> = {
+      x: spec.x,
+      y: spec.y,
+      rotation: spec.rotation ?? 0,
+      width: spec.width ?? STAIR.defaultWidth,
+      shape,
+      turn: spec.turn,
+      split: spec.split,
+      risers: spec.risers,
+      tread: spec.tread,
+    };
+    // where it starts is required: rangeError refuses a missing number, where stairError skips it
+    const bad = firstError(rangeError("x", spec.x, COORD), rangeError("y", spec.y, COORD), stairError(draft));
+    if (bad) return fail(bad);
+    const on = levelFor(spec.level);
+    if (!on.ok) return lookupFailed(on);
+    const model = store.getState().model;
+    if (model.stairs.length >= MAX_STAIRS) return fail(`The plan already has ${MAX_STAIRS} stairs, the most it holds.`);
+    const stair: Stair = {
+      id: uid("stair"),
+      levelId: on.entity.id,
+      shape,
+      x: snap(spec.x),
+      y: snap(spec.y),
+      rotation: draft.rotation ?? 0,
+      width: draft.width ?? STAIR.defaultWidth,
+      ...(shape === "l" ? { turn: spec.turn ?? STAIR_DEFAULTS.turn } : {}),
+      ...(shape === "l" && spec.split !== undefined ? { split: spec.split } : {}),
+      ...(spec.risers !== undefined ? { risers: spec.risers } : {}),
+      ...(spec.tread !== undefined ? { tread: spec.tread } : {}),
+    };
+    pushUndo();
+    setModel({ ...model, stairs: [...model.stairs, stair] });
+    const facts = stairFacts(model, stair);
+    return ok(
+      `Stair ${stair.id} added${onLevel(model, stair.levelId)} at (${stair.x.toFixed(2)}, ${stair.y.toFixed(2)}): ${String(facts.risers)} risers of ${Number(facts.riserHeight).toFixed(3)} m, going ${Number(facts.going).toFixed(3)} m.`,
+      { id: stair.id, levelId: stair.levelId, ...facts },
+    );
+  },
+
+  /** Move, turn, resize or reshape a stair, or move it to another level. */
+  updateStair(ref: string, patch: StairPatch): ActionResult {
+    const bad = firstError(textError("id", ref, TEXT.ref), stairError(patch));
+    if (bad) return fail(bad);
+    const model = store.getState().model;
+    const found = lookupStair(model, ref);
+    if (!found.ok) return lookupFailed(found);
+    const stair = found.entity;
+    const on = patch.levelId === undefined ? null : levelFor(patch.levelId);
+    if (on && !on.ok) return lookupFailed(on);
+    const next: Stair = { ...stair, levelId: on ? on.entity.id : stair.levelId };
+    for (const k of STAIR_PATCH_KEYS) {
+      const v = patch[k];
+      if (v !== undefined) (next as Record<(typeof STAIR_PATCH_KEYS)[number], unknown>)[k] = k === "x" || k === "y" ? snap(v as number) : v;
+    }
+    // a straight stair has no turn or split to keep
+    if (next.shape === "straight") {
+      delete next.turn;
+      delete next.split;
+    } else next.turn ??= STAIR_DEFAULTS.turn;
+    pushUndo();
+    setModel({ ...model, stairs: model.stairs.map((s) => (s.id === stair.id ? next : s)) });
+    return ok(`Stair ${stair.id} updated${onLevel(model, next.levelId)}.`, { id: stair.id, levelId: next.levelId, ...stairFacts(model, next) });
+  },
+
+  removeStair(ref: string): ActionResult {
+    const bad = textError("id", ref, TEXT.ref);
+    if (bad) return fail(bad);
+    const model = store.getState().model;
+    const found = lookupStair(model, ref);
+    if (!found.ok) return lookupFailed(found);
+    const stair = found.entity;
+    pushUndo();
+    setModel({ ...model, stairs: model.stairs.filter((s) => s.id !== stair.id) });
+    return ok(`Stair ${stair.id} removed.`, { id: stair.id });
   },
 
   // ---- collaboration ----
@@ -813,6 +1129,9 @@ export interface ApprovalRequest {
   effects: string[];
 }
 
+/** The editor with nothing selected. */
+const NOTHING_SELECTED = { selectedWallId: null, selectedItemId: null, selectedRoomId: null, selectedStairId: null } as const;
+
 export const pageActions = {
   build3d(): ActionResult {
     const m = store.getState().model;
@@ -843,13 +1162,45 @@ export const pageActions = {
   },
 
   selectWall(id: string | null) {
-    store.setState((s) => ({ editor: { ...s.editor, selectedWallId: id, selectedItemId: null, selectedRoomId: null } }));
+    store.setState((s) => ({ editor: { ...s.editor, ...NOTHING_SELECTED, selectedWallId: id } }));
   },
   selectItem(id: string | null) {
-    store.setState((s) => ({ editor: { ...s.editor, selectedItemId: id, selectedWallId: null, selectedRoomId: null } }));
+    store.setState((s) => ({ editor: { ...s.editor, ...NOTHING_SELECTED, selectedItemId: id } }));
   },
   selectRoom(id: string | null) {
-    store.setState((s) => ({ editor: { ...s.editor, selectedRoomId: id, selectedWallId: null, selectedItemId: null } }));
+    store.setState((s) => ({ editor: { ...s.editor, ...NOTHING_SELECTED, selectedRoomId: id } }));
+  },
+  selectStair(id: string | null) {
+    store.setState((s) => ({ editor: { ...s.editor, ...NOTHING_SELECTED, selectedStairId: id } }));
+  },
+
+  /**
+   * Work on another level: the plan shows it, and what is drawn next goes on it. A view setting
+   * — no undo step. What was selected stays selected only if it is on that level.
+   */
+  setActiveLevel(ref: string): ActionResult {
+    const bad = textError("level", ref, TEXT.ref);
+    if (bad) return fail(bad);
+    const state = store.getState();
+    const found = lookupLevel(state.model, ref);
+    if (!found.ok) return lookupFailed(found);
+    const level = found.entity;
+    const e = state.editor;
+    const selected = e.selectedWallId ?? e.selectedRoomId ?? e.selectedItemId ?? e.selectedStairId;
+    const keep = selected !== null && levelIdOf(state.model, selected) === level.id;
+    store.setState((s) => ({
+      editor: { ...s.editor, ...(keep ? {} : NOTHING_SELECTED), activeLevelId: level.id, pendingWallStart: null },
+    }));
+    return ok(`Working on "${level.name}" (floor at ${elevationOf(state.model, level.id).toFixed(2)} m).`, { id: level.id });
+  },
+
+  /** The level below or above the one being worked on (PageDown / PageUp); refused at either end. */
+  stepActiveLevel(by: -1 | 1): ActionResult {
+    const state = store.getState();
+    const at = state.model.levels.findIndex((l) => l.id === activeLevelId(state));
+    const next = state.model.levels[at + by];
+    if (!next) return fail(by > 0 ? "This is the top level." : "This is the ground level.");
+    return pageActions.setActiveLevel(next.id);
   },
   setDrawMode(mode: EditorState["drawMode"], placingKind: string | null = null) {
     store.setState((s) => ({ editor: { ...s.editor, drawMode: mode, placingKind, pendingWallStart: null } }));

@@ -1,0 +1,11 @@
+/*
+ * The plan's levels in Properties (LevelsSection.tsx), which brings this sheet with it after the
+ * first paint. Tokens only (src/ui/theme/tokens.ts).
+ */
+@layer alza-surfaces {
+  .insp-levels { display: flex; flex-direction: column; gap: var(--spacing-3); margin: 0; padding: 0 0 var(--spacing-2); list-style: none; }
+  .insp-level { padding: var(--spacing-2) var(--spacing-3); border-radius: var(--radius-element); box-shadow: var(--shadow-low); }
+  .insp-level__body { display: flex; flex-direction: column; gap: var(--spacing-2); }
+  .insp-level[aria-current="true"] { box-shadow: inset 0 0 0 var(--size-hairline) var(--color-accent); }
+  .insp-level__at { font-family: var(--font-family-drawing); font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+}

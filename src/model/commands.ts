@@ -18,18 +18,23 @@ import {
   withUndo,
   type ActionResult,
   type ItemKindSpec,
+  type LevelPatch,
   type RoomPatch,
+  type StairPatch,
+  type StairSpec,
   type UndoStep,
   type WallPatch,
 } from "./store";
+import type { PlanInput } from "./planFormat";
 import type { SupplierProductData } from "./catalog";
-import type { ActivitySource, PlanModel, Underlay } from "./types";
+import type { ActivitySource, Underlay } from "./types";
 import type { Actor, Hinge, SwingSide } from "./limits";
 
 export type { Actor };
 
 export type Command =
-  | { type: "add_wall"; ax: number; ay: number; bx: number; by: number; thickness?: number; height?: number }
+  // `level` (a level's id or name) says which level a new thing goes on: the active one by default
+  | { type: "add_wall"; ax: number; ay: number; bx: number; by: number; thickness?: number; height?: number; level?: string }
   | { type: "edit_wall"; id: string; patch: WallPatch }
   | { type: "remove_wall"; id: string }
   | { type: "add_door"; wallId: string; t: number; width?: number; height?: number; hinge?: Hinge; side?: SwingSide }
@@ -37,18 +42,25 @@ export type Command =
   | { type: "set_door_swing"; id: string; hinge?: Hinge; side?: SwingSide }
   | { type: "move_opening"; id: string; t: number }
   | { type: "remove_opening"; id: string }
-  | { type: "add_room"; x: number; y: number; w: number; h: number; label: string; floor?: string }
+  | { type: "add_room"; x: number; y: number; w: number; h: number; label: string; floor?: string; level?: string }
   | { type: "update_room"; id: string; patch: RoomPatch }
   | { type: "remove_room"; id: string }
-  | { type: "place_item"; kind: string; x: number; y: number; rotation?: number }
-  | { type: "move_item"; id: string; x?: number; y?: number; rotation?: number }
+  | { type: "place_item"; kind: string; x: number; y: number; rotation?: number; level?: string }
+  | { type: "move_item"; id: string; x?: number; y?: number; rotation?: number; level?: string }
   | { type: "remove_item"; id: string }
   | { type: "define_item_kind"; spec: ItemKindSpec }
   | { type: "import_supplier_product"; product: SupplierProductData }
-  | { type: "place_supplier_product"; product: SupplierProductData; x: number; y: number; rotation?: number }
+  | { type: "place_supplier_product"; product: SupplierProductData; x: number; y: number; rotation?: number; level?: string }
+  | { type: "add_level"; name?: string; height?: number }
+  | { type: "update_level"; id: string; patch: LevelPatch }
+  | { type: "remove_level"; id: string }
+  | { type: "add_stair"; spec: StairSpec }
+  | { type: "move_stair"; id: string; x?: number; y?: number; rotation?: number }
+  | { type: "update_stair"; id: string; patch: StairPatch }
+  | { type: "remove_stair"; id: string }
   | { type: "set_plan_name"; name: string }
   | { type: "clear_model" }
-  | { type: "load_model"; model: PlanModel }
+  | { type: "load_model"; model: PlanInput }
   | { type: "set_underlay"; underlay: Underlay | null }
   | { type: "calibrate_underlay"; u1: number; v1: number; u2: number; v2: number; meters: number; opacity?: number }
   | { type: "leave_note"; text: string }
@@ -74,7 +86,7 @@ export interface DispatchContext {
 type Handlers = { [K in CommandType]: (command: Extract<Command, { type: K }>, ctx: DispatchContext) => ActionResult };
 
 const HANDLERS: Handlers = {
-  add_wall: (c) => actions.addWall(c.ax, c.ay, c.bx, c.by, c.thickness, c.height),
+  add_wall: (c) => actions.addWall(c.ax, c.ay, c.bx, c.by, c.thickness, c.height, c.level),
   edit_wall: (c) => actions.editWall(c.id, c.patch),
   remove_wall: (c) => actions.removeWall(c.id),
   add_door: (c) => actions.addOpening("door", c.wallId, c.t, c.width, undefined, c.height, { hinge: c.hinge, side: c.side }),
@@ -82,11 +94,11 @@ const HANDLERS: Handlers = {
   set_door_swing: (c) => actions.setDoorSwing(c.id, c.hinge, c.side),
   move_opening: (c) => actions.moveOpening(c.id, c.t),
   remove_opening: (c) => actions.removeOpening(c.id),
-  add_room: (c) => actions.addRoom(c.x, c.y, c.w, c.h, c.label, c.floor),
+  add_room: (c) => actions.addRoom(c.x, c.y, c.w, c.h, c.label, c.floor, c.level),
   update_room: (c) => actions.updateRoom(c.id, c.patch),
   remove_room: (c) => actions.removeRoom(c.id),
-  place_item: (c) => actions.placeItem(c.kind, c.x, c.y, c.rotation),
-  move_item: (c) => actions.moveItem(c.id, c.x, c.y, c.rotation),
+  place_item: (c) => actions.placeItem(c.kind, c.x, c.y, c.rotation, c.level),
+  move_item: (c) => actions.moveItem(c.id, c.x, c.y, c.rotation, c.level),
   remove_item: (c) => actions.removeItem(c.id),
   define_item_kind: (c) => actions.defineItemKind(c.spec),
   import_supplier_product: (c) => actions.importSupplierProduct(c.product),
@@ -95,7 +107,7 @@ const HANDLERS: Handlers = {
     const { model, undoStack } = store.getState();
     const imported = actions.importSupplierProduct(c.product);
     if (!imported.ok) return imported;
-    const placed = actions.placeItem(String(imported.kind), c.x, c.y, c.rotation);
+    const placed = actions.placeItem(String(imported.kind), c.x, c.y, c.rotation, c.level);
     if (!placed.ok) {
       // the kind is only worth keeping with the piece it came in for: a refused placement
       // leaves the plan, and its undo history, exactly as they were
@@ -104,6 +116,14 @@ const HANDLERS: Handlers = {
     }
     return { ...placed, kind: imported.kind };
   },
+  add_level: (c) => actions.addLevel(c.name, c.height),
+  update_level: (c) => actions.updateLevel(c.id, c.patch),
+  remove_level: (c) => actions.removeLevel(c.id),
+  add_stair: (c) => actions.addStair(c.spec),
+  // the drag's command: where the stair is and which way it climbs, nothing else
+  move_stair: (c) => actions.updateStair(c.id, { x: c.x, y: c.y, rotation: c.rotation }),
+  update_stair: (c) => actions.updateStair(c.id, c.patch),
+  remove_stair: (c) => actions.removeStair(c.id),
   set_plan_name: (c) => actions.setPlanName(c.name),
   clear_model: () => actions.clearModel(),
   load_model: (c) => actions.loadModel(c.model),

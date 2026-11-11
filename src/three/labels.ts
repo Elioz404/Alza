@@ -14,12 +14,17 @@
  * count), when its room shows smaller on screen than the name needs, when the name would not fit
  * inside the view, when the room is behind the camera, or far away.
  *
+ * On a plan of several storeys a name stands on its room's floor, at its level's elevation, and
+ * the slabs of the storeys shown hide it as the walls do; the rooms of a level the view hides
+ * have no name over the model.
+ *
  * The layer is aria-hidden: the names are the plan's, which keyboard and screen-reader users
  * already have, with the rooms themselves, in the 2D view and the panels.
  */
 
 import * as THREE from "three";
 import type { PendingApproval, PlanModel, Room } from "../model/types";
+import { elevationOf } from "../model/levels";
 import { FLOOR_TOP, LABELS } from "./config";
 
 /** Where one name goes on screen, in CSS pixels from the canvas's top left, and whether it shows. */
@@ -121,6 +126,8 @@ interface LabelNode {
   width: number;
   height: number;
   room: Room;
+  /** how far up the room's floor stands: its level's elevation */
+  floor: number;
   x: number;
   y: number;
   visible: boolean;
@@ -135,11 +142,15 @@ export class RoomLabels {
     layer.setAttribute("aria-hidden", "true");
   }
 
-  /** The plan's rooms, which of them is selected, and the requests pending on them. */
-  setRooms(model: PlanModel, selectedRoomId: string | null, approvals: readonly PendingApproval[]): void {
+  /**
+   * The plan's rooms, which of them is selected, and the requests pending on them; only the rooms
+   * on the levels in `shown` get a name (none: every level).
+   */
+  setRooms(model: PlanModel, selectedRoomId: string | null, approvals: readonly PendingApproval[], shown: ReadonlySet<string> | null = null): void {
     const removing = new Set(approvals.flatMap((a) => a.targets.filter((t) => t.type === "room").map((t) => t.id)));
     const seen = new Set<string>();
     for (const room of model.rooms) {
+      if (shown !== null && !shown.has(room.levelId)) continue;
       seen.add(room.id);
       let node = this.nodes.get(room.id);
       if (!node) {
@@ -153,10 +164,11 @@ export class RoomLabels {
         el.append(name, flag);
         el.hidden = true;
         this.layer.appendChild(el);
-        node = { el, name, flag, text: "", width: 0, height: 0, room, x: NaN, y: NaN, visible: false };
+        node = { el, name, flag, text: "", width: 0, height: 0, room, floor: 0, x: NaN, y: NaN, visible: false };
         this.nodes.set(room.id, node);
       }
       node.room = room;
+      node.floor = elevationOf(model, room.levelId);
       if (node.text !== room.label) {
         node.text = room.label;
         node.name.textContent = room.label;
@@ -178,9 +190,18 @@ export class RoomLabels {
   /**
    * Place every name for the frame just drawn: on its room's floor, or — where the walls hide
    * the floor, as from a low orbit over a dollhouse — over the room at the top of its walls
-   * (`top`: the ceiling, or the cut while there is one).
+   * (`top`: the ceiling, or the cut while there is one; a height, or one for each room). A room
+   * under another storey shown has no such fallback (`top` gives null): the floor over it hides
+   * it, so its name shows only where its own floor can be seen.
    */
-  place(camera: THREE.Camera, width: number, height: number, occluders: readonly THREE.Object3D[], cut: number | null, top: number): void {
+  place(
+    camera: THREE.Camera,
+    width: number,
+    height: number,
+    occluders: readonly THREE.Object3D[],
+    cut: number | null,
+    top: number | ((room: Room) => number | null),
+  ): void {
     for (const node of this.nodes.values()) {
       if ((node.width === 0 || node.height === 0) && node.el.isConnected) {
         // measured while shown at its last spot (a hidden element has no size)
@@ -190,9 +211,10 @@ export class RoomLabels {
         node.height = node.el.offsetHeight;
         node.el.hidden = wasHidden;
       }
-      const floor = FLOOR_TOP + LABELS.lift;
+      const floor = node.floor + FLOOR_TOP + LABELS.lift;
+      const lid = typeof top === "number" ? (cut ?? top) : top(node.room);
       let spot = placeLabel(node.room, camera, width, height, node.width, this.raycaster, occluders, cut, floor, node.height);
-      if (!spot.visible) spot = placeLabel(node.room, camera, width, height, node.width, this.raycaster, occluders, cut, (cut ?? top) + LABELS.lift, node.height);
+      if (!spot.visible && lid !== null) spot = placeLabel(node.room, camera, width, height, node.width, this.raycaster, occluders, cut, lid + LABELS.lift, node.height);
       if (spot.visible !== node.visible) {
         node.visible = spot.visible;
         node.el.hidden = !spot.visible;

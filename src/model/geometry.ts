@@ -219,3 +219,15 @@ export function boxOf(pts: readonly Pt[]): Box {
  */
 export const boxesApart = (a: Box, b: Box): boolean =>
   a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY;
+
+/** True when `p` lies inside the oriented rectangle (or on its edge). */
+export function pointInORect(p: Pt, r: ORect): boolean {
+  const c = Math.cos(r.rot);
+  const s = Math.sin(r.rot);
+  const dx = p.x - r.cx;
+  const dy = p.y - r.cy;
+  // the point in the rectangle's own frame: local x along (c, s), local y along (-s, c)
+  const lx = dx * c + dy * s;
+  const ly = -dx * s + dy * c;
+  return Math.abs(lx) <= r.hw + 1e-9 && Math.abs(ly) <= r.hd + 1e-9;
+}

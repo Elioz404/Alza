@@ -307,6 +307,12 @@ export const CAMERA_FRAMING = Object.freeze({
     offset: Object.freeze([0.9, 0.85, 1.1] as const),
     /** the orbit pivots around this height, about a table top, rather than the floor */
     targetHeight: 0.8,
+    /**
+     * With storeys shown under the top one, the pivot drops to the middle of the stack and the
+     * camera stands back by the plan's size combined with this much per metre of the stack's
+     * height (the distance is the hypotenuse of the two), so every shown storey stays in frame.
+     */
+    stackReach: 1.5,
     maxPolar: Math.PI / 2 - 0.02,
     minDistance: 1,
     maxDistance: 80,
@@ -331,6 +337,18 @@ export const WALK = Object.freeze({
   stepOver: 0.25,
   /** how far in front of the eye the orbit target hangs, so looking pivots in place */
   lookAhead: 2,
+  /**
+   * The highest step up or down the walker takes in one stride: over the tallest riser a stair
+   * may have (STAIR.riser.max in model/limits.ts), well under anything that is not a step — a
+   * stair's side, a stairwell's edge.
+   */
+  maxStep: 0.25,
+  /** how fast the eye follows a change of floor height, per second (exponential ease); instant under reduced motion */
+  climbRate: 12,
+  /** the eye has reached its height once this close to it, metres */
+  climbSettle: 0.002,
+  /** a tread is stood on this far past its edges, and a stairwell begins this far inside its own, metres: no gap between them */
+  seam: 1e-6,
 });
 
 export const DOORS = Object.freeze({
@@ -469,6 +487,58 @@ export const WALK_ENTRY = Object.freeze({
   /** a spot at least this far from the room's centre, where its pendant hangs, is preferred */
   pendantClear: 1.5,
 });
+
+/**
+ * A stair as the model builds it (stairs.ts), from the shape the plan works out
+ * (src/model/stairs.ts): a board for each tread, standing `nosing` proud of the riser under it,
+ * a thinner board for each riser, a closed stringer up each side of each flight, a handrail over
+ * each stringer on two posts, and a solid block under an L-shaped stair's landing. Its sizes are
+ * the model's; the stair's own numbers (risers, going, width) are the plan's.
+ *
+ * `triangles` is the budget a stair is held to: `fixed` for its stringers, rails, posts and
+ * landing, and `perRiser` for each riser and its tread, so even the tallest stair the plan
+ * allows (STAIR.risers.max) stays a few thousand triangles.
+ */
+export const STAIR_MODEL = Object.freeze({
+  treadThickness: 0.04,
+  nosing: 0.02,
+  riserThickness: 0.02,
+  stringerThickness: 0.04,
+  /** how deep a stringer is, measured plumb, and how far it stands over the treads' nosings */
+  stringerDepth: 0.3,
+  stringerAbove: 0.05,
+  /** the handrail's top over the line of the nosings, and its square section */
+  handrailHeight: 0.9,
+  handrailSize: 0.045,
+  postSize: 0.05,
+  /**
+   * The balustrade round the stairwell on the floor above (every edge of it but the one the
+   * stair arrives across): its rail stands handrailHeight over that floor, on posts at its
+   * corners and at most this far apart, at the rim of the opening, on the floor's side.
+   */
+  guardPostSpacing: 1.2,
+  /**
+   * A stair's triangle budget: a part for each riser (its tread, riser board, and the guard's
+   * posts its run adds) and a fixed part (stringers, rails, landing, and the guard's rails and
+   * corner posts round the stairwell: up to seven stretches of rim on an L stair).
+   */
+  triangles: Object.freeze({ fixed: 400, perRiser: 32 }),
+});
+
+/**
+ * An upper level's floor slab (slabs.ts): SLAB_THICKNESS deep (model/limits.ts), under that
+ * level's rooms and walls, with each stairwell from the level below left open. `edgeTolerance`
+ * is how close (metres) two outlines must come to count as one edge, and `probe` how far either
+ * side of an edge the slab is looked for, to tell its rim from an edge inside it.
+ */
+export const SLAB = Object.freeze({ edgeTolerance: 1e-6, probe: 1e-4 });
+
+/**
+ * The storeys in the view (levelView.ts): which are shown, from the ground up to the one the
+ * View panel names ("active": the level being worked on, the default; "all": every level).
+ * The cutaway slices the topmost one shown; walking shows them all and slices none.
+ */
+export const LEVELS_VIEW = Object.freeze({ defaultShown: "active" as const });
 
 /** Height of the top of a room's floor slab: furniture stands on it and clicks land on it. */
 export const FLOOR_TOP = 0.04;

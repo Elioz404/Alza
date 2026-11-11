@@ -1,7 +1,7 @@
 /**
  * Properties with nothing selected: the plan itself. Its name (the field the plan menu's Rename
- * focuses), what it holds and the list of it (each thing selectable from the keyboard), the
- * blueprint to trace, the approval policy, the demo, and clearing it behind a confirmation.
+ * focuses), what it holds and the list of it (each thing selectable from the keyboard), its
+ * levels (fetched after the first paint: LevelsSection.tsx), the blueprint to trace, the approval policy, the demo, and clearing it behind a confirmation.
  */
 
 import { useRef, useState } from "react";
@@ -19,6 +19,10 @@ import { Button, Field, IconImage, IconPlan, IconTrash, Section, Switch } from "
 import { EntityHead, PlanTextField, Stats } from "./parts";
 import { PlanElements } from "./PlanElements";
 import { lazyLayer } from "../LazyLayer";
+import { deferred, regionPlaceholder } from "../deferred";
+
+/** The levels' names and heights: number fields, so fetched with the idle prefetch. */
+const LevelsSection = deferred("the plan's levels", () => import("./LevelsSection").then((m) => m.LevelsSection), regionPlaceholder);
 
 /** The Clear-plan confirmation, fetched the first time it opens. */
 const ClearPlanDialog = lazyLayer("the Clear-plan confirmation", () => import("./ClearPlanDialog").then((m) => m.ClearPlanDialog));
@@ -38,6 +42,8 @@ function PlanFigures() {
   const items = useAppStore((s) => s.model.items.length);
   const doors = useAppStore((s) => s.model.openings.filter((o) => o.kind === "door").length);
   const windows = useAppStore((s) => s.model.openings.filter((o) => o.kind === "window").length);
+  const levels = useAppStore((s) => s.model.levels.length);
+  const stairs = useAppStore((s) => s.model.stairs.length);
   const area = rooms.reduce((a, r) => a + roomArea(r), 0);
   return (
     <Stats
@@ -47,6 +53,12 @@ function PlanFigures() {
         { label: "Items", value: items },
         { label: "Doors", value: doors },
         { label: "Windows", value: windows },
+        ...(levels > 1 || stairs > 0
+          ? [
+              { label: "Levels", value: levels },
+              { label: "Stairs", value: stairs },
+            ]
+          : []),
         { label: "Floor area", value: area > 0 ? squareMetres(area) : "0 m²" },
       ]}
     />
@@ -229,6 +241,7 @@ export function PlanInspector() {
           <PlanFigures />
         </Section>
         <PlanElements />
+        <LevelsSection />
         <Blueprint />
         <ApprovalSwitch />
         <PlanActions />

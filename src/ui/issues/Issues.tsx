@@ -14,7 +14,7 @@ import { useAppStore } from "../useAppStore";
 import { useShell } from "../shell/ShellContext";
 import { useBreakpoint } from "../theme/media";
 import { Badge, EmptyState, IconCheck, IconChevronRight, IconError, IconIssues, IconWarning, Section } from "../primitives";
-import { capitalise, entityById, FOCUS_ENTITY_EVENT, selectEntity, type EntityRef } from "../inspector/entities";
+import { capitalise, entityById, FOCUS_ENTITY_EVENT, levelNameOf, selectEntity, type EntityRef } from "../inspector/entities";
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -25,6 +25,8 @@ export interface IssueView {
   sentence: string;
   /** the entities it is about that are on the plan, first one first */
   targets: EntityRef[];
+  /** the level it is on, for a plan with more than one (the level of the first thing it names) */
+  level: string | null;
 }
 
 /**
@@ -41,7 +43,7 @@ export function describeIssue(model: PlanModel, issue: Issue): IssueView {
     const ref = entityById(model, id);
     if (!ref) continue;
     targets.push(ref);
-    const named = new RegExp(`\\b(?:walls?|doors?|windows?|items?|rooms?)\\s+${escapeRegExp(id)}\\b`, "gi");
+    const named = new RegExp(`\\b(?:walls?|doors?|windows?|items?|rooms?|stairs?)\\s+${escapeRegExp(id)}\\b`, "gi");
     sentence = sentence.replace(named, ref.name).split(id).join(ref.name);
     if (ref.type === "item") {
       const item = model.items.find((i) => i.id === id);
@@ -49,7 +51,8 @@ export function describeIssue(model: PlanModel, issue: Issue): IssueView {
       if (def?.source === "supplier") sentence = sentence.split(def.kind).join(def.label);
     }
   }
-  return { severity: issue.severity, code: issue.code, sentence: capitalise(sentence), targets };
+  const on = issue.refs.map((id) => levelNameOf(model, id)).find((name) => name !== null) ?? null;
+  return { severity: issue.severity, code: issue.code, sentence: capitalise(sentence), targets, level: on };
 }
 
 const GROUPS: readonly { severity: IssueSeverity; title: string; word: string; icon: typeof IconError }[] = [
@@ -68,6 +71,7 @@ function IssueRow({ view, word, icon: Icon }: { view: IssueView; word: string; i
       <Icon size="sm" className={`issue__icon issue__icon--${view.severity}`} />
       <span className="issue__text">
         <span className="sr-only">{word}: </span>
+        {view.level ? <span className="issue__level">{view.level}</span> : null}
         {view.sentence}
       </span>
     </>
@@ -94,7 +98,7 @@ function IssueRow({ view, word, icon: Icon }: { view: IssueView; word: string; i
 
 export function Issues() {
   const model = useAppStore((s) => s.model);
-  const isEmpty = model.walls.length + model.rooms.length + model.items.length + model.openings.length === 0;
+  const isEmpty = model.walls.length + model.rooms.length + model.items.length + model.openings.length + model.stairs.length === 0;
 
   if (isEmpty) {
     return (

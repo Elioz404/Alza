@@ -20,6 +20,8 @@ const NOUN: Record<PendingApproval["targets"][number]["type"], string> = {
   window: "Window",
   room: "Room",
   item: "Item",
+  stair: "Stair",
+  level: "Level",
   plan: "Plan",
 };
 
@@ -27,7 +29,7 @@ const NOUN: Record<PendingApproval["targets"][number]["type"], string> = {
 export function doneText(a: PendingApproval): string {
   const t = a.targets[0];
   if (!t || t.type === "plan") return "Plan cleared";
-  const named = t.type === "room" || t.type === "item";
+  const named = t.type === "room" || t.type === "item" || t.type === "level";
   return `${NOUN[t.type]}${named ? ` “${t.label}”` : ""} removed`;
 }
 

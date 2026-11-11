@@ -17,7 +17,7 @@ describe("addWall", () => {
     const r = actions.addWall(0, 0, 4, 0);
     expect(r.ok).toBe(true);
     expect(r.length).toBeCloseTo(4);
-    expect(model().walls).toEqual([{ id: r.id, ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.15, height: 2.7 }]);
+    expect(model().walls).toEqual([{ id: r.id, levelId: "level_ground", ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.15, height: 2.7 }]);
   });
 
   it("keeps an explicit thickness and height", () => {

@@ -11,7 +11,7 @@
 import type { Opening, Wall } from "../model/types";
 import { openingSpan } from "../model/issues";
 import { segPoint, type Pt } from "../model/geometry";
-import { SNAP } from "../model/limits";
+import { QUARTER_TURN, SNAP, headingOf } from "../model/limits";
 import { FONT_SIZE } from "../ui/theme/tokens";
 
 /** CSS pixels in one rem: the tokens' type sizes are rem. */
@@ -79,6 +79,34 @@ export const MARK = Object.freeze({
   roomLabelPad: 12,
   /** furniture names are set from this zoom (px per metre) when they fit */
   itemLabelScale: 120,
+  /** a stair's walking line: the arrow head's length and half-width, the dot it starts from */
+  stairArrow: 9,
+  stairArrowHalf: 4,
+  stairDot: 2.5,
+  /** how far (px) the pointer must travel from where a stair starts before its direction follows it */
+  stairAim: 12,
+});
+
+/**
+ * How a stair is drawn on the plan, in metres and fractions of the stair (so the symbol scales
+ * with it). The plan is cut, as a floor plan is, at `cutHeight` above its floor: treads below
+ * the cut are drawn, the ones above it hidden (dashed), with a break line where the cut crosses
+ * the flight. On the level a stair arrives at, its stairwell is outlined and its treads show
+ * through the void beneath.
+ */
+export const STAIR_SYMBOL = Object.freeze({
+  /** the plan's cut, above the floor of the level shown, metres */
+  cutHeight: 1.2,
+  /** the break line's zigzag, as a fraction of the stair's width */
+  breakZig: 0.12,
+  /** the UP / DN lettering sits this many goings in from its end of the walking line, and this
+   *  fraction of the width to the side of it */
+  labelGoings: 1.5,
+  labelSide: 0.25,
+  /** on the level above, the guard round the stairwell is drawn this far inside its rim, metres */
+  guardInset: 0.05,
+  /** the climb direction snaps to this many degrees while the stair tool is aimed */
+  aimStep: QUARTER_TURN,
 });
 
 /**
@@ -188,3 +216,27 @@ export function scaleBarMetres(S: number, min = 96, max = 200): number {
   const NICE = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100];
   return NICE.find((m) => m * S >= min && m * S <= max) ?? NICE.find((m) => m * S >= min) ?? NICE[NICE.length - 1];
 }
+
+/** A climb direction (degrees, 0 = +y, 90 = +x, as a stair's rotation) from a drag, snapped to `step`. */
+export function aimRotation(from: Pt, to: Pt, step: number = STAIR_SYMBOL.aimStep): number {
+  const deg = (Math.atan2(to.x - from.x, to.y - from.y) * 180) / Math.PI;
+  const snapped = Math.round(deg / step) * step;
+  return headingOf(snapped);
+}
+
+/**
+ * The ways a stair can be aimed from the keyboard, a quarter turn apart from rotation 0 (down
+ * the sheet, +y): the arrow key that aims it that way, and the word the hint says it with.
+ */
+const CLIMB_WAYS = Object.freeze([
+  { key: "ArrowDown", word: "down" },
+  { key: "ArrowRight", word: "right" },
+  { key: "ArrowUp", word: "up" },
+  { key: "ArrowLeft", word: "left" },
+] as const);
+
+/** With the stair tool, an arrow key aims the next stair: the way it climbs, as a stair's rotation. */
+export const ARROW_CLIMB: Readonly<Record<string, number>> = Object.freeze(Object.fromEntries(CLIMB_WAYS.map((w, i) => [w.key, i * QUARTER_TURN])));
+
+/** Which way a stair at `rotation` climbs on the sheet, in a word: the nearest quarter turn's. */
+export const climbWord = (rotation: number): string => CLIMB_WAYS[Math.round(headingOf(rotation) / QUARTER_TURN) % CLIMB_WAYS.length].word;

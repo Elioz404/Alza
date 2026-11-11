@@ -22,6 +22,10 @@
  * would remove is seen from any camera. Nothing of a room's outline is projected through its
  * walls: from outside, that would land on the room next to it.
  *
+ * On a plan of several storeys every mark stands on its entity's level (at the level's
+ * elevation), a room's lid at its own ceiling or the cut, whichever is lower; what stands on a
+ * level the view hides is not marked, and a request to remove a level outlines everything on it.
+ *
  * The marks are their own group beside the plan's content: never raycast, never exported, never
  * casting a shadow. They are rebuilt only when what they mark changed (a signature of their
  * boxes), and their materials and hatch texture are static.
@@ -31,11 +35,13 @@ import * as THREE from "three";
 import { ScreenLineMaterial, screenLines } from "./screenLines";
 import type { ApprovalTarget, PlanModel } from "../model/types";
 import { catalogOf } from "../model/catalog";
+import { elevationOf, levelSlice, levelIdOf, stairGeometryIn } from "../model/levels";
 import { segLen } from "../model/geometry";
 import { openingSpan } from "../model/issues";
 import { keepStatic } from "./materials";
 import { riseOf } from "./furnitureStyle";
 import { FLOOR_TOP, MARKS } from "./config";
+import { ceilingOf } from "./build";
 import { SCENE_MARK } from "../ui/theme/sceneTokens";
 
 /** What a mark is drawn around: a box on the plan, turned `ry` radians, from `y0` up to `y1`. */
@@ -51,12 +57,55 @@ export interface MarkBox {
 
 /** The entity the store has selected, if any. */
 export interface Selected {
-  type: "wall" | "room" | "item";
+  type: "wall" | "room" | "item" | "stair";
   id: string;
 }
 
-/** The box around a wall, an opening, a room, a piece or the whole plan, as the model holds it now. */
+/** How far up the floor of level `levelId` stands (0 for a level the plan does not have). */
+
+/** A box lifted onto its level. */
+const lifted = (b: MarkBox, by: number): MarkBox => (by === 0 ? b : { ...b, y0: b.y0 + by, y1: b.y1 + by });
+
+/** The extent of walls, rooms and pieces on the plan, and the tallest wall: a "plan" or a "level" box. */
+function extentBox(model: PlanModel): MarkBox | null {
+  const xs = [...model.walls.flatMap((w) => [w.ax, w.bx]), ...model.rooms.flatMap((r) => [r.x, r.x + r.w]), ...model.items.map((i) => i.x)];
+  const zs = [...model.walls.flatMap((w) => [w.ay, w.by]), ...model.rooms.flatMap((r) => [r.y, r.y + r.h]), ...model.items.map((i) => i.y)];
+  if (xs.length === 0) return null;
+  const [x0, x1, z0, z1] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
+  const height = Math.max(FLOOR_TOP, ...model.walls.map((w) => w.height));
+  return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, w: x1 - x0, d: z1 - z0, y0: 0, y1: height, ry: 0 };
+}
+
+/**
+ * The level a mark stands on, by what it marks: an entity's own level; none for the plan (it
+ * spans them all).
+ */
+export function markLevel(type: ApprovalTarget["type"], id: string, model: PlanModel): string | undefined {
+  if (type === "plan") return undefined;
+  if (type === "level") return id;
+  return levelIdOf(model, id);
+}
+
+/**
+ * The height a room's marks are drawn again at: the top of its walls (its level's ceiling), or
+ * the cut where that is lower — absolute metres, as `cut` is.
+ */
+export function roomLid(model: PlanModel, levelId: string, cut: number | null): number {
+  const ceiling = elevationOf(model, levelId) + ceilingOf(levelSlice(model, levelId));
+  return cut === null ? ceiling : Math.min(cut, ceiling);
+}
+
+/**
+ * The box around a wall, an opening, a room, a piece, a stair, a level or the whole plan, as the
+ * model holds it now: on its level, in the scene's heights.
+ */
 export function markBox(type: ApprovalTarget["type"], id: string, model: PlanModel): MarkBox | null {
+  const b = flatBox(type, id, model);
+  return b && lifted(b, elevationOf(model, markLevel(type, id, model)));
+}
+
+/** The box as if its level stood on the ground. */
+function flatBox(type: ApprovalTarget["type"], id: string, model: PlanModel): MarkBox | null {
   switch (type) {
     case "wall": {
       const w = model.walls.find((x) => x.id === id);
@@ -101,13 +150,27 @@ export function markBox(type: ApprovalTarget["type"], id: string, model: PlanMod
       const top = FLOOR_TOP + def.h + riseOf(def);
       return { cx: it.x, cz: it.y, w: def.w, d: def.d, y0: FLOOR_TOP, y1: top, ry: (it.rotation * Math.PI) / 180 };
     }
+    case "stair": {
+      const s = model.stairs.find((x) => x.id === id);
+      const g = s && stairGeometryIn(model, s);
+      if (!g) return null;
+      // a straight flight is its own turned box; an L's two flights and landing, their bounds
+      if (g.footprint.length === 1) {
+        const r = g.footprint[0];
+        return { cx: r.cx, cz: r.cy, w: 2 * r.hw, d: 2 * r.hd, y0: FLOOR_TOP, y1: FLOOR_TOP + g.rise, ry: -r.rot };
+      }
+      const { minX, minY, maxX, maxY } = g.box;
+      return { cx: (minX + maxX) / 2, cz: (minY + maxY) / 2, w: maxX - minX, d: maxY - minY, y0: FLOOR_TOP, y1: FLOOR_TOP + g.rise, ry: 0 };
+    }
+    // a level: the extent of what stands on it, as the plan's is drawn
+    case "level":
+      return model.levels.some((l) => l.id === id) ? extentBox(levelSlice(model, id)) : null;
     case "plan": {
-      const xs = [...model.walls.flatMap((w) => [w.ax, w.bx]), ...model.rooms.flatMap((r) => [r.x, r.x + r.w]), ...model.items.map((i) => i.x)];
-      const zs = [...model.walls.flatMap((w) => [w.ay, w.by]), ...model.rooms.flatMap((r) => [r.y, r.y + r.h]), ...model.items.map((i) => i.y)];
-      if (xs.length === 0) return null;
-      const [x0, x1, z0, z1] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
-      const height = Math.max(FLOOR_TOP, ...model.walls.map((w) => w.height));
-      return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, w: x1 - x0, d: z1 - z0, y0: 0, y1: height, ry: 0 };
+      const b = extentBox(model);
+      if (!b) return null;
+      // every storey, up to the tallest wall on the top one that has walls
+      const top = Math.max(b.y1, ...model.walls.map((w) => elevationOf(model, w.levelId) + w.height));
+      return { ...b, y1: top };
     }
   }
 }
@@ -345,26 +408,39 @@ export class SceneMarks {
 
   /**
    * Show `selected` and the targets of the pending requests, as `model` holds them; a room's
-   * marks are drawn again at `lid` (the top of the walls, or the cut). Returns whether anything
-   * changed on screen.
+   * marks are drawn again at `lid` (the top of the walls, or the cut: a height, or one for each
+   * room's level). Only what stands on a level in `shown` is marked (none: every level).
+   * Returns whether anything changed on screen.
    */
-  update(model: PlanModel, selected: Selected | null, pending: readonly ApprovalTarget[], lid: number = FLOOR_TOP): boolean {
-    const sel = selected ? { type: selected.type, box: markBox(selected.type, selected.id, model) } : null;
+  update(
+    model: PlanModel,
+    selected: Selected | null,
+    pending: readonly ApprovalTarget[],
+    lid: number | ((levelId: string) => number) = FLOOR_TOP,
+    shown: ReadonlySet<string> | null = null,
+  ): boolean {
+    const visible = (type: ApprovalTarget["type"], id: string) => {
+      const level = markLevel(type, id, model);
+      return shown === null || level === undefined || shown.has(level);
+    };
+    const lidOfRoom = (id: string) => (typeof lid === "number" ? lid : lid(markLevel("room", id, model) ?? ""));
+    const sel = selected && visible(selected.type, selected.id) ? { type: selected.type, id: selected.id, box: markBox(selected.type, selected.id, model) } : null;
     const targets = pending.flatMap((t) => {
-      const b = markBox(t.type, t.id, model);
-      return b ? [{ type: t.type, box: b }] : [];
+      const b = visible(t.type, t.id) ? markBox(t.type, t.id, model) : null;
+      return b ? [{ type: t.type, id: t.id, box: b }] : [];
     });
-    const signature = JSON.stringify([sel, targets, lid]);
+    const lids = [...targets, ...(sel ? [sel] : [])].filter((t) => t.type === "room").map((t) => lidOfRoom(t.id));
+    const signature = JSON.stringify([sel, targets, lids]);
     if (signature === this.signature) return false;
     this.signature = signature;
     this.clear();
     const destructive = MARK_MATERIALS.destructive;
-    for (const { type, box } of targets) {
+    for (const { type, id, box } of targets) {
       const mark = new THREE.Group();
       mark.name = "mark:pending";
       if (type === "room") {
         // on the floor, where it is seen; over the room at its lid, over whatever stands in it
-        const top = lidOf(box, lid);
+        const top = lidOf(box, lidOfRoom(id));
         mark.add(
           notPickable(new THREE.Mesh(hatchGeometry(box, MARKS.outline / 2), hatch().seen), ORDER.hatch),
           outline(box, destructive, "depthNoHidden"),
@@ -374,7 +450,7 @@ export class SceneMarks {
         );
       } else {
         // a request to clear the plan is its extent outlined, as the plan draws it; the rest are hatched
-        if (type !== "plan") mark.add(notPickable(new THREE.Mesh(hatchGeometry(box, MARKS.outline / 2), hatch().seen), ORDER.hatch));
+        if (type !== "plan" && type !== "level") mark.add(notPickable(new THREE.Mesh(hatchGeometry(box, MARKS.outline / 2), hatch().seen), ORDER.hatch));
         mark.add(outline(box, destructive, "depth"));
       }
       this.root.add(place(mark, box));
@@ -383,7 +459,7 @@ export class SceneMarks {
       const selection = MARK_MATERIALS.selection;
       const mark = new THREE.Group();
       mark.name = "mark:selection";
-      if (sel.type === "room") mark.add(outline(sel.box, selection, "depthNoHidden"), outline(lidOf(sel.box, lid), selection, "over"));
+      if (sel.type === "room") mark.add(outline(sel.box, selection, "depthNoHidden"), outline(lidOf(sel.box, lidOfRoom(sel.id)), selection, "over"));
       else mark.add(outline(sel.box, selection, "depth"));
       this.root.add(place(mark, sel.box));
     }

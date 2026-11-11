@@ -125,7 +125,7 @@ describe("pattern scale", () => {
   });
 
   it("a floor's texture coordinates are plan metres, so its pattern is anchored where the plan's is", () => {
-    const room = { id: "r", x: 2.4, y: 0.64, w: 2.4, h: 1.28, label: "R", floor: "oak" as const };
+    const room = { id: "r", levelId: "level_ground", x: 2.4, y: 0.64, w: 2.4, h: 1.28, label: "R", floor: "oak" as const };
     const floor = buildFloor(room);
     const uv = floor.geometry.getAttribute("uv");
     const pos = floor.geometry.getAttribute("position");
@@ -143,7 +143,7 @@ describe("pattern scale", () => {
   });
 
   it("a floor darkens toward its edges, where it meets the walls", () => {
-    const floor = buildFloor({ id: "r", x: 0, y: 0, w: 4, h: 3, label: "R", floor: "tile" });
+    const floor = buildFloor({ id: "r", levelId: "level_ground", x: 0, y: 0, w: 4, h: 3, label: "R", floor: "tile" });
     const color = floor.geometry.getAttribute("color");
     const pos = floor.geometry.getAttribute("position");
     for (let i = 0; i < pos.count; i++) {
@@ -261,9 +261,9 @@ describe("contact shadows", () => {
     scene.update({
       ...emptyModel(),
       items: [
-        { id: "a", kind: "sofa", x: 1, y: 1, rotation: 0 },
-        { id: "b", kind: "armchair", x: 4, y: 1, rotation: 0 },
-        { id: "c", kind: "rug", x: 2, y: 3, rotation: 0 },
+        { id: "a", levelId: "level_ground", kind: "sofa", x: 1, y: 1, rotation: 0 },
+        { id: "b", levelId: "level_ground", kind: "armchair", x: 4, y: 1, rotation: 0 },
+        { id: "c", levelId: "level_ground", kind: "rug", x: 2, y: 3, rotation: 0 },
       ],
     });
     const shadows: THREE.Mesh[] = [];

@@ -6,26 +6,15 @@
 
 import { pageActions } from "../../model/store";
 import { catalogOf } from "../../model/catalog";
-import { COORD, ROTATION, SNAP } from "../../model/limits";
+import { COORD, QUARTER_TURN, ROTATION, SNAP, quarterTurned } from "../../model/limits";
 import type { Item } from "../../model/types";
 import { useAppStore } from "../useAppStore";
 import { useNotify } from "../shell/useNotify";
 import { Badge, Button, IconFurniture, IconTrash, Section } from "../primitives";
 import { EntityHead, InspectorFoot, Stats, useCommit } from "./parts";
-import { MeasureField, PointFields } from "./measure";
+import { MeasureField, PointFields, ROTATION_STEP } from "./measure";
 import { degrees, itemName, metres, roomAt } from "./entities";
 
-/** A quarter turn, the step of the Turn button. */
-const QUARTER_TURN = 90;
-/** Rotation is typed to the degree. */
-const ROTATION_STEP = 1;
-
-/** A rotation kept inside the range the model accepts, after a quarter turn. */
-const turned = (rotation: number): number => {
-  const next = rotation + QUARTER_TURN;
-  // one full turn is ROTATION.max degrees; past it, the same heading one turn back
-  return next > ROTATION.max ? next - ROTATION.max : next;
-};
 
 const SOURCE_BADGE = { supplier: { tone: "neutral", text: "Nordika" }, custom: { tone: "agent", text: "Made by your agent" } } as const;
 
@@ -68,7 +57,7 @@ export function ItemInspector({ item }: { item: Item }) {
               step={ROTATION_STEP}
               onCommit={(v) => commit({ type: "move_item", id: item.id, rotation: v })}
             />
-            <Button size="md" onClick={() => commit({ type: "move_item", id: item.id, rotation: turned(item.rotation) })}>
+            <Button size="md" onClick={() => commit({ type: "move_item", id: item.id, rotation: quarterTurned(item.rotation) })}>
               Turn {degrees(QUARTER_TURN)}
             </Button>
           </div>

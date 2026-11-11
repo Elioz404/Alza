@@ -31,28 +31,36 @@ const schema = (name: string) => inputSchemaOf(tool(name)) as { properties: Prop
  */
 const N = "number", S = "string", B = "boolean";
 const CONTRACT: Record<string, [Record<string, string>, string[]]> = {
-  get_model: [{}, []],
-  get_issues: [{}, []],
+  get_model: [{ level: S }, []],
+  get_issues: [{ level: S }, []],
   get_item_catalog: [{}, []],
   get_editor_state: [{}, []],
   measure: [{ x1: N, y1: N, x2: N, y2: N, wallId: S }, []],
   get_underlay: [{}, []],
   calibrate_underlay: [{ u1: N, v1: N, u2: N, v2: N, meters: N, opacity: N }, ["u1", "v1", "u2", "v2", "meters"]],
-  add_wall: [{ ax: N, ay: N, bx: N, by: N, thickness: N, height: N }, ["ax", "ay", "bx", "by"]],
-  edit_wall: [{ id: S, ax: N, ay: N, bx: N, by: N, thickness: N, height: N }, ["id"]],
+  add_wall: [{ ax: N, ay: N, bx: N, by: N, thickness: N, height: N, level: S }, ["ax", "ay", "bx", "by"]],
+  edit_wall: [{ id: S, ax: N, ay: N, bx: N, by: N, thickness: N, height: N, level: S }, ["id"]],
   remove_wall: [{ id: S }, ["id"]],
   add_door: [{ wallId: S, t: N, width: N, height: N, hinge: S, side: S }, ["wallId", "t"]],
   set_door_swing: [{ id: S, hinge: S, side: S }, ["id"]],
   add_window: [{ wallId: S, t: N, width: N, sill: N, height: N }, ["wallId", "t"]],
   move_opening: [{ id: S, t: N }, ["id", "t"]],
   remove_opening: [{ id: S }, ["id"]],
-  add_room: [{ x: N, y: N, w: N, h: N, label: S, floor: S }, ["x", "y", "w", "h", "label"]],
-  update_room: [{ id: S, x: N, y: N, w: N, h: N, label: S, floor: S }, ["id"]],
+  add_room: [{ x: N, y: N, w: N, h: N, label: S, floor: S, level: S }, ["x", "y", "w", "h", "label"]],
+  update_room: [{ id: S, x: N, y: N, w: N, h: N, label: S, floor: S, level: S }, ["id"]],
   remove_room: [{ id: S }, ["id"]],
-  place_item: [{ kind: S, x: N, y: N, rotation: N }, ["kind", "x", "y"]],
+  place_item: [{ kind: S, x: N, y: N, rotation: N, level: S }, ["kind", "x", "y"]],
   define_item_kind: [{ kind: S, label: S, w: N, d: N, h: N, color: S, category: S, parts: "array" }, ["kind", "label", "w", "d", "h"]],
-  move_item: [{ id: S, x: N, y: N, rotation: N }, ["id"]],
+  move_item: [{ id: S, x: N, y: N, rotation: N, level: S }, ["id"]],
   remove_item: [{ id: S }, ["id"]],
+  list_levels: [{}, []],
+  add_level: [{ name: S, height: N }, []],
+  update_level: [{ id: S, name: S, height: N, order: "integer", walls: S }, ["id"]],
+  remove_level: [{ id: S }, ["id"]],
+  set_active_level: [{ id: S }, ["id"]],
+  add_stair: [{ x: N, y: N, rotation: N, width: N, shape: S, turn: S, split: "integer", risers: "integer", tread: N, level: S }, ["x", "y"]],
+  update_stair: [{ id: S, x: N, y: N, rotation: N, width: N, shape: S, turn: S, split: "integer", risers: "integer", tread: N, level: S }, ["id"]],
+  remove_stair: [{ id: S }, ["id"]],
   set_plan_name: [{ name: S }, ["name"]],
   clear_model: [{}, []],
   build_3d: [{}, []],
@@ -60,7 +68,7 @@ const CONTRACT: Record<string, [Record<string, string>, string[]]> = {
   set_3d_style: [{ edges: B, cutaway: B, cutHeight: N }, []],
   set_doors: [{ state: S, id: S }, ["state"]],
   get_supplier_catalog: [{ category: S, maxPrice: N, maxWidth: N, inStock: B }, []],
-  place_supplier_product: [{ sku: S, x: N, y: N, rotation: N }, ["sku", "x", "y"]],
+  place_supplier_product: [{ sku: S, x: N, y: N, rotation: N, level: S }, ["sku", "x", "y"]],
   leave_note: [{ text: S }, ["text"]],
   get_notes: [{}, []],
   extend_selected_wall: [{ meters: N, end: S }, ["meters", "end"]],
@@ -224,7 +232,7 @@ describe("validation reports stay small whatever was sent", () => {
 
 describe("measure", () => {
   it("resolves a wall id the way every other wall tool does: an exact id wins over a fragment", async () => {
-    const wall = (id: string, bx: number): Wall => ({ id, ax: 0, ay: 0, bx, by: 0, thickness: 0.1, height: 2.5 });
+    const wall = (id: string, bx: number): Wall => ({ id, levelId: "level_ground", ax: 0, ay: 0, bx, by: 0, thickness: 0.1, height: 2.5 });
     store.setState((s) => ({ model: { ...s.model, walls: [wall("w10", 10), wall("w1", 3)] } }));
     expect(await executeWrapped(tool("measure"), { wallId: "w1" })).toMatchObject({ ok: true, meters: 3 });
     expect(await executeWrapped(tool("measure"), { wallId: "w9" })).toMatchObject({ ok: false });

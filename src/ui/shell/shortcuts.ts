@@ -10,15 +10,36 @@
  */
 
 import { useEffect } from "react";
-import { store } from "../../model/store";
+import { pageActions, store } from "../../model/store";
 import { SNAP } from "../../model/limits";
 import { NUDGE_SHIFT_FACTOR } from "../../editor/canvasState";
 import { isInsideOverlay, isTypingTarget } from "../keys";
 import { toolsFor } from "./tools";
+import { CANVAS_REGION_ID, SCROLL_REGION_ATTR } from "./ids";
 import type { ShellState } from "./ShellContext";
 
 /** A length in whole centimetres, as the sheet writes a step. */
 const cm = (m: number): string => `${Math.round(m * 100)} cm`;
+
+/** Which way PageUp and PageDown step through the levels. */
+const LEVEL_KEYS: Readonly<Record<string, 1 | -1>> = Object.freeze({ PageUp: 1, PageDown: -1 });
+
+/** Overflow that lets an element scroll, and so page with Page Up and Page Down. */
+const SCROLLS = new Set(["auto", "scroll"]);
+
+/**
+ * Is the key aimed at something that pages with Page Up and Page Down itself? A region marked
+ * as scrolling (the side panel's tab panels, the activity feed: SCROLL_REGION_ATTR) or any
+ * element between the target and the page that scrolls now: its overflow lets it, and it holds
+ * more than it shows. The canvas region is no scroller — there the keys step the levels.
+ */
+export function inScrollingRegion(target: EventTarget | null): boolean {
+  for (let el = target instanceof Element ? target : null; el && el !== document.body && el.id !== CANVAS_REGION_ID; el = el.parentElement) {
+    if (el.matches(`[role="tabpanel"], [${SCROLL_REGION_ATTR}]`)) return true;
+    if (SCROLLS.has(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight) return true;
+  }
+  return false;
+}
 
 /** The key a rail shortcut is written with, as KeyboardEvent.key reports it. */
 const keyOf = (shortcut: string) => shortcut.toLowerCase();
@@ -30,6 +51,12 @@ export function handleShellKey(e: KeyboardEvent, shell: ShellState): boolean {
   if (e.key === "?") {
     shell.setHelpOpen(true);
     return true;
+  }
+  const step = LEVEL_KEYS[e.key];
+  if (step !== undefined) {
+    // the level above or below, in either view; refused (and left to the page) at the ends
+    if (inScrollingRegion(e.target)) return false;
+    return pageActions.stepActiveLevel(step).ok;
   }
   const view = store.getState().editor.view;
   const tool = toolsFor(view).find((t) => keyOf(t.shortcut) === e.key.toLowerCase());
@@ -83,8 +110,10 @@ export const SHORTCUT_SHEET: readonly ShortcutGroup[] = Object.freeze([
       { keys: ["shift"], does: "Hold while drawing walls to keep them straight" },
       { keys: [], gesture: "Drag a selected wall's end", does: "Move that end" },
       { keys: ["arrowup", "arrowdown", "arrowleft", "arrowright"], isSet: true, does: `Nudge the selection ${cm(SNAP)} (with Shift, ${cm(SNAP * NUDGE_SHIFT_FACTOR)})` },
-      { keys: ["delete", "backspace"], does: "Remove the selected wall, room or item" },
+      { keys: ["delete", "backspace"], does: "Remove the selected wall, room, item or stair" },
       { keys: ["enter"], does: "While placing furniture, put one in the middle of the view, selected" },
+      { keys: [], gesture: "Add a stair: press, then drag", does: "Start the stair where you press, climbing the way you drag" },
+      { keys: ["arrowup", "arrowdown", "arrowleft", "arrowright"], isSet: true, does: "With Add a stair, choose the way it climbs (Enter puts it in the middle of the view)" },
       { keys: [], gesture: "Properties → On the plan", does: "Select any wall, room, door, window or piece from a list" },
       { keys: ["mod+z"], does: "Undo" },
     ],
@@ -95,6 +124,7 @@ export const SHORTCUT_SHEET: readonly ShortcutGroup[] = Object.freeze([
       { keys: [], gesture: "Scroll", does: "Zoom" },
       { keys: ["+", "-"], isSet: true, does: "Zoom in, zoom out" },
       { keys: ["shift+1"], does: "Fit the plan" },
+      { keys: ["pageup", "pagedown"], does: "Work on the level above, or the one below (in 3D too)" },
       { keys: ["space"], does: "Hold and drag to pan, with any tool" },
       { keys: [], gesture: "Middle-drag, Alt+drag, or drag empty space in Select", does: "Pan" },
     ],

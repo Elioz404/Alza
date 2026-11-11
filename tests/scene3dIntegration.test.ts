@@ -54,7 +54,7 @@ function showroom(): { model: PlanModel; items: Item[] } {
   let x = 0;
   for (const def of KINDS) {
     x += def.w / 2;
-    items.push({ id: `piece_${def.kind}`, kind: def.kind, x, y: 0, rotation: 30 });
+    items.push({ id: `piece_${def.kind}`, levelId: "level_ground", kind: def.kind, x, y: 0, rotation: 30 });
     x += def.w / 2 + GAP;
   }
   return { model: { ...emptyModel(), kinds: [AGENT_KIND], items }, items };
@@ -204,8 +204,8 @@ describe("the furniture in the scene", () => {
     const scene = new PlanScene();
     scene.setEdges(true);
     const two = { ...emptyModel(), items: [
-      { id: "a", kind: "dining_chair", x: 0, y: 0, rotation: 0 },
-      { id: "b", kind: "dining_chair", x: 2, y: 0, rotation: 0 },
+      { id: "a", levelId: "level_ground", kind: "dining_chair", x: 0, y: 0, rotation: 0 },
+      { id: "b", levelId: "level_ground", kind: "dining_chair", x: 2, y: 0, rotation: 0 },
     ] };
     scene.update(two);
     const pieceOf = (id: string) => scene.objects.find((o) => o.userData.entity === `item:${id}`)!;

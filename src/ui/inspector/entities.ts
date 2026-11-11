@@ -6,11 +6,12 @@
  */
 
 import { catalogOf } from "../../model/catalog";
-import { pageActions } from "../../model/store";
+import { activeLevelId, pageActions, store } from "../../model/store";
 import { EVENTS } from "../../model/sceneBus";
-import type { Item, Opening, PlanModel, Room, Wall } from "../../model/types";
+import { levelIdOf } from "../../model/levels";
+import type { Item, Opening, PlanModel, Room, Stair, Wall } from "../../model/types";
 
-export type EntityType = "wall" | "door" | "window" | "room" | "item";
+export type EntityType = "wall" | "door" | "window" | "room" | "item" | "stair";
 
 /** One thing on the plan, as the person sees it. */
 export interface EntityRef {
@@ -108,6 +109,23 @@ export function itemName(model: Pick<PlanModel, "kinds">, item: Item): string {
   return catalogOf(model).get(item.kind)?.label ?? "Unknown piece";
 }
 
+// ---------------------------------------------------------------------------- stairs and levels
+
+export const stairName = (model: Pick<PlanModel, "stairs">, s: Stair): string => `Stair ${model.stairs.indexOf(s) + 1}`;
+
+/** "Straight stair", "L-shaped stair": what kind of stair it is, in words. */
+export const stairKind = (s: Pick<Stair, "shape">): string => (s.shape === "l" ? "L-shaped stair" : "Straight stair");
+
+/** A height above the ground floor as a section marks it: "+2.90 m", "±0.00 m". */
+export const elevation = (m: number): string => (Math.abs(m) < 0.005 ? "±0.00 m" : `${m > 0 ? "+" : "−"}${Math.abs(m).toFixed(2)} m`);
+
+/** The name of the level an entity stands on, for a plan with more than one; null for a one-storey plan. */
+export function levelNameOf(model: PlanModel, id: string): string | null {
+  if (model.levels.length < 2) return null;
+  const levelId = levelIdOf(model, id);
+  return model.levels.find((l) => l.id === levelId)?.name ?? null;
+}
+
 // ---------------------------------------------------------------------------- any entity
 
 /** The entity with this id, named, or null when the plan has nothing by that id. */
@@ -120,14 +138,20 @@ export function entityById(model: PlanModel, id: string): EntityRef | null {
   if (room) return { type: "room", id, name: room.label };
   const item = model.items.find((i) => i.id === id);
   if (item) return { type: "item", id, name: itemName(model, item) };
+  const stair = model.stairs.find((x) => x.id === id);
+  if (stair) return { type: "stair", id, name: stairName(model, stair) };
   return null;
 }
 
 /**
  * Select an entity on the plan, so the drawing marks it and Properties edits it. A door or a
- * window is edited from its wall, so selecting one selects the wall it is in.
+ * window is edited from its wall, so selecting one selects the wall it is in. An entity on
+ * another level brings that level up first: the plan shows one level at a time (and a level
+ * itself is selected by working on it).
  */
-export function selectEntity(model: PlanModel, ref: Pick<EntityRef, "type" | "id">): void {
+export function selectEntity(model: PlanModel, ref: { type: EntityType | "level"; id: string }): void {
+  const levelId = levelIdOf(model, ref.id);
+  if (levelId && levelId !== activeLevelId(store.getState())) pageActions.setActiveLevel(levelId);
   switch (ref.type) {
     case "wall":
       pageActions.selectWall(ref.id);
@@ -143,6 +167,12 @@ export function selectEntity(model: PlanModel, ref: Pick<EntityRef, "type" | "id
       return;
     case "item":
       pageActions.selectItem(ref.id);
+      return;
+    case "stair":
+      pageActions.selectStair(ref.id);
+      return;
+    case "level":
+      // naming a level is going to it: done above
       return;
   }
 }

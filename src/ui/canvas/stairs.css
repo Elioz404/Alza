@@ -1,0 +1,39 @@
+/*
+ * A stair's plan symbol (src/editor/StairDrawing.tsx), which brings this sheet with it after the
+ * first paint. Tokens only (src/ui/theme/tokens.ts): pens --pen-*, dashes --dash-*, colours
+ * --plan-*; one SVG unit is one screen pixel, as on the rest of the sheet (canvas.css).
+ */
+@layer alza-surfaces {
+  /* stairs: flights in furniture white, their edges and risers in line, what is above the cut
+     hidden (edges included), the walking line with its dot and arrow; on the level above, the
+     stairwell (a void: paper) with its rim a visible edge and the guard round it */
+  .pl-stair-flight { fill: var(--plan-stair); stroke: none; stroke-width: var(--pen-medium); stroke-linejoin: miter; }
+  .pl-stair-edge { fill: none; stroke: var(--plan-line); stroke-width: var(--pen-medium); stroke-linecap: square; }
+  .pl-stair-edge--hidden { stroke: var(--plan-line-soft); stroke-width: var(--pen-fine); stroke-dasharray: var(--dash-hidden); stroke-linecap: butt; }
+  .pl-stair-guard { fill: none; stroke: var(--plan-ink); stroke-width: var(--pen-medium); stroke-linecap: square; }
+  .pl-stair-tread { fill: none; stroke: var(--plan-line); stroke-width: var(--pen-fine); }
+  .pl-stair-hidden { fill: none; stroke: var(--plan-line-soft); stroke-width: var(--pen-fine); stroke-dasharray: var(--dash-hidden); }
+  .pl-stair-cut { fill: none; stroke: var(--plan-ink); stroke-width: var(--pen-firm); stroke-linejoin: miter; }
+  .pl-stair-walk { fill: none; stroke: var(--plan-line); stroke-width: var(--pen-fine); }
+  .pl-stair-walk--hidden { stroke: var(--plan-line-soft); stroke-dasharray: var(--dash-hidden); }
+  .pl-stair-dot,
+  .pl-stair-arrow { fill: var(--plan-line); }
+  .pl-stair-label {
+    fill: var(--plan-label);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    text-anchor: middle;
+    dominant-baseline: middle;
+    pointer-events: none;
+  }
+  .pl-stair--selected .pl-stair-flight { stroke: var(--plan-selection); }
+  .pl-stair--well .pl-stair-flight { fill: var(--plan-paper); stroke: var(--plan-ink); stroke-width: var(--pen-firm); }
+  .pl-stair--well .pl-stair-tread,
+  .pl-stair--well .pl-stair-walk,
+  .pl-stair--well .pl-stair-hidden { stroke: var(--plan-line-soft); }
+  .pl-stair--well .pl-stair-dot,
+  .pl-stair--well .pl-stair-arrow { fill: var(--plan-line-soft); }
+  .pl-ghost-stair { opacity: var(--opacity-quiet); }
+  .pl-ghost-stair .pl-stair-flight { fill: var(--plan-selection-muted); stroke: var(--plan-preview); stroke-dasharray: var(--dash-ghost); }
+}

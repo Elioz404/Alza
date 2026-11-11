@@ -50,6 +50,24 @@ export const moveSeconds = (reducedMotion: boolean): number => (reducedMotion ? 
 export const framedRadius = (radius: number, aspect: number): number =>
   aspect > 0 && aspect < CAMERA_FRAMING.fitAspect ? (radius * CAMERA_FRAMING.fitAspect) / aspect : radius;
 
+/**
+ * The Orbit pose over a plan centred on `center` whose size is `radius`, with the storeys shown
+ * standing from `bottomFloor` to `topFloor` (floor heights, metres): a three-quarter view from the
+ * south-east that frames the whole stack. The pivot sits at the stack's middle and the camera
+ * stands back for its height as well as for the plan's size — one storey, the plan's size alone.
+ */
+export function orbitPose(center: THREE.Vector3, radius: number, bottomFloor: number, topFloor: number, aspect: number, out: CameraPose): CameraPose {
+  const orbit = CAMERA_FRAMING.orbit;
+  const [east, up, south] = orbit.offset;
+  const stack = topFloor - bottomFloor;
+  const reach = framedRadius(Math.hypot(radius, stack * orbit.stackReach), aspect);
+  const pivot = bottomFloor + stack / 2;
+  out.up.set(0, 1, 0);
+  out.position.set(center.x + reach * east, pivot + reach * up, center.z + reach * south);
+  out.target.set(center.x, pivot + orbit.targetHeight, center.z);
+  return out;
+}
+
 export const copyPose = (from: CameraPose, to: CameraPose): CameraPose => {
   to.position.copy(from.position);
   to.target.copy(from.target);

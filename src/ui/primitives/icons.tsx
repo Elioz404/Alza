@@ -70,6 +70,22 @@ export const IconWindow = make(
     <path d="M3 12h18M9 9v6M15 9v6" />
   </>,
 );
+export const IconStair = make(
+  "stair",
+  <>
+    <rect x="7" y="3" width="10" height="18" rx="1" />
+    <path d="M7 7.5h10M7 12h10M7 16.5h10" />
+    <path d="M12 19V5.5M10 7.5l2-2 2 2" />
+  </>,
+);
+/** Levels: storeys stacked, as a section shows them. */
+export const IconLevels = make(
+  "levels",
+  <>
+    <path d="M3 9l9-5 9 5-9 5z" />
+    <path d="M3 14l9 5 9-5" />
+  </>,
+);
 export const IconMeasure = make(
   "measure",
   <>

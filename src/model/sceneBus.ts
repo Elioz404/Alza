@@ -60,11 +60,25 @@ export interface SceneStats {
   labels: { total: number; shown: number };
   /** where the cutaway slices the walls (metres above the ground), null when it does not */
   cut: number | null;
+  /** where the stairs stop: the underside of the slab over the topmost storey shown (metres up) */
+  storeyTop: number | null;
+  /** whether every corner of the storeys shown is inside the camera's frame */
+  framed: boolean;
   /** whether the model is drawn with ink edges */
   edges: boolean;
   /** whether the camera is moving between modes */
   moving: boolean;
+  /** the plan's levels, and the ids of those the view shows, ground first */
+  levels: { total: number; shown: string[] };
+  /** the stairs and the upper levels' floor slabs in the scene */
+  stairs: number;
+  slabs: number;
+  /** walking: the level the walker is on, the height of the floor or tread under it, and its eye's; otherwise null */
+  walker: { level: string; floor: number; eye: number } | null;
 }
+
+/** What the probe can find on the canvas. */
+export type SceneLocatable = "wall" | "room" | "item" | "stair";
 
 /**
  * Where the mounted 3D view, if any, answers what it holds, where an entity shows, and takes a
@@ -84,10 +98,10 @@ export interface ScenePoint {
 export interface SceneProbe {
   read: (() => SceneStats) | null;
   /**
-   * Where a wall, room or piece shows on the canvas: the middle of its top (a wall's, a
+   * Where a wall, room, piece or stair shows on the canvas: the middle of its top (a wall's, a
    * piece's) or of its floor (a room's), or null when it is not in the plan or behind the camera.
    */
-  locate: ((type: "wall" | "room" | "item", id: string) => ScenePoint | null) | null;
+  locate: ((type: SceneLocatable, id: string) => ScenePoint | null) | null;
   /** Put the camera at `position`, looking at `target` (metres, three.js axes), as a drag would leave it. */
   look: ((position: readonly [number, number, number], target: readonly [number, number, number]) => void) | null;
 }

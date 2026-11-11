@@ -38,7 +38,15 @@ export const MARGIN = 0.02;
  */
 export const SHIPPED = Object.freeze({
   studio: {
-    js: { min: 467_901, gzip: 152_204 },
+    // raised from 467_901 / 152_204 for levels and stairs: the plan model, its checker and the
+    // WebMCP tools all run before the first paint (the tools register at boot), so the level and
+    // stair actions, rules, plan-format migration and eight new tools are first-load code.
+    // Raised again from 496_350 / 161_150 (measured 507_733 / 164_975) for the storeys' review:
+    // the checker's wall-under-slab rule, the storey height carrying its walls, level names kept
+    // unique, the removal refused before it is asked and the stairs it reroutes disclosed, and the
+    // keyboard path of the stair tool — model, tool and first-paint shell code; the stairwell's
+    // guard, which only the deferred plan symbol and the 3D view read, stays out (stairGuard.ts)
+    js: { min: 507_733, gzip: 164_975 },
     css: { min: 110_997, gzip: 18_767 },
   },
   partner: {
@@ -79,7 +87,10 @@ export const BUDGETS = Object.freeze(
  */
 export const LAZY_SHIPPED = Object.freeze({
   three: { min: 517_921, gzip: 130_065 },
-  scene3d: { min: 109_791, gzip: 41_777 },
+  // raised from 109_791 / 41_777 for storeys and stairs in 3D: the stair model, the slabs and their
+  // stairwells (with the region cutter they are built by), the walker's climb between floors and
+  // the View panel's levels control. All of it loads with the 3D view, never with the page
+  scene3d: { min: 128_449, gzip: 48_798 },
 });
 
 /**

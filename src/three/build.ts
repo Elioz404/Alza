@@ -22,7 +22,9 @@ import { segLen } from "../model/geometry";
 import { openingSpan } from "../model/issues";
 import { DOUBLE_DOOR_CLEAR, WALL_DEFAULTS, type FloorFinish } from "../model/limits";
 import { keepStatic, type MaterialCache } from "./materials";
-import { CONTACT, CUTAWAY, FLOOR_TOP, LIGHTS, PENDANT, SCENE } from "./config";
+import { CONTACT, CUTAWAY, FLOOR_TOP, LIGHTS, PENDANT, SCENE, SLAB } from "./config";
+import { piecesArea, regionPieces, regionRim, type Poly } from "./region";
+import { NO_INK, piecesGeometry, rimGeometry } from "./slabs";
 import { createSurfaceMaterial, ninePatch, projectSurfaceUVs, staticSurface, surface, type SurfaceName } from "./surfaces";
 import { CUT_CAP, POCHE, clipToCut } from "./cutaway";
 // every surface colour comes from the design tokens (src/ui/theme/sceneTokens.ts → MATERIAL)
@@ -427,7 +429,7 @@ function slabSides(x0: number, z0: number, x1: number, z1: number, uv: (x: numbe
  * the plan's drawing of them, and with the next room's. With `materials`, the finish is the
  * scene's shared one.
  */
-export function buildFloor(room: Room, materials?: MaterialCache): THREE.Mesh {
+export function buildFloor(room: Room, materials?: MaterialCache, wells: readonly Poly[] = []): THREE.Mesh {
   const material = surface(FLOOR_SURFACE[room.floor], undefined, materials);
   const [mu, mv] = (material.userData.metres as readonly [number, number] | undefined) ?? [1, 1];
   const cx = room.x + room.w / 2;
@@ -436,6 +438,36 @@ export function buildFloor(room: Room, materials?: MaterialCache): THREE.Mesh {
   const hd = room.h / 2;
   // the edge band, never wider than half the room
   const band = Math.min(CONTACT.floorEdge.width, hw, hd);
+  const outline: Poly = [
+    { x: room.x, y: room.y },
+    { x: room.x + room.w, y: room.y },
+    { x: room.x + room.w, y: room.y + room.h },
+    { x: room.x, y: room.y + room.h },
+  ];
+  // a stairwell crosses the room when it takes some of its floor away
+  const area = room.w * room.h;
+  const crossing = wells.filter((w) => piecesArea(regionPieces([outline], [w])) < area - SLAB.probe * SLAB.probe);
+  if (crossing.length > 0) {
+    // a stairwell crosses the room: its floor is the room less the opening, in pieces cut at the
+    // edge band's lines (so the band shades as the nine-patch's does), its sides along the rim
+    const shade = (x: number, z: number) => {
+      const d = Math.min(x - room.x, room.x + room.w - x, z - room.y, room.y + room.h - z);
+      return CONTACT.floorEdge.shade + (1 - CONTACT.floorEdge.shade) * Math.min(1, Math.max(0, d) / band);
+    };
+    const pieces = regionPieces([outline], crossing, [room.x + band, room.x + room.w - band], [room.y + band, room.y + room.h - band]);
+    const floor = new THREE.Mesh(piecesGeometry(pieces, FLOOR_TOP, false, (x, z) => [x / mu, z / mv], shade, -cx, -cz), material);
+    floor.receiveShadow = true;
+    // cut into pieces that are no edge of anything: the ink is the rim's
+    floor.userData[NO_INK] = true;
+    const sides = new THREE.Mesh(
+      rimGeometry(regionRim([outline], crossing), 0, FLOOR_TOP, (a, y) => [a / mu, y / mv], true, -cx, -cz),
+      material,
+    );
+    sides.receiveShadow = true;
+    floor.add(sides);
+    floor.position.set(cx, 0, cz);
+    return floor;
+  }
   const xs = [-hw, -hw + band, hw - band, hw];
   const zs = [-hd, -hd + band, hd - band, hd];
   const rim = (k: number) => k === 0 || k === 3;

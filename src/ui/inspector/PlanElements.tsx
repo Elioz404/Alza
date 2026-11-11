@@ -1,6 +1,6 @@
 /**
- * Everything on the plan, listed: walls, rooms, doors and windows, furniture, each a button
- * that selects it, brings it into view and opens it here in Properties. It is the plan's
+ * Everything on the level being worked on, listed: walls, rooms, doors and windows, furniture,
+ * stairs, each a button that selects it, brings it into view and opens it here in Properties. It is the plan's
  * outline for a keyboard or a screen reader, where the drawing itself is a picture. Focus
  * moves to the plan, where the arrow keys nudge the selection and Delete removes it (the hint
  * bar says so); the inspector that edits it is here, where the list was.
@@ -12,9 +12,11 @@
 import type { ReactNode } from "react";
 import { bus } from "../../model/sceneBus";
 import type { PlanModel } from "../../model/types";
+import { activeLevelId } from "../../model/store";
+import { levelInfo, levelSlice } from "../../model/levels";
 import { useAppStore } from "../useAppStore";
 import { IconChevronDown, Section } from "../primitives";
-import { CANVAS_REGION_ID } from "../shell/ids";
+import { focusCanvasRegion } from "../shell/ids";
 import {
   FOCUS_ENTITY_EVENT,
   itemName,
@@ -23,6 +25,8 @@ import {
   roomArea,
   selectEntity,
   squareMetres,
+  stairKind,
+  stairName,
   wallLength,
   wallName,
   type EntityRef,
@@ -38,12 +42,13 @@ interface Group {
   elements: Element[];
 }
 
-function groupsOf(model: PlanModel): Group[] {
+/** The groups of what stands on one level (`model` is that level's slice); names are the whole plan's. */
+function groupsOf(model: PlanModel, plan: PlanModel): Group[] {
   const wallById = new Map(model.walls.map((w) => [w.id, w]));
   const groups: Group[] = [
     {
       title: "Walls",
-      elements: model.walls.map((w) => ({ ref: { type: "wall", id: w.id, name: wallName(model, w) }, detail: metres(wallLength(w)) })),
+      elements: model.walls.map((w) => ({ ref: { type: "wall", id: w.id, name: wallName(plan, w) }, detail: metres(wallLength(w)) })),
     },
     {
       title: "Rooms",
@@ -53,32 +58,39 @@ function groupsOf(model: PlanModel): Group[] {
       title: "Doors and windows",
       elements: model.openings.map((o) => {
         const wall = wallById.get(o.wallId);
-        return { ref: { type: o.kind, id: o.id, name: openingName(model, o) }, detail: wall ? `in ${wallName(model, wall)}` : null };
+        return { ref: { type: o.kind, id: o.id, name: openingName(plan, o) }, detail: wall ? `in ${wallName(plan, wall)}` : null };
       }),
     },
     {
       title: "Furniture",
       elements: model.items.map((it) => ({ ref: { type: "item", id: it.id, name: itemName(model, it) }, detail: null })),
     },
+    {
+      title: "Stairs",
+      elements: model.stairs.map((st) => ({ ref: { type: "stair", id: st.id, name: stairName(plan, st) }, detail: stairKind(st) })),
+    },
   ];
   return groups.filter((g) => g.elements.length > 0);
 }
 
 export function PlanElements() {
-  const model = useAppStore((s) => s.model);
-  const groups = groupsOf(model);
+  const plan = useAppStore((s) => s.model);
+  const levelId = useAppStore(activeLevelId);
+  const model = levelSlice(plan, levelId);
+  const groups = groupsOf(model, plan);
   if (groups.length === 0) return null;
+  const level = plan.levels.length > 1 ? levelInfo(plan, levelId)?.level.name : undefined;
 
   const open = (ref: EntityRef) => {
     selectEntity(model, ref);
     bus.emit(FOCUS_ENTITY_EVENT, ref);
     // this list gives way to the selection's inspector; focus goes to the plan, where the
     // selection's keys work, rather than to the top of the page
-    requestAnimationFrame(() => document.getElementById(CANVAS_REGION_ID)?.focus({ preventScroll: true }));
+    focusCanvasRegion();
   };
 
   return (
-    <Section title="On the plan">
+    <Section title={level ? `On ${level}` : "On the plan"}>
       <p className="insp-help">Select anything here to edit it in Properties. Focus moves to the plan, where the arrow keys nudge it and Delete removes it.</p>
       <div className="insp-elements">
         {groups.map((g) => (

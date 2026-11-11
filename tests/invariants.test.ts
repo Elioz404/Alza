@@ -161,7 +161,7 @@ describe("rooms", () => {
   });
 
   it("the checker and the action share the minimum room size", () => {
-    const issues = checkModel({ ...store.getState().model, rooms: [{ id: "r", x: 0, y: 0, w: ROOM_SIZE.min / 2, h: 1, label: "R", floor: "oak" }] });
+    const issues = checkModel({ ...store.getState().model, rooms: [{ id: "r", levelId: "level_ground", x: 0, y: 0, w: ROOM_SIZE.min / 2, h: 1, label: "R", floor: "oak" }] });
     expect(issues.some((i) => i.code === "room_too_small")).toBe(true);
   });
 });

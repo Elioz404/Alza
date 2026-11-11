@@ -76,13 +76,13 @@ More stills in [`shots/showcase/`](shots/showcase/).
 1. Open the live app (link at the top of this repo).
 2. **In ChatGPT desktop:** open the URL in the in-app browser. WebMCP works out of the box.
    **In Google Chrome 149+:** enable `chrome://flags/#enable-webmcp-testing` and restart.
-   The agent status in the top bar turns green: **Agent tools on** (32 tools registered).
+   The agent status in the top bar turns green: **Agent tools on** (40 tools registered).
 3. Ask your agent, for example:
    - *"Add a 3 × 2.5 m study next to the bedroom, with a door and a window."*
    - *"The sofa placement feels off. Check the plan and fix any issues."*
    - *"Build the 3D and give me a walkthrough."*
 4. No WebMCP runtime? The app is still complete. Open **Activity → Developer tools** in the side
-   panel and run the exact same 33 tools manually; every call is logged in Activity.
+   panel and run the exact same 41 tools manually; every call is logged in Activity.
 
 ## Trace your own plan with the agent
 
@@ -115,7 +115,7 @@ document.modelContext.registerTool({
 });
 ```
 
-## The 32 tools (+ 1 dynamic)
+## The 40 tools (+ 1 dynamic)
 
 | Group | Tools |
 |---|---|
@@ -125,10 +125,16 @@ document.modelContext.registerTool({
 | **Openings** | `add_door` · `add_window` · `move_opening` · `remove_opening` · `set_door_swing` (hinge side + swing direction) |
 | **Rooms** | `add_room` · `update_room` · `remove_room` |
 | **Furniture** | `place_item` · `move_item` · `remove_item` · `define_item_kind`, model a piece the catalogue lacks, from primitives |
+| **Levels & stairs** | `list_levels` · `add_level` · `update_level` (rename, floor-to-floor height — the walls that met the slab follow it unless `walls: "keep"` — or its place in the stack) · `remove_level` (needs approval) · `set_active_level` · `add_stair` (straight or L-shaped; risers and going derived from the storey height) · `update_stair` · `remove_stair` (needs approval) |
 | **Model & view** | `set_plan_name` · `clear_model` · `build_3d` · `set_camera` (orbit/top/walk) · `set_3d_style` (ink edges, dollhouse cutaway at a height) · `set_doors` (swing the leaves open/shut) |
 | **Cross-origin** | `get_supplier_catalog` · `place_supplier_product`, read a **partner origin's** own WebMCP tools and drop its real products into the plan |
 | **Collaboration** | `leave_note` · `get_notes` |
 | **Dynamic** | `extend_selected_wall`, published **only while the human has a wall selected** (registered/unregistered live, per the spec's `toolchange` cycle). The human points, the agent acts on exactly that wall. |
+
+`get_model`, `get_issues`, `add_wall`, `edit_wall`, `add_room`, `update_room`, `place_item`,
+`move_item` and `place_supplier_product` also take an optional `level` (a level's id or its
+name, which no other level shares): without it they read or draw on the level the human is
+working on.
 
 A few design notes:
 
@@ -197,9 +203,29 @@ Metric precision is the product. The checker validates:
 - **Furniture:** oriented-rectangle **SAT** against walls (leaning is legal, crossing is an
   error), blocking door swing paths and window light (with a sill-height nuance),
   item-vs-item collisions (rugs exempt), items outside every room.
+- **Storeys and stairs** (checked level by level, so walls on different floors are never
+  compared): a wall under a level above that stops short of its slab or runs up through it, a
+  stair with no level above, risers or goings out of range, the 2R + G comfort rule, headroom
+  under the slab, a wall in the stair or over its stairwell, a blocked landing at either end,
+  a stairwell outside every room, furniture on a stair or over a stairwell, overlapping stairs.
 
 The bundled **Sunset Loft** demo is audited to **0 issues** and kept that way by a
 regression test.
+
+## Storeys, stairs and the plan format
+
+A plan is a stack of **levels**, listed from the ground up, each with its floor-to-floor
+height; every wall, room, piece and stair names the level it stands on, and where each floor
+stands follows from the heights below it. The 2D plan shows one level at a time over a ghost
+of the one below (PageUp / PageDown or the level switcher change it); the 3D view stacks the
+storeys on their slabs, opens a stairwell over every stair and lets the walker climb it. A
+stair stores only where it starts, which way it climbs, its width and shape; its risers,
+going, landing and clear zones are worked out from the storey height, the same way for the
+plan, the model, the walker and the checker.
+
+Plans are saved in **format 2** (`version: 2`, `model/planFormat.ts`). A format-1 plan (one
+storey, no levels) loads as a single "Ground floor" holding everything; a plan from a newer
+format, or one that names a level it does not have, is refused and the current plan stays.
 
 ## Architecture
 
@@ -210,12 +236,18 @@ src/
             store.ts (shared actions, undo, activity) · commands.ts (dispatch: the one change path)
             assets.ts (underlay images, kept while the plan or its undo history names them)
             sceneBus.ts · seed.ts · provenance.ts (what each change touched; its revision number)
+            levels.ts (storeys: elevations, what stands on each, stairwells, level names)
+            stairs.ts (a stair's whole shape — risers, treads, landing, walking line, clear
+            zones, headroom, the guard round its stairwell — from the little the plan stores)
+            planFormat.ts (the save format, version 2, and the migration of format-1 plans)
   editor/   Editor.tsx — SVG drawing sheet: poché walls, chained walls (Shift keeps them
             straight, ends snap to ends), rooms, doors (D) and windows (N) placed on a wall,
             plan symbols for furniture, dimension chains, numbered revision marks for the
             agent's changes, 5 cm snap, arrow-key nudge, pan (H, Space-drag) and zoom (+, -,
             Shift+1 fits) · canvasState.ts (the view and the editor's own tools)
-            drawing.ts · symbols.tsx
+            drawing.ts · symbols.tsx · stairSymbol.ts (a stair's plan symbol: treads and
+            edges below the cut, hidden past it, the break line, UP/DN, the stairwell's guard)
+            StairDrawing.tsx (that symbol drawn; loaded after the first paint)
   three/    (loaded on demand: the 2D editor's first chunk has no three.js)
             build.ts (extrusion with real openings, resolved joints, floors)
             furniture.ts (every built-in kind modelled to its catalogue box from soft cushions, turned
@@ -230,19 +262,26 @@ src/
             transitions.ts (eased camera moves; instant under reduced motion) · marks.ts (the
             selection and pending removals drawn on the model) · labels.ts (room names over the
             model) · edges.ts (ink edges) · screenLines.ts (marks a set width on screen)
-            cutaway.ts (dollhouse cut, poché) · thumbnails.ts · config.ts
+            cutaway.ts (dollhouse cut, poché, the top of the storeys shown) · thumbnails.ts · config.ts
+            stairs.ts (treads, risers, stringers, handrails, landing, the stairwell's balustrade)
+            slabs.ts (the floors between storeys, open over each stairwell) · region.ts (a region
+            less its holes, cut into pieces) · levelView.ts (which storeys the view shows)
             overlays/ (the camera switch, View settings, hint bar, and the loading and failure states)
-  mcp/      registry.ts (registration + uniform logging) · tools.ts (32 + 1 dynamic)
+  mcp/      registry.ts (registration + uniform logging) · tools.ts (40 + 1 dynamic)
             bootstrap.ts (runtime detection, dynamic tool lifecycle, toolchange)
   ui/       App · theme/ (design tokens, Astryx theme, fonts) · primitives/ (buttons, fields, icons)
             shell/ (top bar, tool rail, canvas, side panel: Properties/Library/Issues/Notes + Activity)
             one folder per surface: inspector · library (catalogue and Nordika) · issues · notes
             activity (feed with linked names, Developer tools) · approvals (request card, queue,
-            policy) · canvas (zoom, hint bar, legend) · firstRun
+            policy) · canvas (zoom, hint bar, legend, the level switcher) · firstRun
+            inspector/LevelsSection.tsx and StairInspector.tsx (storeys and stairs in Properties)
             SupplierBridge (the partner frame the postMessage transport uses) · useAppStore · useGesture
             useThumbnails
 tests/      domain: geometry, checker (incl. seed = 0 issues regression), rules, catalog,
             resolve, store, invariants, commands (dispatch, gestures, undo), assets, checkerCost
+            storeys: levels (format and migration, level and stair commands, stair geometry and
+            rules, the tools), levels3d (stairs, slabs, storeys shown, walking between floors),
+            levelsPlan (the plan level by level, the stair symbol and tool, the level controls)
             3D: planScene (reconciliation, GPU memory), surfaces, furniture (fit, budgets, shared
             geometry), scene3dIntegration (furniture inked, picked and outlined in the scene),
             sceneStyle (selection, marks,
@@ -381,7 +420,7 @@ npm run typecheck  # tsc -b over the app, the tests and vite.config.ts
 npm run lint       # ESLint (typescript-eslint + react-hooks)
 npm test           # unit tests (vitest, happy-dom)
 npm run build      # production build — dist/studio and dist/partner, one directory per host
-npm run e2e        # 125-check Playwright battery (run both servers first)
+npm run e2e        # 189-check Playwright battery (run both servers first)
 npm run build:local  # production build aimed at the two local origins below, into dist-local/
 npm run serve:local  # serve dist-local/ on two origins with the production headers
 npm run shots      # rebuild the screenshot gallery (against the dev servers, or serve:local

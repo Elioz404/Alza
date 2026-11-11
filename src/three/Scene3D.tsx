@@ -13,16 +13,22 @@
  * If the scene cannot start (no WebGL) or stops, the failure stays inside the canvas and says
  * so (overlays/SceneStates.tsx), instead of being reported as a failed download.
  *
+ * The viewport holds the whole plan, every storey of it, and is told which level is being
+ * worked on and which levels the View panel shows (levelView.ts). PageUp and PageDown step the
+ * level being worked on in this view too, through the shell's shortcuts (src/ui/shell/shortcuts.ts),
+ * which listen in both views.
+ *
  * Loaded on demand (src/ui/shell/CanvasRegion.tsx), so three.js is not part of the page's
  * first chunk.
  */
 
 import { useEffect, useRef } from "react";
-import { pageActions, store, type EditorState } from "../model/store";
+import { activeLevelId, pageActions, store, type EditorState } from "../model/store";
 import { isInsideOverlay, isTypingTarget } from "../ui/keys";
 import { placeInMiddle } from "../editor/canvasState";
 import { deselectAll, handleSelectionKey } from "../editor/selectionKeys";
 import { createViewport } from "./viewport";
+import { levelsShown, onLevelsShown } from "./levelView";
 import type { Selected } from "./marks";
 import { SceneOverlays } from "./overlays/SceneOverlays";
 import { SceneErrorBoundary } from "./overlays/SceneStates";
@@ -32,6 +38,7 @@ function selectedOf(editor: EditorState): Selected | null {
   if (editor.selectedWallId) return { type: "wall", id: editor.selectedWallId };
   if (editor.selectedRoomId) return { type: "room", id: editor.selectedRoomId };
   if (editor.selectedItemId) return { type: "item", id: editor.selectedItemId };
+  if (editor.selectedStairId) return { type: "stair", id: editor.selectedStairId };
   return null;
 }
 
@@ -42,27 +49,40 @@ function SceneView() {
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
-    const { model, editor, approvals } = store.getState();
+    const state = store.getState();
+    const { model, editor, approvals } = state;
     // throws when the browser cannot give the page a WebGL context; SceneErrorBoundary says so
     const viewport = createViewport(mount, model, editor.camera, {
       labels: labelsRef.current,
       style: editor.scene,
       selected: selectedOf(editor),
       approvals,
+      activeLevelId: activeLevelId(state),
+      levelsShown: levelsShown(),
     });
+    const offShown = onLevelsShown(() => viewport.setLevelsShown(levelsShown()));
     const unsubscribe = store.subscribe((s, prev) => {
       if (s.model !== prev.model) viewport.setModel(s.model);
+      const active = activeLevelId(s);
+      if (active !== activeLevelId(prev)) viewport.setActiveLevel(active);
       if (s.editor.camera !== prev.editor.camera) viewport.setCamera(s.editor.camera);
       if (s.editor.scene !== prev.editor.scene) viewport.setStyle(s.editor.scene);
       if (s.approvals !== prev.approvals) viewport.setPending(s.approvals);
       const e = s.editor;
       const p = prev.editor;
-      if (e.selectedWallId !== p.selectedWallId || e.selectedRoomId !== p.selectedRoomId || e.selectedItemId !== p.selectedItemId || s.model !== prev.model) {
+      if (
+        e.selectedWallId !== p.selectedWallId ||
+        e.selectedRoomId !== p.selectedRoomId ||
+        e.selectedItemId !== p.selectedItemId ||
+        e.selectedStairId !== p.selectedStairId ||
+        s.model !== prev.model
+      ) {
         viewport.setSelection(selectedOf(e));
       }
     });
     return () => {
       unsubscribe();
+      offShown();
       viewport.dispose();
     };
   }, []);
@@ -85,8 +105,8 @@ function SceneView() {
         placeInMiddle();
         return;
       }
-      const { selectedWallId, selectedRoomId, selectedItemId } = store.getState().editor;
-      if (!placing && !selectedWallId && !selectedRoomId && !selectedItemId) return;
+      const { selectedWallId, selectedRoomId, selectedItemId, selectedStairId } = store.getState().editor;
+      if (!placing && !selectedWallId && !selectedRoomId && !selectedItemId && !selectedStairId) return;
       e.preventDefault();
       if (placing) pageActions.setDrawMode("select");
       else deselectAll();

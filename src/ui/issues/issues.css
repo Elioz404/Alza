@@ -34,6 +34,13 @@
     transition: background-color var(--duration-fast) var(--ease-out);
   }
   .issue__text { flex: 1; min-width: 0; text-wrap: pretty; }
+  /* the level a finding is on, in a plan of several: a tag before the sentence */
+  .issue__level {
+    display: block;
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-secondary);
+  }
   .issue__icon { margin-top: var(--spacing-0-5); }
   .issue__icon--error { color: var(--color-icon-error); }
   .issue__icon--warning { color: var(--color-icon-warning); }

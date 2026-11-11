@@ -1,7 +1,8 @@
 /**
  * The canvas: the 2D editor or the 3D view, and above either one the overlay layer whose slots
  * the canvas, approvals and firstRun surfaces fill (zoom bottom left, hint bottom centre,
- * legend top right, the first-run state centred, plan marks over the drawing).
+ * legend top right, the levels top left, the first-run state centred, plan marks over the
+ * drawing).
  *
  * The 3D view, and three.js with it, is fetched the first time it is shown (LazyView); if that
  * fails, only this region says so and offers to try again (src/three/overlays/SceneStates.tsx,
@@ -45,6 +46,17 @@ const PlanMarks = deferred(
   overlayPlaceholder("The agent's request card", useReviewNeeded),
 );
 
+/** Whether the plan is showing: the level switcher is the plan's. */
+const useInPlanView = (): boolean => useAppStore((s) => s.editor.view === "2d");
+
+// The level switcher (and the line that says a level changed) arrives with the idle prefetch:
+// in Plan view it always has something to show, so a failed fetch says so there.
+const LevelSwitcher = deferred(
+  "the level switcher",
+  () => import("../canvas/LevelSwitcher").then((m) => m.LevelSwitcher),
+  overlayPlaceholder("The level switcher", useInPlanView),
+);
+
 const loadScene3D: ViewLoader = () => import("../../three/Scene3D").then((m) => ({ default: m.Scene3D }));
 
 export function CanvasRegion() {
@@ -56,6 +68,9 @@ export function CanvasRegion() {
       <div className="canvas__overlays">
         <div className="canvas__slot canvas__slot--marks">
           <PlanMarks />
+        </div>
+        <div className="canvas__slot canvas__slot--levels">
+          <LevelSwitcher />
         </div>
         <div className="canvas__slot canvas__slot--legend">
           <Legend />

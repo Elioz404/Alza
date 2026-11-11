@@ -15,12 +15,13 @@
  */
 
 import { z } from "zod";
-import { actions, store, type ActionResult } from "../model/store";
+import { actions, activeLevelId, store, type ActionResult } from "../model/store";
 import type { Actor } from "../model/commands";
-import { issuesOf } from "../model/issues";
+import { issuesOf, issuesOnLevel } from "../model/issues";
 import { catalogOf, kindName, type KindDef } from "../model/catalog";
-import { lookupItem, lookupOpening, lookupRoom, lookupWall, type Lookup } from "../model/resolve";
-import type { PlanModel } from "../model/types";
+import { lookupItem, lookupLevel, lookupOpening, lookupRoom, lookupStair, lookupWall, type Lookup } from "../model/resolve";
+import type { PlanModel, Stair } from "../model/types";
+import { levelContents, levelRemovalError, levelSlice, levelStats, levelsOf, rerouteText, stairGeometryIn, stairsRerouted } from "../model/levels";
 import { SUPPLIER_ORIGIN, SupplierError, getProduct, listProducts, type SupplierProduct } from "./supplier";
 import { dist, segLen } from "../model/geometry";
 import { bus, EVENTS } from "../model/sceneBus";
@@ -31,9 +32,17 @@ import {
   DOOR_DEFAULTS,
   FLOOR_FINISHES,
   FURNITURE_DIM,
+  LEVEL_DEFAULTS,
+  LEVEL_HEIGHT,
+  LEVEL_WALLS,
+  MAX_LEVELS,
   PART_MATERIALS,
   ROOM_SIZE,
+  SLAB_THICKNESS,
   SNAP,
+  STAIR,
+  STAIR_DEFAULTS,
+  STAIR_SHAPES,
   SUPPLIER,
   TEXT,
   WALL_DEFAULTS,
@@ -53,6 +62,8 @@ import {
   itemCategory,
   kindId,
   label,
+  levelHeight,
+  levelOrder,
   opacity,
   openingHeight,
   openingSill,
@@ -63,6 +74,11 @@ import {
   roomSize,
   rotation,
   signedLength,
+  stairGoing,
+  stairRiserCount,
+  stairShape,
+  stairTurn,
+  stairWidth,
   supplierSku,
   swingSide,
   text,
@@ -144,6 +160,66 @@ const notResolved = (found: Extract<Lookup<unknown>, { ok: false }>): ActionResu
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
+// ---------------------------------------------------------------------------- levels
+
+/** The optional `level` argument: a level's id or name. Left out, the human's active level. */
+const levelArg = ref.optional();
+/** How every tool that takes `level` to place something describes it. */
+const LEVEL_HELP =
+  '`level` (a level\'s id or name, e.g. "First floor") picks the storey; left out, it is the level the human is working on (list_levels).';
+/** How every tool that takes `level` to move something describes it; the sentence ends with what moves. */
+const MOVE_HELP = "`level` (a level's id or name) moves to that storey, at the same place on the plan,";
+
+/** A patch with the level to move to, when one was given. */
+const withLevel = <P extends object>(patch: P, level: string | undefined): P & { levelId?: string } =>
+  level === undefined ? patch : { ...patch, levelId: level };
+
+const round3 = (v: number): number => Number(v.toFixed(3));
+
+/** A stair as an agent reads it: what is stored, what follows from it, and where it goes. */
+function stairForAgent(model: PlanModel, stair: Stair) {
+  const g = stairGeometryIn(model, stair);
+  const at = model.levels.findIndex((l) => l.id === stair.levelId);
+  return {
+    ...stair,
+    reaches: model.levels[at + 1]?.id ?? null,
+    ...(g
+      ? {
+          risers: g.risers,
+          riserHeight: round3(g.riserHeight),
+          going: round3(g.going),
+          stepRule: round3(g.stepRule),
+          top: { x: round3(g.end.x), y: round3(g.end.y) },
+        }
+      : {}),
+  };
+}
+
+/** The plan's levels as an agent reads them: order, elevation, height, what stands on each. */
+function levelsForAgent(model: PlanModel) {
+  const active = activeLevelId(store.getState());
+  return levelsOf(model).map(({ level, index, elevation }) => ({
+    id: level.id,
+    name: level.name,
+    order: index,
+    elevation: round3(elevation),
+    height: level.height,
+    active: level.id === active,
+    ...levelStats(model, level.id),
+  }));
+}
+
+/** "Ground floor: 4 walls, 1 room, 2 items; First floor: …" — a plan's contents level by level. */
+const perLevel = (model: PlanModel): string =>
+  model.levels
+    .map((l) => {
+      const st = levelStats(model, l.id);
+      const stairs = st.stairs > 0 ? `, ${plural(st.stairs, "stair")}` : "";
+      return `${l.name}: ${plural(st.walls, "wall")}, ${plural(st.rooms, "room")}, ${plural(st.items, "item")}${stairs}`;
+    })
+    .join("; ");
+
+
 /**
  * The house rule for reproducing someone's plan. It travels with `get_underlay` because that is
  * the tool an agent reaches for the moment a drawing is involved: the default is FIDELITY —
@@ -166,15 +242,25 @@ export const TOOLS: ToolDef[] = [
     name: "get_model",
     title: "Read the whole plan",
     description:
-      "Read the full floor plan: walls (endpoints, thickness, height), openings (doors/windows with position along their wall), rooms (metric rects with labels), furniture, and plan name. All units are meters.",
-    input: noArgs,
+      "Read the full floor plan: its levels (storeys, from the ground up, each with its floor-to-floor height), walls (endpoints, thickness, height), openings (doors/windows with position along their wall), rooms (metric rects with labels), furniture, stairs, and plan name. Every wall, room, item and stair names its level in `levelId`; an opening is on its wall's level. Pass `level` (id or name) to read one level only. All units are meters.",
+    input: args({ level: levelArg }),
     // a plan that holds supplier products carries their names, which are the partner's text
     annotations: { readOnlyHint: true, untrustedContentHint: true },
-    execute: () => {
-      const m = store.getState().model;
+    execute: (i) => {
+      const plan = store.getState().model;
+      let m = plan;
+      let where = "";
+      if (i.level !== undefined) {
+        const found = lookupLevel(plan, i.level);
+        if (!found.ok) return notResolved(found);
+        m = levelSlice(plan, found.entity.id);
+        where = ` on ${found.entity.name}`;
+      }
+      const storeys = plan.levels.length > 1 && i.level === undefined ? ` ${plural(plan.levels.length, "level")}: ${perLevel(plan)}.` : "";
       return {
         ok: true,
-        summary: `Plan "${m.name}": ${m.walls.length} walls, ${m.openings.length} openings, ${m.rooms.length} rooms, ${m.items.length} items.`,
+        summary: `Plan "${m.name}"${where}: ${m.walls.length} walls, ${m.openings.length} openings, ${m.rooms.length} rooms, ${m.items.length} items.${storeys}`,
+        levels: levelsForAgent(plan),
         ...modelForAgent(m),
       };
     },
@@ -183,16 +269,20 @@ export const TOOLS: ToolDef[] = [
     name: "get_issues",
     title: "Check the plan for problems",
     description:
-      "Run the constraint checker over the plan. Detects: too-short walls, loose ends, collinear overlaps, mid-span crossings, openings overflowing their wall or overlapping each other, walls ending inside an opening, floating/overlapping/doorless rooms, furniture crossing walls, blocking doors/windows, or colliding. Use it after editing to self-repair.",
-    input: noArgs,
+      "Run the constraint checker over the plan, level by level. Detects: too-short walls, loose ends, collinear overlaps, mid-span crossings, openings overflowing their wall or overlapping each other, walls ending inside an opening, floating/overlapping/doorless rooms, furniture crossing walls, blocking doors/windows, or colliding; and for stairs: risers or goings out of range, an uncomfortable 2 × riser + going, a stair on the top level (nothing to reach), too little headroom under the slab above, walls in a stair, over its stairwell or blocking its landings, a stairwell outside every room above, and furniture on a stair or over a stairwell. Pass `level` (id or name) for one level's issues only. Use it after editing to self-repair.",
+    input: args({ level: levelArg }),
     annotations: { readOnlyHint: true },
-    execute: () => {
-      const issues = issuesOf(store.getState().model);
-      return {
-        ok: true,
-        summary: issues.length === 0 ? "0 issues — the plan is clean." : `${issues.length} issue(s) found.`,
-        issues,
-      };
+    execute: (i) => {
+      const model = store.getState().model;
+      if (i.level === undefined) {
+        const issues = issuesOf(model);
+        return { ok: true, summary: issues.length === 0 ? "0 issues — the plan is clean." : `${issues.length} issue(s) found.`, issues };
+      }
+      const found = lookupLevel(model, i.level);
+      if (!found.ok) return notResolved(found);
+      const issues = issuesOnLevel(model, found.entity.id);
+      const where = `on ${found.entity.name}`;
+      return { ok: true, summary: issues.length === 0 ? `0 issues ${where}.` : `${issues.length} issue(s) found ${where}.`, levelId: found.entity.id, issues };
     },
   }),
   defineTool({
@@ -217,12 +307,14 @@ export const TOOLS: ToolDef[] = [
     name: "get_editor_state",
     title: "What the human is doing right now",
     description:
-      "Read what the human is doing right now: 2D/3D view, camera mode, selected wall/item/room, current draw mode.",
+      "Read what the human is doing right now: 2D/3D view, camera mode, the level they are working on (activeLevelId), selected wall/item/room/stair, current draw mode.",
     input: noArgs,
     annotations: { readOnlyHint: true },
     execute: () => {
-      const e = store.getState().editor;
-      return { ok: true, summary: `View ${e.view}, camera ${e.camera}, selected wall: ${e.selectedWallId ?? "none"}.`, editor: e };
+      const state = store.getState();
+      const e = { ...state.editor, activeLevelId: activeLevelId(state) };
+      const storey = state.model.levels.length > 1 ? `, on ${state.model.levels.find((l) => l.id === e.activeLevelId)?.name ?? e.activeLevelId}` : "";
+      return { ok: true, summary: `View ${e.view}, camera ${e.camera}${storey}, selected wall: ${e.selectedWallId ?? "none"}.`, editor: e };
     },
   }),
   defineTool({
@@ -329,7 +421,7 @@ export const TOOLS: ToolDef[] = [
     name: "add_wall",
     title: "Add a wall",
     description:
-      `Add a wall segment from (ax,ay) to (bx,by) in meters. Coordinates snap to a ${snapCm} cm grid. Default thickness ${WALL_DEFAULTS.thickness} m (use 0.1 for interior), height ${WALL_DEFAULTS.height} m.`,
+      `Add a wall segment from (ax,ay) to (bx,by) in meters. Coordinates snap to a ${snapCm} cm grid. Default thickness ${WALL_DEFAULTS.thickness} m (use 0.1 for interior), height ${WALL_DEFAULTS.height} m. ${LEVEL_HELP}`,
     input: args({
       ax: coord,
       ay: coord,
@@ -337,13 +429,14 @@ export const TOOLS: ToolDef[] = [
       by: coord,
       thickness: wallThickness.optional(),
       height: wallHeight.optional(),
+      level: levelArg,
     }),
     execute: (i, { dispatch }) => dispatch({ type: "add_wall", ...i }),
   }),
   defineTool({
     name: "edit_wall",
     title: "Edit a wall",
-    description: `Move endpoints or change thickness/height of an existing wall (by id). Endpoints snap to ${snapCm} cm.`,
+    description: `Move endpoints or change thickness/height of an existing wall (by id). Endpoints snap to ${snapCm} cm. ${MOVE_HELP} the wall, with its doors and windows.`,
     input: args({
       id: ref,
       ax: coord.optional(),
@@ -352,9 +445,10 @@ export const TOOLS: ToolDef[] = [
       by: coord.optional(),
       thickness: wallThickness.optional(),
       height: wallHeight.optional(),
+      level: levelArg,
     }),
-    // the lookup key is split off; only the geometry goes into the patch
-    execute: ({ id, ...patch }, { dispatch }) => dispatch({ type: "edit_wall", id, patch }),
+    // the lookup key is split off; only the geometry (and the level to move to) goes into the patch
+    execute: ({ id, level, ...patch }, { dispatch }) => dispatch({ type: "edit_wall", id, patch: withLevel(patch, level) }),
   }),
   defineTool({
     name: "remove_wall",
@@ -454,14 +548,14 @@ export const TOOLS: ToolDef[] = [
     name: "add_room",
     title: "Add a room",
     description:
-      `Add a room: a metric rectangle (x, y = top-left corner, w, h in meters, at least ${ROOM_SIZE.min} m each) with a label and floor finish (${FLOOR_FINISHES.join(" | ")}; default ${DEFAULT_FLOOR}).`,
-    input: args({ x: coord, y: coord, w: roomSize, h: roomSize, label, floor: floorFinish.optional() }),
+      `Add a room: a metric rectangle (x, y = top-left corner, w, h in meters, at least ${ROOM_SIZE.min} m each) with a label and floor finish (${FLOOR_FINISHES.join(" | ")}; default ${DEFAULT_FLOOR}). ${LEVEL_HELP}`,
+    input: args({ x: coord, y: coord, w: roomSize, h: roomSize, label, floor: floorFinish.optional(), level: levelArg }),
     execute: (i, { dispatch }) => dispatch({ type: "add_room", ...i }),
   }),
   defineTool({
     name: "update_room",
     title: "Update a room",
-    description: "Update a room by id or label (e.g. \"bedroom\"): move, resize, relabel, or change floor finish.",
+    description: `Update a room by id or label (e.g. "bedroom"): move, resize, relabel, or change floor finish. ${MOVE_HELP} the room.`,
     input: args({
       id: ref,
       x: coord.optional(),
@@ -470,10 +564,11 @@ export const TOOLS: ToolDef[] = [
       h: roomSize.optional(),
       label: label.optional(),
       floor: floorFinish.optional(),
+      level: levelArg,
     }),
     // `id` addresses the room and is never part of the patch: passing the whole input let it
     // overwrite the room's real id with whatever label the agent used to find it
-    execute: ({ id, ...patch }, { dispatch }) => dispatch({ type: "update_room", id, patch }),
+    execute: ({ id, level, ...patch }, { dispatch }) => dispatch({ type: "update_room", id, patch: withLevel(patch, level) }),
   }),
   defineTool({
     name: "remove_room",
@@ -502,8 +597,8 @@ export const TOOLS: ToolDef[] = [
     name: "place_item",
     title: "Place furniture",
     description:
-      "Place furniture from the catalog at (x, y) = center in meters. rotation (degrees, counterclockwise) sets which way the piece FACES: 0 = faces +y (down/south on the plan), 90 = faces +x (right/east), 180 = faces -y (up/north), 270 = faces -x (left/west). The back of a sofa, bed headboard, wardrobe or counter is opposite the facing direction — so a sofa against the SOUTH wall needs rotation 180, and one against the WEST wall needs rotation 90. To sit a piece flush against a wall, offset its center by depth/2 from the wall FACE (centerline ± thickness/2), not from the centerline. Use get_item_catalog for footprints; get_issues reports crossings and blocked doors.",
-    input: args({ kind: kindId, x: coord, y: coord, rotation: rotation.optional() }),
+      "Place furniture from the catalog at (x, y) = center in meters. rotation (degrees, counterclockwise) sets which way the piece FACES: 0 = faces +y (down/south on the plan), 90 = faces +x (right/east), 180 = faces -y (up/north), 270 = faces -x (left/west). The back of a sofa, bed headboard, wardrobe or counter is opposite the facing direction — so a sofa against the SOUTH wall needs rotation 180, and one against the WEST wall needs rotation 90. To sit a piece flush against a wall, offset its center by depth/2 from the wall FACE (centerline ± thickness/2), not from the centerline. Use get_item_catalog for footprints; get_issues reports crossings and blocked doors. " + LEVEL_HELP,
+    input: args({ kind: kindId, x: coord, y: coord, rotation: rotation.optional(), level: levelArg }),
     execute: (i, { dispatch }) => dispatch({ type: "place_item", ...i }),
   }),
   defineTool({
@@ -530,8 +625,8 @@ export const TOOLS: ToolDef[] = [
   defineTool({
     name: "move_item",
     title: "Move or rotate furniture",
-    description: "Move or rotate a furniture item by id or kind (e.g. \"sofa\"). A kind must name exactly one item in the plan; if there are several, pass the id. Same rotation convention as place_item: 0 faces +y, 90 faces +x, 180 faces -y, 270 faces -x.",
-    input: args({ id: ref, x: coord.optional(), y: coord.optional(), rotation: rotation.optional() }),
+    description: "Move or rotate a furniture item by id or kind (e.g. \"sofa\"). A kind must name exactly one item in the plan; if there are several, pass the id. Same rotation convention as place_item: 0 faces +y, 90 faces +x, 180 faces -y, 270 faces -x. " + MOVE_HELP + " the piece.",
+    input: args({ id: ref, x: coord.optional(), y: coord.optional(), rotation: rotation.optional(), level: levelArg }),
     execute: (i, { dispatch }) => dispatch({ type: "move_item", ...i }),
   }),
   defineTool({
@@ -557,6 +652,150 @@ export const TOOLS: ToolDef[] = [
     execute: ({ id }, { dispatch }) => dispatch({ type: "remove_item", id }),
   }),
 
+  // ------------------------------------------------------------------ levels
+  defineTool({
+    name: "list_levels",
+    title: "List the storeys",
+    description:
+      "List the plan's levels (storeys) from the ground up: id, name, order (0 = ground), elevation of its floor and floor-to-floor height in metres, whether it is the level the human is working on, and what stands on it (walls, doors, windows, rooms, items, stairs, room area in m²). Also lists every stair with its derived risers, riser height, going, the point where it arrives and the level it reaches.",
+    input: noArgs,
+    annotations: { readOnlyHint: true },
+    execute: () => {
+      const model = store.getState().model;
+      const levels = levelsForAgent(model);
+      const active = levels.find((l) => l.active) ?? levels[0];
+      return {
+        ok: true,
+        summary: `${plural(levels.length, "level")}; the human is working on ${active.id}. ${perLevel(model)}.`,
+        levels,
+        stairs: model.stairs.map((s) => stairForAgent(model, s)),
+      };
+    },
+  }),
+  defineTool({
+    name: "add_level",
+    title: "Add a storey",
+    description:
+      `Add a level (storey) on top of the plan's highest one. name defaults to its place ("First floor", "Second floor" …), or the next such name no level has yet; a name must be one no other level has, so it always names one level; height is its floor-to-floor height in metres (${LEVEL_HEIGHT.min}-${LEVEL_HEIGHT.max}, default ${LEVEL_DEFAULTS.height}, which fits a ${WALL_DEFAULTS.height} m wall under the slab). A plan holds at most ${MAX_LEVELS}. The new level starts empty and the human stays where they are: pass its id as \`level\` to the drawing tools, or call set_active_level.`,
+    input: args({ name: label.optional(), height: levelHeight.optional() }),
+    execute: (i, { dispatch }) => dispatch({ type: "add_level", ...i }),
+  }),
+  defineTool({
+    name: "update_level",
+    title: "Change a storey",
+    description:
+      `Change a level, by id or name: rename it (a name no other level has), change its floor-to-floor height (every level above it moves up or down, and the stairs that climb it re-derive their risers), or move it to another place in the stack with \`order\` (0 = ground). With a new height, its walls that met the slab over it (${SLAB_THICKNESS} m under the next floor) follow it to the new slab underside in the same undo step; pass walls: "keep" to leave every wall's height as it is. get_issues reports a wall under a level above that stops short of its slab or runs through it.`,
+    input: args({ id: ref, name: label.optional(), height: levelHeight.optional(), order: levelOrder.optional(), walls: z.enum(LEVEL_WALLS).optional() }),
+    execute: ({ id, ...patch }, { dispatch }) => dispatch({ type: "update_level", id, patch }),
+  }),
+  defineTool({
+    name: "remove_level",
+    title: "Remove a storey",
+    description:
+      "Remove a level (by id or name) and everything on it: its walls with their doors and windows, its rooms, its furniture and the stairs that start on it. The plan's last level cannot be removed. Needs the human's approval.",
+    input: args({ id: ref }),
+    annotations: { destructiveHint: true },
+    resolve: ({ id }, { model }) => {
+      const found = lookupLevel(model, id);
+      if (!found.ok) return notResolved(found);
+      const level = found.entity;
+      // a request that could never run is refused here, before the human is asked to approve it
+      const refused = levelRemovalError(model, level);
+      if (refused) return { ok: false, summary: refused };
+      const c = levelContents(model, level.id);
+      // the stairs that climb to it from below stay, and arrive on the next level up instead
+      const rerouted = stairsRerouted(model, level.id);
+      const contents = [
+        plural(c.walls.length, "wall"),
+        plural(c.openings.length, "opening"),
+        plural(c.rooms.length, "room"),
+        plural(c.items.length, "item"),
+        plural(c.stairs.length, "stair"),
+      ];
+      return {
+        ok: true,
+        input: { id: level.id },
+        request: `Remove level ${level.id}`,
+        targets: [{ type: "level", id: level.id, label: level.name }],
+        effects: [`Also removes everything on it: ${contents.join(", ")}.`, ...rerouted.map((r) => `${rerouteText(model, r, "ahead")}.`)],
+        // the level, all it holds and the stairs it reroutes: a change to any of them while the request waits is a different request
+        entities: [level, ...c.walls, ...c.openings, ...c.rooms, ...c.items, ...c.stairs, ...rerouted.map((r) => r.stair)],
+      };
+    },
+    execute: ({ id }, { dispatch }) => dispatch({ type: "remove_level", id }),
+  }),
+  defineTool({
+    name: "set_active_level",
+    title: "Switch the storey being worked on",
+    description:
+      "Make a level (by id or name) the one the human sees and works on: the 2D plan shows it, with the level below as a faint guide, and new walls, rooms, furniture and stairs go on it when no `level` is given. A view setting, not an edit: nothing to undo.",
+    input: args({ id: ref }),
+    execute: (i) => actions.setActiveLevel(i.id),
+  }),
+
+  // ------------------------------------------------------------------ stairs
+  defineTool({
+    name: "add_stair",
+    title: "Add a stair",
+    description:
+      `Add a stair that climbs from a level to the one above it; the upper floor gets a stairwell opening over it automatically. (x, y) is the centre of the BOTTOM riser, in metres; rotation is the direction it climbs, with place_item's convention (0 = toward +y, 90 = +x, 180 = -y, 270 = -x). width is the clear flight width (${STAIR.width.min}-${STAIR.width.max} m, default ${STAIR.defaultWidth}). shape: ${STAIR_SHAPES.map((x) => `"${x}"`).join(" | ")} (default "${STAIR_DEFAULTS.shape}"). An "l" stair climbs a first flight to a square landing and turns \`turn\` ("left" | "right", as seen climbing; default "${STAIR_DEFAULTS.turn}"); \`split\` is the number of risers up to the landing (default half). By default the risers are the fewest that keep each at most ${STAIR.riser.max} m over the level's floor-to-floor height, and the going follows 2 × riser + going = ${STAIR.stepRule.target} m (held to ${STAIR.tread.min}-${STAIR.tread.max} m); set \`risers\` or \`tread\` to copy a drawn stair, and get_issues reports whatever falls outside the rules. The result reports the risers, riser height, going and run. Keep ${STAIR.exitDepth} m of floor clear in front of the bottom riser and past the top one. ${LEVEL_HELP}`,
+    input: args({
+      x: coord,
+      y: coord,
+      rotation: rotation.optional(),
+      width: stairWidth.optional(),
+      shape: stairShape.optional(),
+      turn: stairTurn.optional(),
+      split: stairRiserCount.optional(),
+      risers: stairRiserCount.optional(),
+      tread: stairGoing.optional(),
+      level: levelArg,
+    }),
+    execute: (spec, { dispatch }) => dispatch({ type: "add_stair", spec }),
+  }),
+  defineTool({
+    name: "update_stair",
+    title: "Change a stair",
+    description:
+      `Move, turn, widen or reshape a stair by id: any of x, y (the bottom riser's centre), rotation, width, shape, turn, split, risers, tread, as add_stair takes them. ${MOVE_HELP} the stair. Its risers and going re-derive from its level's height unless they are set.`,
+    input: args({
+      id: ref,
+      x: coord.optional(),
+      y: coord.optional(),
+      rotation: rotation.optional(),
+      width: stairWidth.optional(),
+      shape: stairShape.optional(),
+      turn: stairTurn.optional(),
+      split: stairRiserCount.optional(),
+      risers: stairRiserCount.optional(),
+      tread: stairGoing.optional(),
+      level: levelArg,
+    }),
+    execute: ({ id, level, ...patch }, { dispatch }) => dispatch({ type: "update_stair", id, patch: withLevel(patch, level) }),
+  }),
+  defineTool({
+    name: "remove_stair",
+    title: "Remove a stair",
+    description: "Remove a stair by id; the stairwell it opens in the floor above closes. Needs the human's approval.",
+    input: args({ id: ref }),
+    annotations: { destructiveHint: true },
+    resolve: ({ id }, { model }) => {
+      const found = lookupStair(model, id);
+      if (!found.ok) return notResolved(found);
+      const stair = found.entity;
+      const g = stairGeometryIn(model, stair);
+      return {
+        ok: true,
+        input: { id: stair.id },
+        request: `Remove stair ${stair.id}`,
+        targets: [{ type: "stair", id: stair.id, label: `${stair.shape === "l" ? "L-shaped" : "straight"}, ${stair.width.toFixed(2)} m wide${g ? `, ${g.risers} risers` : ""}` }],
+        effects: ["The stairwell it opens in the floor above closes."],
+        entities: [stair],
+      };
+    },
+    execute: ({ id }, { dispatch }) => dispatch({ type: "remove_stair", id }),
+  }),
+
   // ------------------------------------------------------------------ model / view
   defineTool({
     name: "set_plan_name",
@@ -580,6 +819,8 @@ export const TOOLS: ToolDef[] = [
         plural(notes.length, "note"),
       ];
       const effects = [`Erases ${contents.join(", ")}.`];
+      if (model.stairs.length > 0) effects.push(`Erases the plan's ${plural(model.stairs.length, "stair")}.`);
+      if (model.levels.length > 1) effects.push(`Leaves one empty ground level in place of its ${model.levels.length} levels.`);
       if (model.kinds.length > 0) effects.push(`Drops the ${plural(model.kinds.length, "kind")} this plan added to the catalogue.`);
       if (model.underlay) effects.push("Removes the blueprint underlay.");
       return {
@@ -681,8 +922,8 @@ export const TOOLS: ToolDef[] = [
     name: "place_supplier_product",
     title: "Place a supplier product",
     description:
-      "Buy-in-place: fetch one product from the partner origin by sku, add it to this plan's catalogue at the supplier's REAL dimensions, and place it at (x, y) = centre in metres with the usual rotation convention. The constraint checker then treats it like any other piece, so a sofa that does not fit is caught before anyone orders it. The product's name, and any error text the partner sends back, are the partner's text and are returned under `untrusted`.",
-    input: args({ sku: supplierSku, x: coord, y: coord, rotation: rotation.optional() }),
+      "Buy-in-place: fetch one product from the partner origin by sku, add it to this plan's catalogue at the supplier's REAL dimensions, and place it at (x, y) = centre in metres with the usual rotation convention. The constraint checker then treats it like any other piece, so a sofa that does not fit is caught before anyone orders it. The product's name, and any error text the partner sends back, are the partner's text and are returned under `untrusted`. " + LEVEL_HELP,
+    input: args({ sku: supplierSku, x: coord, y: coord, rotation: rotation.optional(), level: levelArg }),
     annotations: { untrustedContentHint: true },
     execute: async ({ sku, ...at }, { dispatch }) => {
       let product: SupplierProduct | null;

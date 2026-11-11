@@ -11,6 +11,7 @@
 import "./canvas.css";
 import { Kbd } from "../primitives";
 import { useAppStore } from "../useAppStore";
+import { activeLevelId } from "../../model/store";
 import { useCanvas } from "../../editor/canvasState";
 import { hintFor, type HintPart } from "./hints";
 
@@ -19,11 +20,13 @@ const part = (p: HintPart, i: number) => (typeof p === "string" ? <span key={i}>
 export function HintBar() {
   const editor = useAppStore((s) => s.editor);
   const model = useAppStore((s) => s.model);
+  const levelId = useAppStore(activeLevelId);
   const tool = useCanvas((s) => s.tool);
   const spacePan = useCanvas((s) => s.spacePan);
   const openingFits = useCanvas((s) => s.openingFits);
+  const stairRotation = useCanvas((s) => s.stairRotation);
   if (editor.view !== "2d") return null;
-  const hint = hintFor({ editor, model, tool, spacePan, openingFits });
+  const hint = hintFor({ editor, model, levelId, tool, spacePan, openingFits, stairRotation });
 
   return (
     <div className="hint" role="status" aria-live="polite">

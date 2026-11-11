@@ -23,15 +23,15 @@ import { emptyModel, type PlanModel } from "../src/model/types";
 const broken = (): PlanModel => ({
   ...emptyModel(),
   walls: [
-    { id: "w1", ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.15, height: 2.7 },
-    { id: "stub", ax: 6, ay: 6, bx: 6.1, by: 6, thickness: 0.15, height: 2.7 },
+    { id: "w1", levelId: "level_ground", ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.15, height: 2.7 },
+    { id: "stub", levelId: "level_ground", ax: 6, ay: 6, bx: 6.1, by: 6, thickness: 0.15, height: 2.7 },
   ],
   openings: [{ id: "ghost_door", kind: "door", wallId: "missing", t: 0.5, width: 0.9, sill: 0, height: 2.1 }],
-  rooms: [{ id: "closet", x: 0, y: 1, w: 0.3, h: 2, label: "Closet", floor: "oak" }],
+  rooms: [{ id: "closet", levelId: "level_ground", x: 0, y: 1, w: 0.3, h: 2, label: "Closet", floor: "oak" }],
   items: [
-    { id: "a", kind: "sofa", x: 2, y: 0, rotation: 0 },
-    { id: "b", kind: "sofa", x: 2.2, y: 0.1, rotation: 0 },
-    { id: "c", kind: "no_such_kind", x: 9, y: 9, rotation: 0 },
+    { id: "a", levelId: "level_ground", kind: "sofa", x: 2, y: 0, rotation: 0 },
+    { id: "b", levelId: "level_ground", kind: "sofa", x: 2.2, y: 0.1, rotation: 0 },
+    { id: "c", levelId: "level_ground", kind: "no_such_kind", x: 9, y: 9, rotation: 0 },
   ],
 });
 
@@ -72,8 +72,8 @@ describe("rules", () => {
       ...emptyModel(),
       kinds: [freezeKind({ kind: "island", label: "Island", w: 3, d: 1, h: 0.9, color: "#999999", category: "kitchen", source: "custom" })],
       items: [
-        { id: "i1", kind: "island", x: 0, y: 0, rotation: 0 },
-        { id: "i2", kind: "plant", x: 1.3, y: 0, rotation: 0 },
+        { id: "i1", levelId: "level_ground", kind: "island", x: 0, y: 0, rotation: 0 },
+        { id: "i2", levelId: "level_ground", kind: "plant", x: 1.3, y: 0, rotation: 0 },
       ],
     };
     // 1.3 m from the island's centre is inside its 3 m width: only its own definition says so

@@ -19,7 +19,7 @@ import { NoteComposer } from "../notes/NoteComposer";
 import { deferred, regionPlaceholder } from "../deferred";
 import { useAppStore } from "../useAppStore";
 import { PANEL_TABS, useShell, type PanelTab } from "./ShellContext";
-import { SIDE_PANEL_ID, panelBodyId, panelTabId } from "./ids";
+import { SCROLL_REGION_ATTR, SIDE_PANEL_ID, panelBodyId, panelTabId } from "./ids";
 
 // The page opens on Properties: the other tabs' bodies and Activity's details arrive with the
 // idle prefetch after the first paint (src/ui/deferred.tsx), each in a box the panel already
@@ -51,7 +51,8 @@ function Activity() {
   const waiting = useAppStore((s) => s.approvals.length);
   const listId = useId();
   return (
-    <section className="activity" data-open={activityOpen} aria-label="Activity">
+    // the feed scrolls on its own: Page Up and Page Down page it, from its toggle or its links
+    <section className="activity" data-open={activityOpen} aria-label="Activity" {...{ [SCROLL_REGION_ATTR]: "" }}>
       <h2 className="activity__head">
         <button
           type="button"

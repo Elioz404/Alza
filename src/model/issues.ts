@@ -29,7 +29,9 @@ import {
   type Pt,
 } from "./geometry";
 import { catalogOf, kindName, type Catalog } from "./catalog";
-import { ROOM_SIZE, WALL_MIN_LENGTH } from "./limits";
+import { ROOM_SIZE, SLAB_THICKNESS, STAIR, WALL_MIN_LENGTH, WALL_SLAB_TOLERANCE } from "./limits";
+import { levelAbove, levelInfo, levelSlice, levelsOf, slabUnderside, stairwellsOf, type LevelInfo, type Stairwell } from "./levels";
+import { stairGeometry } from "./stairs";
 
 const ENDPOINT_SNAP = 0.08; // endpoints closer than this count as connected
 const DOOR_CLEAR = 0.1; // furniture must keep this margin in front of openings
@@ -93,9 +95,19 @@ export interface PlacedItem {
   readonly box: Box;
 }
 
-/** What every rule reads, computed once per check. */
+/** What every rule reads, computed once per level checked. */
 export interface CheckContext {
+  /** the level being checked, as the plan sees it: its own walls, openings, rooms, items, stairs */
   readonly model: PlanModel;
+  /** the whole plan, every level of it */
+  readonly plan: PlanModel;
+  /** the level being checked, and the one above it (where its stairs arrive), if any */
+  readonly level: LevelInfo;
+  readonly above: LevelInfo | undefined;
+  /** the stairs standing on this level, with their geometry */
+  readonly stairs: readonly Stairwell[];
+  /** the stairs climbing to this level from the one below: the stairwells in its floor */
+  readonly wells: readonly Stairwell[];
   readonly wallById: ReadonlyMap<string, Wall>;
   readonly catalog: Catalog;
   readonly walls: readonly WallShape[];
@@ -119,7 +131,15 @@ function clearanceOf(wall: Wall, o: Opening, center: Pt): ORect {
   };
 }
 
-export function checkContext(model: PlanModel): CheckContext {
+/**
+ * The context for checking `model` as level `levelId` of `plan`. Called with the plan alone it
+ * checks the plan's first level as if it held everything — which, for a one-storey plan, it does.
+ */
+export function checkContext(model: PlanModel, plan: PlanModel = model, levelId: string = plan.levels[0].id): CheckContext {
+  const level = levelInfo(plan, levelId) ?? levelsOf(plan)[0];
+  const above = levelAbove(plan, level.level.id);
+  const stairs = model.stairs.map((stair) => ({ stair, geometry: stairGeometry(stair, level.level.height) }));
+  const wells = stairwellsOf(plan, level.level.id);
   const wallById = new Map(model.walls.map((w) => [w.id, w]));
   const catalog = catalogOf(model);
   const walls = model.walls.map((wall): WallShape => {
@@ -161,7 +181,7 @@ export function checkContext(model: PlanModel): CheckContext {
       placed.push({ item, def, rect, box: boxOf(rectCorners(rect)) });
     }
   }
-  return { model, wallById, catalog, walls, hosted, hostedOn, placed };
+  return { model, plan, level, above, stairs, wells, wallById, catalog, walls, hosted, hostedOn, placed };
 }
 
 /** The four edges of a room, clockwise from its top-left corner. */
@@ -248,6 +268,7 @@ export const wallLooseEnds: Rule = ({ walls }) => {
 
 // ---------------------------------------------------------------------------- openings
 
+/** An opening whose wall is gone (levelContents counts it on the plan's first level). */
 export const openingOrphan: Rule = ({ model, wallById }) =>
   model.openings
     .filter((o) => !wallById.has(o.wallId))
@@ -482,6 +503,221 @@ export const itemOutsideRooms: Rule = ({ model: { rooms }, placed }) => {
     }));
 };
 
+// ---------------------------------------------------------------------------- stairs
+// A stair is checked on the level it stands on (its steps, its foot) and its stairwell on the
+// level it arrives on (the void, what stands over it, the floor past its top), so every issue is
+// reported with the level whose entities it names.
+
+const round3 = (v: number): string => v.toFixed(3);
+
+/** Does any of `rects` overlap `other` (touching does not count)? */
+const anyOverlap = (rects: readonly ORect[], other: ORect, eps = 1e-9): boolean => rects.some((r) => satRectRect(r, other, eps));
+
+/** Does wall `s` cross any of `rects`? A wall merely touching (2 cm) is a wall the stair stands against. */
+const wallCrosses = (s: WallShape, rects: readonly ORect[], box: Box): boolean =>
+  !boxesApart(s.box, box) && rects.some((r) => satRectWall(r, s.wall, 0.02));
+
+/** A stair on the top level climbs to nothing. */
+export const stairNoUpperLevel: Rule = ({ stairs, above }) =>
+  above
+    ? []
+    : stairs.map(({ stair }): Issue => ({
+        severity: "error",
+        code: "stair_no_upper_level",
+        message: `Stair ${stair.id} is on the top level: there is no level for it to reach. Add one above it, or move it down.`,
+        refs: [stair.id],
+      }));
+
+/** Risers and goings inside their ranges, and the two in proportion (2R + G). */
+export const stairDimensions: Rule = ({ stairs }) =>
+  stairs.flatMap(({ stair, geometry: g }) => {
+    const issues: Issue[] = [];
+    if (g.riserHeight < STAIR.riser.min - 1e-9 || g.riserHeight > STAIR.riser.max + 1e-9) {
+      issues.push({
+        severity: "error",
+        code: "stair_riser_out_of_range",
+        message: `Stair ${stair.id} has ${g.risers} risers of ${round3(g.riserHeight)} m (allowed ${STAIR.riser.min}-${STAIR.riser.max} m).`,
+        refs: [stair.id],
+      });
+    }
+    if (g.going < STAIR.tread.min - 1e-9 || g.going > STAIR.tread.max + 1e-9) {
+      issues.push({
+        severity: "error",
+        code: "stair_tread_out_of_range",
+        message: `Stair ${stair.id} has a going of ${round3(g.going)} m (allowed ${STAIR.tread.min}-${STAIR.tread.max} m).`,
+        refs: [stair.id],
+      });
+    }
+    const { min, max } = STAIR.stepRule;
+    if (g.stepRule < min - 1e-9 || g.stepRule > max + 1e-9) {
+      issues.push({
+        severity: "warning",
+        code: "stair_step_rule",
+        message: `Stair ${stair.id}: 2 × riser + going is ${round3(g.stepRule)} m, outside the comfortable ${min}-${max} m.`,
+        refs: [stair.id],
+      });
+    }
+    return issues;
+  });
+
+/** The slab above must leave a person's height over the first tread, at the stairwell's edge. */
+export const stairHeadroom: Rule = ({ stairs, above }) =>
+  above
+    ? stairs
+        .filter(({ geometry: g }) => g.headroom < STAIR.headroom - 1e-9)
+        .map(({ stair, geometry: g }): Issue => ({
+          severity: "error",
+          code: "stair_headroom",
+          message: `Stair ${stair.id} leaves ${g.headroom.toFixed(2)} m of headroom under the slab above (min ${STAIR.headroom} m).`,
+          refs: [stair.id],
+        }))
+    : [];
+
+/** A wall of the stair's own level standing in its flights or its landing. */
+export const stairCrossesWall: Rule = ({ stairs, walls }) =>
+  stairs.flatMap(({ stair, geometry: g }) =>
+    walls
+      .filter((s) => wallCrosses(s, g.footprint, g.box))
+      .map(({ wall }): Issue => ({
+        severity: "error",
+        code: "stair_crosses_wall",
+        message: `Wall ${wall.id} stands in stair ${stair.id}.`,
+        refs: [stair.id, wall.id],
+      })),
+  );
+
+/**
+ * The floor in front of the bottom riser (on the stair's level) and past the top one (on the
+ * level it arrives on) must be clear of walls: you have to be able to step on and off.
+ */
+export const stairExitBlocked: Rule = ({ stairs, wells, walls }) => {
+  const ends = [
+    ...stairs.map(({ stair, geometry }) => ({ stair, exit: geometry.bottomExit, where: "at its foot" })),
+    ...wells.map(({ stair, geometry }) => ({ stair, exit: geometry.topExit, where: "at its head" })),
+  ];
+  return ends.flatMap(({ stair, exit, where }) => {
+    const box = boxOf(rectCorners(exit));
+    return walls
+      .filter((s) => wallCrosses(s, [exit], box))
+      .map(({ wall }): Issue => ({
+        severity: "error",
+        code: "stair_landing_blocked",
+        message: `Wall ${wall.id} blocks the landing of stair ${stair.id} ${where}.`,
+        refs: [wall.id, stair.id],
+      }));
+  });
+};
+
+/** A wall of the upper level standing over the stairwell would stand on nothing, in the way of the stair. */
+export const stairwellBlocked: Rule = ({ wells, walls }) =>
+  wells.flatMap(({ stair, geometry: g }) =>
+    walls
+      .filter((s) => wallCrosses(s, g.footprint, g.box))
+      .map(({ wall }): Issue => ({
+        severity: "error",
+        code: "stairwell_blocked",
+        message: `Wall ${wall.id} stands over the stairwell of stair ${stair.id}.`,
+        refs: [wall.id, stair.id],
+      })),
+  );
+
+/** Once the upper level has rooms, the stairwell should open into one of them. */
+export const stairwellOutsideRoom: Rule = ({ wells, model: { rooms } }) => {
+  if (rooms.length === 0) return [];
+  const tol = 0.05;
+  return wells
+    .filter(({ geometry: g }) => {
+      const corners = g.footprint.flatMap(rectCorners);
+      return !rooms.some((r) => corners.every((p) => p.x >= r.x - tol && p.x <= r.x + r.w + tol && p.y >= r.y - tol && p.y <= r.y + r.h + tol));
+    })
+    .map(({ stair }): Issue => ({
+      severity: "warning",
+      code: "stairwell_outside_room",
+      message: `The stairwell of stair ${stair.id} is not inside any room on the level it reaches.`,
+      refs: [stair.id],
+    }));
+};
+
+/** Furniture standing on a stair's flights or landing. */
+export const itemOnStair: Rule = ({ stairs, placed }) =>
+  stairs.flatMap(({ stair, geometry: g }) =>
+    placed
+      .filter((p) => !boxesApart(p.box, g.box) && anyOverlap(g.footprint, p.rect, 0.01))
+      .map(({ item, def }): Issue => ({
+        severity: "error",
+        code: "item_on_stair",
+        message: `${kindName(def)} stands on stair ${stair.id}.`,
+        refs: [item.id, stair.id],
+      })),
+  );
+
+/** Furniture on the upper level standing over the stairwell: there is no floor under it. */
+export const itemOverStairwell: Rule = ({ wells, placed }) =>
+  wells.flatMap(({ stair, geometry: g }) =>
+    placed
+      .filter((p) => !boxesApart(p.box, g.box) && anyOverlap(g.footprint, p.rect, 0.01))
+      .map(({ item, def }): Issue => ({
+        severity: "error",
+        code: "item_over_stairwell",
+        message: `${kindName(def)} stands over the stairwell of stair ${stair.id}, where there is no floor.`,
+        refs: [item.id, stair.id],
+      })),
+  );
+
+/** Two stairs on one level on top of each other. Each pair is reported once. */
+export const stairsOverlap: Rule = ({ stairs }) => {
+  const issues: Issue[] = [];
+  for (let i = 0; i < stairs.length; i++) {
+    for (let j = i + 1; j < stairs.length; j++) {
+      const a = stairs[i];
+      const b = stairs[j];
+      if (boxesApart(a.geometry.box, b.geometry.box)) continue;
+      if (a.geometry.footprint.some((r) => anyOverlap(b.geometry.footprint, r))) {
+        issues.push({
+          severity: "error",
+          code: "stairs_overlap",
+          message: `Stairs ${a.stair.id} and ${b.stair.id} overlap.`,
+          refs: [a.stair.id, b.stair.id],
+        });
+      }
+    }
+  }
+  return issues;
+};
+
+// ---------------------------------------------------------------------------- storeys
+
+/**
+ * Under a level above, a wall should reach the underside of its slab: a wall that stops short
+ * leaves an open band under the floor above (a half-height partition is the one kind meant to),
+ * and one that runs past it stands up through that floor. The top level has no slab over it.
+ */
+export const wallSlabFit: Rule = ({ model, level, above }) => {
+  if (!above) return [];
+  const underside = slabUnderside(level.level.height);
+  return model.walls.flatMap((w): Issue[] => {
+    const gap = underside - w.height;
+    if (Math.abs(gap) <= WALL_SLAB_TOLERANCE + 1e-9) return [];
+    return gap > 0
+      ? [
+          {
+            severity: "warning",
+            code: "wall_short_of_slab",
+            message: `Wall ${w.id} is ${w.height.toFixed(2)} m tall and stops ${gap.toFixed(2)} m under the ${SLAB_THICKNESS} m slab of ${above.level.name} (its underside is ${underside.toFixed(2)} m up). Raise it to ${underside.toFixed(2)} m unless it is meant as a low partition.`,
+            refs: [w.id],
+          },
+        ]
+      : [
+          {
+            severity: "error",
+            code: "wall_through_slab",
+            message: `Wall ${w.id} is ${w.height.toFixed(2)} m tall and runs ${(-gap).toFixed(2)} m up through the floor of ${above.level.name} (the slab's underside is ${underside.toFixed(2)} m up). Lower it to ${underside.toFixed(2)} m.`,
+            refs: [w.id],
+          },
+        ];
+  });
+};
+
 // ---------------------------------------------------------------------------- the checker
 
 /** Every rule the checker runs, in the order their issues are reported. */
@@ -502,16 +738,55 @@ export const RULES: readonly Rule[] = Object.freeze([
   itemBlocksOpening,
   itemsOverlap,
   itemOutsideRooms,
+  wallSlabFit,
+  stairNoUpperLevel,
+  stairDimensions,
+  stairHeadroom,
+  stairCrossesWall,
+  stairExitBlocked,
+  stairwellBlocked,
+  stairwellOutsideRoom,
+  itemOnStair,
+  itemOverStairwell,
+  stairsOverlap,
 ]);
 
-/** Run `rules` (all of them by default) over the plan, sharing one context between them. */
+/**
+ * Run `rules` (all of them by default) over the plan, level by level from the ground up. Each
+ * level is checked on its own — a wall upstairs never crosses one downstairs — with one context
+ * its rules share. A one-storey plan is one level, checked over one context, as it always was.
+ */
 export function checkModel(model: PlanModel, rules: readonly Rule[] = RULES): Issue[] {
-  const ctx = checkContext(model);
-  return rules.flatMap((rule) => rule(ctx));
+  return model.levels.flatMap((level) => checkLevel(model, level.id, rules));
 }
 
-/** Every plan's full check, computed once. Plans are immutable, so a plan's issues never change. */
-const issuesByModel = new WeakMap<PlanModel, readonly Issue[]>();
+/** Run `rules` over one level of the plan. */
+const checkLevel = (model: PlanModel, levelId: string, rules: readonly Rule[]): Issue[] => {
+  const ctx = checkContext(levelSlice(model, levelId), model, levelId);
+  return rules.flatMap((rule) => rule(ctx));
+};
+
+/** Every plan's full check, by level, computed once. Plans are immutable, so a plan's issues never change. */
+interface PlanIssues {
+  readonly all: readonly Issue[];
+  readonly byLevel: ReadonlyMap<string, readonly Issue[]>;
+}
+const issuesByModel = new WeakMap<PlanModel, PlanIssues>();
+
+const NO_ISSUES: readonly Issue[] = Object.freeze([]);
+
+const freezeIssue = (i: Issue): Issue => Object.freeze({ ...i, refs: Object.freeze([...i.refs]) });
+
+function planIssues(model: PlanModel): PlanIssues {
+  let found = issuesByModel.get(model);
+  if (!found) {
+    const byLevel = new Map<string, readonly Issue[]>();
+    for (const level of model.levels) byLevel.set(level.id, Object.freeze(checkLevel(model, level.id, RULES).map(freezeIssue)));
+    found = { all: Object.freeze([...byLevel.values()].flat()), byLevel };
+    issuesByModel.set(model, found);
+  }
+  return found;
+}
 
 /**
  * The plan's issues under every rule: the derived value the Issues tab, its count badge and
@@ -519,11 +794,12 @@ const issuesByModel = new WeakMap<PlanModel, readonly Issue[]>();
  * kept for as long as that object lives, so a render, a tab switch or an agent asking twice
  * costs nothing. Frozen, because every reader shares the one list.
  */
-export function issuesOf(model: PlanModel): readonly Issue[] {
-  let issues = issuesByModel.get(model);
-  if (!issues) {
-    issues = Object.freeze(checkModel(model).map((i) => Object.freeze({ ...i, refs: Object.freeze([...i.refs]) })));
-    issuesByModel.set(model, issues);
-  }
-  return issues;
-}
+export const issuesOf = (model: PlanModel): readonly Issue[] => planIssues(model).all;
+
+/**
+ * The issues found on one level: about its walls, rooms, items and the stairs that start on it,
+ * and about the stairwells in its floor (what stands over them, the floor past their top).
+ * Shared and frozen like issuesOf; empty for a level the plan does not have.
+ */
+export const issuesOnLevel = (model: PlanModel, levelId: string): readonly Issue[] => planIssues(model).byLevel.get(levelId) ?? NO_ISSUES;
+

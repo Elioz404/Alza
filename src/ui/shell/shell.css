@@ -142,6 +142,7 @@
   .canvas__slot--marks { inset: 0; }
   .canvas__slot--marks > * { pointer-events: none; }
   .canvas__slot--legend { top: var(--spacing-4); right: var(--spacing-4); }
+  .canvas__slot--levels { top: var(--spacing-4); left: var(--spacing-4); max-height: calc(100% - 2 * var(--spacing-4) - var(--size-control) * 3); display: flex; }
   .canvas__slot--center { inset: 0; display: grid; place-items: center; }
   .canvas__slot--center:empty { display: none; }
   .canvas__slot--zoom { left: var(--spacing-4); bottom: var(--spacing-4); }
@@ -282,7 +283,9 @@
     .topbar .topbar__export { display: none; }
     .rail {
       flex-direction: row;
-      justify-content: center;
+      /* safe: when the tools are wider than the phone, the row scrolls from its first tool
+         instead of centring past both edges */
+      justify-content: safe center;
       padding: var(--spacing-1) var(--spacing-2);
       border-right: 0;
       border-top: var(--size-hairline) solid var(--color-border);

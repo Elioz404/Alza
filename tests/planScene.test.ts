@@ -45,7 +45,7 @@ function gpuTracker(root: THREE.Object3D) {
   };
 }
 
-const sofa = (id: string, x: number): Item => ({ id, kind: "sofa", x, y: 1, rotation: 0 });
+const sofa = (id: string, x: number): Item => ({ id, levelId: "level_ground", kind: "sofa", x, y: 1, rotation: 0 });
 
 describe("PlanScene.update", () => {
   it("builds every entity once and keeps them all when nothing changed", () => {
@@ -62,11 +62,11 @@ describe("PlanScene.update", () => {
     const scene = new PlanScene();
     const m = seedLoft();
     scene.update(m);
-    const piece = scene.root.children.find((o) => o.position.x === m.items[0].x && o.position.z === m.items[0].y)!;
+    const piece = scene.objects.find((o) => o.position.x === m.items[0].x && o.position.z === m.items[0].y)!;
     const moved = { ...m, items: m.items.map((it, i) => (i === 0 ? { ...it, x: it.x + 0.5 } : it)) };
     const r = scene.update(moved);
     expect(r).toMatchObject({ added: 0, rebuilt: 0, removed: 0, moved: 1 });
-    expect(scene.root.children).toContain(piece);
+    expect(scene.objects).toContain(piece);
     expect(piece.position.x).toBeCloseTo(m.items[0].x + 0.5);
     scene.dispose();
   });
@@ -87,9 +87,9 @@ describe("PlanScene.update", () => {
 
   it("moving a wall rebuilds it and the neighbours its joints touch, and nothing else", () => {
     const walls = [
-      { id: "a", ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.15, height: 2.7 },
-      { id: "b", ax: 4, ay: 0, bx: 4, by: 3, thickness: 0.15, height: 2.7 },
-      { id: "far", ax: 10, ay: 0, bx: 14, by: 0, thickness: 0.15, height: 2.7 },
+      { id: "a", levelId: "level_ground", ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.15, height: 2.7 },
+      { id: "b", levelId: "level_ground", ax: 4, ay: 0, bx: 4, by: 3, thickness: 0.15, height: 2.7 },
+      { id: "far", levelId: "level_ground", ax: 10, ay: 0, bx: 14, by: 0, thickness: 0.15, height: 2.7 },
     ];
     const scene = new PlanScene();
     scene.update({ ...emptyModel(), walls });
@@ -190,9 +190,9 @@ describe("GPU resources", () => {
 
   it("frees a removed floor's geometries and its shared material, never the shared pattern", () => {
     const scene = new PlanScene();
-    const room = { id: "r", x: 0, y: 0, w: 3, h: 3, label: "R", floor: "oak" as const };
+    const room = { id: "r", levelId: "level_ground", x: 0, y: 0, w: 3, h: 3, label: "R", floor: "oak" as const };
     scene.update({ ...emptyModel(), rooms: [room] });
-    const floor = scene.root.children.find((o) => (o as THREE.Mesh).isMesh && o.name !== "ground") as THREE.Mesh;
+    const floor = scene.objects.find((o) => (o as THREE.Mesh).isMesh && o.name !== "ground") as THREE.Mesh;
     const material = floor.material as THREE.MeshStandardMaterial;
     const disposed = { geometry: false, material: false, texture: false };
     floor.geometry.addEventListener("dispose", () => (disposed.geometry = true));
@@ -202,7 +202,7 @@ describe("GPU resources", () => {
     expect(disposed).toEqual({ geometry: true, material: true, texture: false });
     // the next oak floor samples the very same texture
     scene.update({ ...emptyModel(), rooms: [{ ...room, id: "r2" }] });
-    const next = scene.root.children.find((o) => (o as THREE.Mesh).isMesh && o.name !== "ground") as THREE.Mesh;
+    const next = scene.objects.find((o) => (o as THREE.Mesh).isMesh && o.name !== "ground") as THREE.Mesh;
     expect((next.material as THREE.MeshStandardMaterial).map).toBe(material.map);
     scene.dispose();
   });
@@ -212,7 +212,7 @@ describe("shared materials", () => {
   it("two pieces of the same kind draw with the same materials", () => {
     const scene = new PlanScene();
     scene.update({ ...emptyModel(), items: [sofa("s1", 0), sofa("s2", 3)] });
-    const pieces = scene.root.children.filter((o) => o.name !== "ground");
+    const pieces = scene.objects.filter((o) => o.name !== "ground");
     const [a, b] = pieces.map((p) => materialsOf(p));
     expect([...a]).toEqual([...b]);
     const sizeForTwo = scene.materials.size;
@@ -224,7 +224,7 @@ describe("shared materials", () => {
   it("a material stays while any piece holds it and goes with the last one", () => {
     const scene = new PlanScene();
     scene.update({ ...emptyModel(), items: [sofa("s1", 0), sofa("s2", 3)] });
-    const shared = [...materialsOf(scene.root.children.find((o) => o.name !== "ground")!)].find((m) => scene.materials.owns(m))!;
+    const shared = [...materialsOf(scene.objects.find((o) => o.name !== "ground")!)].find((m) => scene.materials.owns(m))!;
     let disposed = false;
     shared.addEventListener("dispose", () => (disposed = true));
     scene.update({ ...emptyModel(), items: [sofa("s2", 3)] });

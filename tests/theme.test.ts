@@ -88,8 +88,22 @@ describe("the palette meets its contrast targets", () => {
     ["--color-accent", "--plan-paper", 4.5],
     ["--color-agent", "--plan-paper", 4.5],
     ["--plan-dim", "--plan-paper", 4.5],
+    // the level below is an alignment guide: information, so a non-text 3:1
+    ["--plan-ghost", "--plan-paper", 3],
   ])("%s on %s is at least %s:1", (fg, bg, min) => {
     expect(contrast(hexOf(fg), hexOf(bg))).toBeGreaterThanOrEqual(min);
+  });
+
+  it.each([
+    ["--plan-ghost", "--plan-paper", 3],
+    ["--plan-line-soft", "--plan-paper", 3],
+  ])("in dark, %s on %s is at least %s:1", (fg, bg, min) => {
+    const dark = (name: string): string => {
+      const v = DARK_TOKENS[name];
+      if (v === undefined || typeof v !== "object") throw new Error(`no dark colour ${name}`);
+      return v.hex;
+    };
+    expect(contrast(dark(fg), dark(bg))).toBeGreaterThanOrEqual(min);
   });
 
   it.each(FLOOR_FINISHES.map((f) => [f]))("room labels read on %s", (finish) => {

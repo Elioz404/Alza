@@ -62,7 +62,7 @@ describe("the lookup rule", () => {
   it(`names at most ${MAX_CANDIDATES} candidates however many match`, () => {
     const many: PlanModel = {
       ...loft,
-      items: Array.from({ length: MAX_CANDIDATES + 5 }, (_, i) => ({ id: `p${i}`, kind: "plant", x: i, y: 0, rotation: 0 })),
+      items: Array.from({ length: MAX_CANDIDATES + 5 }, (_, i) => ({ id: `p${i}`, levelId: "level_ground", kind: "plant", x: i, y: 0, rotation: 0 })),
     };
     const r = lookupItem(many, "plant");
     expect(r.ok).toBe(false);

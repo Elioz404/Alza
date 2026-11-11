@@ -623,6 +623,445 @@ await page.keyboard.press("Escape");
 await showView(page, "Plan");
 await page.setViewportSize(DESKTOP);
 
+// ---------- 12c. levels and stairs, through the agent's tools ----------
+const agentTool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+const drawnWalls = () => page.locator(`${PLAN_SVG} .pl-wall-hit`).count();
+await planMenu(page, "Load Sunset Loft demo");
+await until("s.model.walls.length === 7");
+r = await agentTool("list_levels", {});
+check("levels: the demo is one storey, the ground floor, being worked on", r.ok && r.levels.length === 1 && r.levels[0].active === true, r.summary);
+r = await agentTool("add_level", {});
+const firstFloorId = r.id;
+check("levels: add_level puts a first floor on top", r.ok && (await state("s.model.levels.length")) === 2 && (await state("s.model.levels[1].name")) === "First floor", r.summary);
+r = await agentTool("add_wall", { ax: 0, ay: 0, bx: 8, by: 0, level: "First floor" });
+check("levels: a wall built upstairs is on the first floor, not on the plan shown", r.ok && r.levelId === firstFloorId && (await drawnWalls()) === 7, r.summary);
+r = await agentTool("add_stair", { x: 4.5, y: 5.2, rotation: 180, level: "Ground floor" });
+check("levels: add_stair works out its risers from the storey height", r.ok && r.risers === 16 && (await state("s.model.stairs.length")) === 1, r.summary);
+r = await agentTool("set_active_level", { id: "First floor" });
+check("levels: set_active_level shows the first floor's walls only", r.ok && (await until(`s.editor.activeLevelId === '${firstFloorId}'`)) && (await drawnWalls()) === 1);
+r = await agentTool("get_issues", { level: "First floor" });
+const groundIssues = await agentTool("get_issues", { level: "Ground floor" });
+const allIssues = await agentTool("get_issues", {});
+check(
+  "levels: get_issues reads one storey (the stair over the TV is the ground floor's)",
+  r.ok && r.issues.length === 0 && groundIssues.issues.some((i) => i.code === "item_on_stair") && allIssues.issues.length === groundIssues.issues.length,
+  `${r.summary} / ${groundIssues.summary}`,
+);
+await agentTool("set_active_level", { id: "Ground floor" });
+check("levels: back on the ground floor, its walls show again", (await until("s.editor.activeLevelId === 'level_ground'")) && (await drawnWalls()) === 7);
+await page.locator(PLAN_SVG).click({ position: { x: 5, y: 5 } });   // focus on the plan, not in a field
+await page.keyboard.press("Escape");
+await agentAsks("remove_level", { id: "First floor" });
+await requestCard(page).waitFor({ timeout: 5000 });
+check("levels: remove_level waits for the human", (await state("s.approvals.length")) === 1 && (await state("s.approvals[0].targets[0].type")) === "level");
+await page.keyboard.press("Control+Enter");
+answered = await agentAnswer();
+check("levels: approved, the storey goes with what stood on it", answered.ok && (await state("s.model.levels.length")) === 1 && (await state("s.model.walls.length")) === 7, answered.summary);
+// a plan saved before levels existed: no version, no levels, no levelId on anything
+const oldPlan = await hook.evaluate((h) => {
+  const m = h.store.getState().model;
+  const strip = ({ levelId, ...e }) => (void levelId, e);
+  return { name: "Saved before levels", walls: m.walls.map(strip), openings: m.openings, rooms: m.rooms.map(strip), items: m.items.map(strip), kinds: m.kinds, underlay: null };
+});
+const loaded = await hook.evaluate((h, plan) => h.actions.loadModel(plan), oldPlan);
+check(
+  "levels: a plan saved before levels loads as one ground floor",
+  loaded.ok && loaded.migratedFrom === 1 && (await state("s.model.levels.length")) === 1 && (await state("s.model.walls.every((w) => w.levelId === 'level_ground')")) && (await drawnWalls()) === 7,
+  loaded.summary,
+);
+await planMenu(page, "Load Sunset Loft demo");
+await until("s.model.name === 'Sunset Loft'");
+
+// ---------- 12d. levels and stairs on the plan, by hand ----------
+const levelGroup = page.getByRole("radiogroup", { name: "Level" });
+await levelGroup.waitFor({ timeout: 5000 });
+check("plan levels: the switcher lists the demo's one level, chosen", (await levelGroup.getByRole("radio").allInnerTexts()).join() === "Ground floor" && (await levelGroup.getByRole("radio", { name: "Ground floor" }).getAttribute("aria-checked")) === "true");
+await page.getByRole("button", { name: "Add a level", exact: true }).click();
+check(
+  "plan levels: Add a level puts a first floor on top and works on it, over a ghost of the ground floor",
+  (await until("s.model.levels.length === 2 && s.editor.activeLevelId === s.model.levels[1].id")) &&
+    (await levelGroup.getByRole("radio", { name: "First floor" }).getAttribute("aria-checked")) === "true" &&
+    (await drawnWalls()) === 0 &&
+    (await page.locator(`${PLAN_SVG} .pl-ghost-wall`).count()) === 7,
+);
+check("plan levels: the change is said aloud", (await page.locator(".levels [role=status]").innerText()) === "Working on First floor, floor at +2.90 m");
+await page.locator(PLAN_SVG).click({ position: { x: 5, y: 5 } });
+await page.keyboard.press("PageDown");
+check("plan levels: PageDown works on the level below", (await until("s.editor.activeLevelId === 'level_ground'")) && (await drawnWalls()) === 7);
+await page.keyboard.press("s");
+check("plan stairs: S picks Add a stair", (await railButton(page, "Add a stair").getAttribute("aria-pressed")) === "true");
+await page.mouse.move(...(await px(3.3, 3.4)));
+await page.mouse.down();
+await page.mouse.move(...(await px(3.3, 2.4)), { steps: 4 });
+await page.mouse.move(...(await px(3.3, 1.4)), { steps: 4 });
+await page.mouse.up();
+check(
+  "plan stairs: press and drag adds a stair climbing the way of the drag, selected",
+  (await until("s.model.stairs.length === 1")) &&
+    (await state("s.model.stairs[0].rotation")) === 180 &&
+    (await state("Math.abs(s.model.stairs[0].x - 3.3) < 1e-6 && Math.abs(s.model.stairs[0].y - 3.4) < 1e-6")) &&
+    (await state("s.editor.selectedStairId === s.model.stairs[0].id")),
+);
+const stairSymbol = page.locator(`${PLAN_SVG} .pl-stair-hit`);
+check("plan stairs: drawn with treads, the break line and UP", (await stairSymbol.locator(".pl-stair-cut").count()) === 1 && (await stairSymbol.locator(".pl-stair-label").textContent()) === "UP");
+const stairX = await state("s.model.stairs[0].x");
+await page.keyboard.press("ArrowRight");
+check("plan stairs: an arrow key nudges the selected stair", await until(`Math.abs(s.model.stairs[0].x - ${stairX} - 0.05) < 1e-6`));
+await panelTab(page, "Properties");
+check("plan stairs: Properties edits the stair", await page.getByRole("tabpanel", { name: "Properties" }).getByRole("heading", { name: "Stair 1" }).isVisible());
+await page.locator(PLAN_SVG).click({ position: { x: 5, y: 5 } });
+await page.keyboard.press("PageUp");
+check(
+  "plan stairs: upstairs, the stairwell is drawn where the stair arrives, lettered DN",
+  (await until("s.editor.activeLevelId === s.model.levels[1].id")) && (await page.locator(`${PLAN_SVG} .pl-stair--well .pl-stair-label`).textContent()) === "DN",
+);
+await panelTab(page, "Issues");
+const stairIssue = page.getByRole("tabpanel", { name: "Issues" }).getByRole("button", { name: /Stair 1/ }).first();
+check("plan stairs: Issues names the stair and the level it is on", (await stairIssue.count()) === 1 && (await stairIssue.innerText()).includes("Ground floor"));
+await stairIssue.click();
+check(
+  "plan stairs: choosing the finding goes down to its level and selects what it is about",
+  await until("s.editor.activeLevelId === 'level_ground' && (s.editor.selectedStairId ?? s.editor.selectedWallId ?? s.editor.selectedItemId) !== null"),
+);
+await page.locator(PLAN_SVG).click({ position: { x: 5, y: 5 } });
+await page.keyboard.press("Escape");
+await page.setViewportSize(PHONE);
+await page.waitForTimeout(300);
+const switcherBox = await page.locator(".levels").boundingBox();
+const radioBoxes = await Promise.all((await levelGroup.getByRole("radio").all()).map((r) => r.boundingBox()));
+check(
+  `phone ${PHONE.width}px: the level switcher fits the plan and each level is a finger tall`,
+  !!switcherBox && switcherBox.x >= 0 && switcherBox.x + switcherBox.width <= PHONE.width && radioBoxes.every((b) => !!b && b.height >= 44),
+  switcherBox ? `${Math.round(switcherBox.x)}..${Math.round(switcherBox.x + switcherBox.width)} px` : "no switcher",
+);
+await railButton(page, "Add a stair").scrollIntoViewIfNeeded();
+const stairButton = await railButton(page, "Add a stair").boundingBox();
+check(`phone ${PHONE.width}px: the rail's Add a stair can be reached`, !!stairButton && stairButton.x >= 0 && stairButton.x + stairButton.width <= PHONE.width);
+await page.setViewportSize(DESKTOP);
+await panelTab(page, "Properties");
+await planMenu(page, "Load Sunset Loft demo");
+await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+
+// ---------- 12e. storeys in 3D: stacked levels, the stair, the levels shown, walking upstairs ----------
+{
+  const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft'");
+  const upper = (await tool("add_level", {})).id;
+  for (const [ax, ay, bx, by] of [
+    [0, 0, 8, 0],
+    [8, 0, 8, 6],
+    [8, 6, 0, 6],
+    [0, 6, 0, 0],
+  ]) {
+    await tool("add_wall", { ax, ay, bx, by, level: upper });
+  }
+  await tool("add_room", { x: 0.075, y: 0.075, w: 7.85, h: 5.85, label: "Upstairs", level: upper });
+  const stairId = (await tool("add_stair", { x: 7.3, y: 5.5, rotation: 180, level: "Ground floor" })).id;
+  await tool("set_active_level", { id: "Ground floor" });
+  await showView(page, "3D");
+  // the camera is where the 3D view was left (walking): from outside, the storeys show as chosen
+  await railButton(page, "Orbit").click();
+  await sceneUntil((s) => !s.moving);
+  check(
+    "3D storeys: both levels are built, the upper one on a slab open over the stair",
+    await sceneUntil((s) => s.levels.total === 2 && s.stairs === 1 && s.slabs === 1),
+    JSON.stringify((await scene())?.levels),
+  );
+  check("3D storeys: by default the levels up to the active one show (the ground floor)", await sceneUntil((s) => s.levels.shown.join() === "level_ground"));
+  const view3d = page.getByRole("button", { name: "View", exact: true });
+  await view3d.click();
+  const levelsField = page.getByRole("group", { name: "View" }).getByRole("combobox", { name: "Levels shown" });
+  await levelsField.selectOption("all");
+  check("3D storeys: the View panel's Levels shown puts every level on show", await sceneUntil((s) => s.levels.shown.length === 2));
+  await page.keyboard.press("Escape");
+  await page.locator(SCENE_CANVAS).hover();
+  await page.keyboard.press("PageUp");
+  check(
+    "3D storeys: PageUp works on the level above, and the hint names it",
+    (await until(`s.editor.activeLevelId === '${upper}'`)) && (await page.getByRole("status").filter({ hasText: "First floor" }).count()) >= 1,
+  );
+  await view3d.click();
+  await levelsField.selectOption("active");
+  await page.getByRole("group", { name: "View" }).getByRole("switch", { name: /^Cutaway/ }).click();
+  const cutHeight = await state("s.editor.scene.cutHeight");
+  check(
+    "3D storeys: the cutaway slices the topmost level shown, over its own floor",
+    await sceneUntil((s) => s.cut !== null && s.cut > 2.9 + cutHeight - 1e-6 && s.cut < 2.9 + cutHeight + 0.1),
+    `cut at ${(await scene())?.cut}, ${await state("JSON.stringify(s.editor.scene)")}, shown ${(await scene())?.levels.shown}`,
+  );
+  await page.getByRole("group", { name: "View" }).getByRole("switch", { name: /^Cutaway/ }).click();
+  await page.keyboard.press("Escape");
+  // the OBJ holds the levels shown: fewer vertices with the upper floor hidden
+  const objVertices = async () => {
+    const wait = page.waitForEvent("download", { timeout: 5000 }).catch(() => null);
+    await exportMenu(page, "3D model (OBJ)");
+    const d = await wait;
+    if (!d) return -1;
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile(await d.path(), "utf8");
+    return text.split("\n").filter((l) => l.startsWith("v ")).length;
+  };
+  const withUpper = await objVertices();
+  await page.locator(SCENE_CANVAS).hover();
+  await page.keyboard.press("PageDown");
+  await until("s.editor.activeLevelId === 'level_ground'");
+  await sceneUntil((s) => s.levels.shown.length === 1);
+  const groundOnly = await objVertices();
+  check("3D storeys: the OBJ export holds the levels shown, and only those", withUpper > groundOnly && groundOnly > 0, `${withUpper} → ${groundOnly} vertices`);
+  // a click on the stair selects it, and the model outlines it
+  await railButton(page, "Top view").click();
+  await sceneUntil((s) => !s.moving);
+  const box = await page.locator(SCENE_CANVAS).boundingBox();
+  const at = await hook.evaluate((h, id) => h.sceneLocate("stair", id), stairId);
+  if (at) await page.mouse.click(box.x + at.x, box.y + at.y);
+  check("3D storeys: a click on the stair selects it, outlined in the model", !!at && (await until(`s.editor.selectedStairId === '${stairId}'`)) && (await sceneUntil((s) => s.marks.selection === 1)));
+  await page.keyboard.press("Escape");
+  check("3D storeys: Esc lets go of the stair", await until("!s.editor.selectedStairId"));
+  // walking on the upper level: the walker stands on its floor, every level shown
+  await hook.evaluate((h, id) => h.actions.setActiveLevel(id), upper);
+  await railButton(page, "Walk").click();
+  check(
+    "3D storeys: Walk sets the walker down on the active level's floor, every level on show",
+    await sceneUntil((s) => !s.moving && s.walker !== null && s.walker.level === upper && Math.abs(s.walker.floor - 2.9) < 1e-6 && s.levels.shown.length === 2),
+    JSON.stringify((await scene())?.walker),
+  );
+  await railButton(page, "Orbit").click();
+  await hook.evaluate((h) => h.actions.setActiveLevel("level_ground"));
+  await showView(page, "Plan");
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+}
+
+// ---------- 12f. storeys end to end: the agent alone builds a second floor, the human sees it and undoes it ----------
+{
+  const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+  const codes = async (level) => ((await tool("get_issues", { level })).issues ?? []).map((i) => i.code);
+  await panelTab(page, "Properties");
+  const groundWalls = await state("s.model.walls.length");
+  // every step through the agent's tools, nothing by hand
+  const upper = (await tool("add_level", { name: "Upper floor" })).id;
+  for (const [ax, ay, bx, by] of [
+    [0, 0, 8, 0],
+    [8, 0, 8, 6],
+    [8, 6, 0, 6],
+    [0, 6, 0, 0],
+  ]) {
+    await tool("add_wall", { ax, ay, bx, by, level: "Upper floor" });
+  }
+  const room = await tool("add_room", { x: 0.075, y: 0.075, w: 7.85, h: 5.85, label: "Landing hall", level: "Upper floor" });
+  const stair = await tool("add_stair", { x: 7.3, y: 5.5, rotation: 180, level: "Ground floor" });
+  const listed = await tool("list_levels", {});
+  check(
+    "storeys: with tools alone the agent adds a level, walls and a room on it, and a stair that reaches it",
+    stair.ok && room.ok && room.levelId === upper && listed.levels.length === 2 && listed.levels[1].elevation === 2.9 &&
+      listed.levels[1].walls === 4 && listed.levels[1].rooms === 1 && listed.stairs.length === 1 && listed.stairs[0].reaches === upper,
+    `${listed.summary} ${JSON.stringify(listed.stairs[0])}`,
+  );
+  const plan = await tool("get_model", {});
+  check(
+    "storeys: get_model says what stands on each level and where each thing is",
+    plan.ok && /2 levels/.test(plan.summary) && plan.model.walls.filter((w) => w.levelId === upper).length === 4 && plan.model.stairs[0].levelId === "level_ground",
+    plan.summary,
+  );
+  check("storeys: the stairwell above opens inside the upper room, and the upper floor is clean", (await codes("Upper floor")).length === 0, (await codes("Upper floor")).join());
+  // a stair drawn with too few risers: the checker says so
+  await tool("update_stair", { id: stair.id, risers: 10 });
+  // the history holds a bounded number of steps, so count back from where the agent left it
+  const stepsBuilt = await state("s.undoStack.length");
+  check("storeys: a stair with risers too tall is reported on its own level", (await codes("Ground floor")).includes("stair_riser_out_of_range") && !(await codes("Upper floor")).includes("stair_riser_out_of_range"));
+  await panelTab(page, "Issues");
+  check("storeys: the Issues panel lists the riser finding, naming its level", (await page.getByRole("tabpanel", { name: "Issues" }).getByText(/Ground floor/).count()) >= 1);
+  await panelTab(page, "Properties");
+  // the plan, one level at a time: the stair climbs from the ground floor, the void shows upstairs over a ghost of the ground
+  await tool("set_active_level", { id: "Ground floor" });
+  check(
+    "storeys: on the ground floor the plan draws the stair, lettered UP, and none of the upper walls",
+    (await until("s.editor.activeLevelId === 'level_ground'")) && (await drawnWalls()) === groundWalls &&
+      (await page.locator(`${PLAN_SVG} .pl-stair:not(.pl-stair--well) .pl-stair-label`).first().textContent()) === "UP",
+  );
+  await tool("set_active_level", { id: upper });
+  check(
+    "storeys: upstairs the plan draws its own walls over a ghost of the ground floor, and the stairwell lettered DN",
+    (await until(`s.editor.activeLevelId === '${upper}'`)) && (await drawnWalls()) === 4 &&
+      (await page.locator(`${PLAN_SVG} .pl-ghost-level .pl-ghost-wall`).count()) === groundWalls &&
+      (await page.locator(`${PLAN_SVG} .pl-stair--well .pl-stair-label`).textContent()) === "DN",
+  );
+  await S("12f-plan-upper");
+  // the 3D view: both storeys, the slab open over the stair
+  await showView(page, "3D");
+  await railButton(page, "Orbit").click();
+  const view3d = page.getByRole("button", { name: "View", exact: true });
+  await view3d.click();
+  await page.getByRole("group", { name: "View" }).getByRole("combobox", { name: "Levels shown" }).selectOption("all");
+  await page.keyboard.press("Escape");
+  check(
+    "storeys: the 3D view stacks both levels, the stair and the upper slab",
+    await sceneUntil((s) => !s.moving && s.levels.total === 2 && s.levels.shown.length === 2 && s.stairs === 1 && s.slabs === 1),
+    JSON.stringify((await scene())?.levels),
+  );
+  // the agent's removals wait for the human, and the 3D view hatches what would go
+  await agentAsks("remove_stair", { id: stair.id });
+  await requestCard(page).waitFor({ timeout: 5000 });
+  check(
+    "storeys: remove_stair waits for the human, hatched in the model",
+    (await state("s.approvals[0]?.targets[0]?.type")) === "stair" && (await sceneUntil((s) => s.marks.pending >= 1)),
+  );
+  await answerRequest(page, "keep");
+  answered = await agentAnswer();
+  check("storeys: kept, the stair stays", !answered.ok && (await state("s.model.stairs.length")) === 1 && (await sceneUntil((s) => s.marks.pending === 0 && s.stairs === 1)));
+  await agentAsks("remove_level", { id: "Upper floor" });
+  await requestCard(page).waitFor({ timeout: 5000 });
+  check("storeys: remove_level waits for the human, the whole level hatched in the model", (await state("s.approvals[0]?.targets[0]?.type")) === "level" && (await sceneUntil((s) => s.marks.pending >= 1)));
+  await answerRequest(page, "keep");
+  answered = await agentAnswer();
+  check("storeys: kept, the level stays with all that stands on it", !answered.ok && (await state("s.model.levels.length")) === 2 && (await state(`s.model.walls.filter((w) => w.levelId === '${upper}').length`)) === 4);
+  // the human undoes the agent's work step by step, across the level operations
+  const canvas = page.locator(SCENE_CANVAS);
+  await canvas.hover();
+  await page.keyboard.press("Control+z");
+  check("storeys: undo takes back the risers change, and its finding", (await until("s.model.stairs[0]?.risers === undefined")) && !(await codes("Ground floor")).includes("stair_riser_out_of_range"));
+  await page.keyboard.press("Control+z");
+  check("storeys: undo takes the stair away, in the model too", (await until("s.model.stairs.length === 0")) && (await sceneUntil((s) => s.stairs === 0)));
+  for (let i = 0; i < 5; i++) await page.keyboard.press("Control+z");
+  check("storeys: undo takes back the upper room and walls, the level stays empty", await until(`s.model.levels.length === 2 && s.model.walls.length === ${groundWalls} && s.model.rooms.every((r) => r.levelId === 'level_ground')`));
+  await page.keyboard.press("Control+z");
+  check(
+    "storeys: one more undo takes the level away, and the level worked on falls back to the ground floor",
+    (await until(`s.model.levels.length === 1 && s.undoStack.length === ${stepsBuilt - 8}`)) &&
+      (await sceneUntil((s) => s.levels.total === 1 && s.levels.shown.join() === "level_ground")) &&
+      (await page.getByRole("status").filter({ hasText: "Upper floor" }).count()) === 0,
+    `${await state("s.model.levels.length + ' levels, ' + s.undoStack.length + ' steps'")} (${stepsBuilt} built), ${JSON.stringify((await scene())?.levels)}, ${(await page.getByRole("status").filter({ hasText: "Upper floor" }).allInnerTexts()).join(" | ")}`,
+  );
+  // a plan saved in the first format, said in so many words, still opens, in the 3D view as on the plan
+  const v1 = await hook.evaluate((h) => {
+    const m = h.store.getState().model;
+    const strip = ({ levelId, ...e }) => (void levelId, e);
+    return { version: 1, name: "Saved as format 1", walls: m.walls.map(strip), openings: m.openings, rooms: m.rooms.map(strip), items: m.items.map(strip), kinds: m.kinds, underlay: null };
+  });
+  const loadedV1 = await hook.evaluate((h, p) => h.actions.loadModel(p), v1);
+  check(
+    "storeys: a format 1 plan loads as one ground floor, and the 3D view builds it",
+    loadedV1.ok && loadedV1.migratedFrom === 1 && (await until("s.model.name === 'Saved as format 1' && s.model.version === 2")) &&
+      (await sceneUntil((s) => s.levels.total === 1 && s.stairs === 0 && s.slabs === 0)),
+    loadedV1.summary,
+  );
+  const future = await hook.evaluate((h, p) => h.actions.loadModel({ ...p, version: 99 }), v1);
+  check("storeys: a plan from a newer format is refused, the plan shown stays", !future.ok && (await state("s.model.name")) === "Saved as format 1", future.summary);
+  await showView(page, "Plan");
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+}
+
+// ---------- 12g. storeys reviewed: refusals, names, walls under a slab, guards, framing, keys ----------
+{
+  const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+  const codes = async (level) => ((await tool("get_issues", { level })).issues ?? []).map((i) => i.code);
+  await panelTab(page, "Properties");
+  // the plan's one level cannot go: refused before anybody is asked
+  r = await tool("remove_level", { id: "Ground floor" });
+  check("storeys reviewed: remove_level on a one-storey plan is refused without asking the human", !r.ok && /only level/.test(r.summary) && (await state("s.approvals.length")) === 0, r.summary);
+  // default names never repeat, so every level answers to its name
+  const second = (await tool("add_level", {})).id;
+  await tool("add_level", {});
+  await hook.evaluate((h, id) => h.actions.removeLevel(id), second);
+  await tool("add_level", {});
+  const names = await state("s.model.levels.map((l) => l.name)");
+  r = await tool("add_wall", { ax: 0, ay: 0, bx: 4, by: 0, level: names[names.length - 1] });
+  check("storeys reviewed: after a removal, a new level still gets a name of its own, and the name works as `level`", new Set(names).size === names.length && r.ok, names.join(", "));
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+
+  const upper = (await tool("add_level", {})).id;
+  for (const [ax, ay, bx, by] of [
+    [0, 0, 8, 0],
+    [8, 0, 8, 6],
+    [8, 6, 0, 6],
+    [0, 6, 0, 0],
+  ]) {
+    await tool("add_wall", { ax, ay, bx, by, level: upper });
+  }
+  await tool("add_room", { x: 0.075, y: 0.075, w: 7.85, h: 5.85, label: "Upstairs", level: upper });
+  await tool("add_stair", { x: 7.3, y: 5.5, rotation: 180, level: "Ground floor" });
+  // a taller ground storey: the walls that met the slab follow it, and nothing opens under the floor above
+  const groundWalls = await state("s.model.walls.filter((w) => w.levelId === 'level_ground').length");
+  r = await tool("update_level", { id: "Ground floor", height: 3.4 });
+  check(
+    "storeys reviewed: a taller storey carries its walls up to the slab, in one step, with nothing open under it",
+    r.ok && r.wallsCarried === groundWalls && !(await codes("Ground floor")).includes("wall_short_of_slab"),
+    r.summary,
+  );
+  r = await tool("update_level", { id: "Ground floor", height: 2.9, walls: "keep" });
+  check("storeys reviewed: with walls kept, a wall running up through the floor above is reported", r.ok && r.wallsCarried === 0 && (await codes("Ground floor")).includes("wall_through_slab"));
+  await tool("update_level", { id: "Ground floor", height: 3.4, walls: "keep" });
+  await tool("update_level", { id: "Ground floor", height: 2.9 });
+  check("storeys reviewed: and lowering it again brings them back to the slab", !(await codes("Ground floor")).some((c) => c === "wall_through_slab" || c === "wall_short_of_slab"));
+
+  // the plan upstairs: the stairwell's rim is a visible edge, with its guard; the floor below a dash-dot guide
+  await tool("set_active_level", { id: upper });
+  await until(`s.editor.activeLevelId === '${upper}'`);
+  const well = page.locator(`${PLAN_SVG} .pl-stair--well`);
+  const rimDash = await well.locator(".pl-stair-flight").first().evaluate((el) => getComputedStyle(el).strokeDasharray);
+  const ghostDash = await page.locator(`${PLAN_SVG} .pl-ghost-wall`).first().evaluate((el) => getComputedStyle(el).strokeDasharray);
+  check(
+    "storeys reviewed: upstairs the stairwell's rim is drawn solid with a guard round it, over a dash-dot ghost of the floor below",
+    (await well.locator(".pl-stair-guard").count()) === 1 && rimDash === "none" && ghostDash !== "none",
+    `rim ${rimDash}, ghost ${ghostDash}`,
+  );
+  // the levels in Properties: each row named after its storey
+  check(
+    "storeys reviewed: each storey's row in Properties is a group named after it",
+    (await page.getByRole("tabpanel", { name: "Properties" }).getByRole("group", { name: "Ground floor", exact: true }).count()) === 1 &&
+      (await page.getByRole("tabpanel", { name: "Properties" }).getByRole("group", { name: "First floor", exact: true }).count()) === 1,
+  );
+  // PageUp from the activity feed pages the feed: the level stays
+  await page.locator(".activity__toggle").focus();
+  await page.keyboard.press("PageDown");
+  await page.waitForTimeout(150);
+  check("storeys reviewed: PageDown from the activity feed leaves the level being worked on alone", (await state("s.editor.activeLevelId")) === upper);
+
+  // the stair tool chosen on the rail by keyboard: focus goes to the plan, the arrows aim it, Enter places it
+  await tool("set_active_level", { id: "Ground floor" });
+  await until("s.editor.activeLevelId === 'level_ground'");
+  await page.mouse.move(2, 2);
+  const stairs = await state("s.model.stairs.length");
+  await railButton(page, "Add a stair").focus();
+  await page.keyboard.press("Enter");
+  check("storeys reviewed: choosing Add a stair on the rail by keyboard hands focus to the plan", await until("document.activeElement?.id === 'canvas'"));
+  await page.keyboard.press("ArrowRight");
+  check(
+    "storeys reviewed: with no pointer over the plan, the aimed stair is drawn and the hint says which way it climbs",
+    (await page.locator(".hint__tool").innerText()) === "Add a stair, climbing right" && (await page.locator(`${PLAN_SVG} .pl-ghost-stair`).count()) === 1,
+    await page.locator(".hint__tool").innerText(),
+  );
+  await page.keyboard.press("Enter");
+  check("storeys reviewed: Enter places it, climbing the way it was aimed", (await until(`s.model.stairs.length === ${stairs + 1}`)) && (await state("s.model.stairs[s.model.stairs.length - 1].rotation")) === 90);
+  await hook.evaluate((h) => h.actions.undo());
+  await until(`s.model.stairs.length === ${stairs}`);
+
+  // the 3D view: the stair stops at the ceiling of the storey shown, and the whole stack is framed
+  await showView(page, "3D");
+  await railButton(page, "Orbit").click();
+  // the levels shown up to the one worked on (the setting lasts the page's life: 12f left it at all)
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await page.getByRole("group", { name: "View" }).getByRole("combobox", { name: "Levels shown" }).selectOption("active");
+  await page.keyboard.press("Escape");
+  check("storeys reviewed: with the floor above hidden, the stair stops at the ground storey's ceiling", await sceneUntil((s) => s.storeyTop !== null && Math.abs(s.storeyTop - 2.7) < 1e-6), String((await scene())?.storeyTop));
+  await hook.evaluate((h, id) => h.actions.setActiveLevel(id), upper);
+  await railButton(page, "Top view").click();
+  await sceneUntil((s) => !s.moving);
+  await railButton(page, "Orbit").click();
+  check(
+    "storeys reviewed: Orbit frames every storey shown, the ground floor's foot included",
+    await sceneUntil((s) => !s.moving && s.levels.shown.length === 2 && s.framed && Math.abs(s.storeyTop - 5.6) < 1e-6),
+    JSON.stringify({ framed: (await scene())?.framed, top: (await scene())?.storeyTop }),
+  );
+  await hook.evaluate((h) => h.actions.setActiveLevel("level_ground"));
+  await showView(page, "Plan");
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+}
+
 // ---------- 13. console errors ----------
 check("zero console errors across the whole run", errors.length === 0, errors.slice(0, 3).join(" ;; "));
 

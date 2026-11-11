@@ -15,10 +15,19 @@
  *
  * The door leaves' swing is state of the scene, not of the plan: it is kept by door id, so a
  * wall rebuilt under an open door still shows it open.
+ *
+ * Storeys: every level of the plan is a group of its own, standing at the level's elevation
+ * (model/levels.ts levelsOf), and each entity is built in its level's group from that level alone
+ * — a wall's joints are with the walls on its own floor, a window's curtains give way to the
+ * pieces on its own floor. Every level above the ground stands on its slab (slabs.ts), with a
+ * stairwell left open over each stair from the level below; each stair (stairs.ts) stands on its
+ * level and climbs to the next. A level whose height changes moves the groups above it and
+ * rebuilds nothing; setLevels() shows and hides whole storeys.
  */
 
 import * as THREE from "three";
-import type { KindDef, Opening, PlanModel, Wall } from "../model/types";
+import type { KindDef, Opening, PlanModel, Stair, Wall } from "../model/types";
+import { levelSlice, levelsOf, stairGeometryIn } from "../model/levels";
 import { catalogOf } from "../model/catalog";
 import type { SetDoorsPayload } from "../model/sceneBus";
 import {
@@ -36,8 +45,11 @@ import {
 import { buildFurniture } from "./furniture";
 import { MaterialCache, disposeObject } from "./materials";
 import { contactShadow } from "./surfaces";
-import { addInkEdges, removeInkEdges } from "./edges";
+import { addInkEdges, removeInkEdges, type InkClip } from "./edges";
 import { CUT_CAP } from "./cutaway";
+import { buildSlab, slabOutline, stairwellPolys } from "./slabs";
+import { buildStair } from "./stairs";
+import type { Poly } from "./region";
 import { CUTAWAY, DOORS, FLOOR_TOP } from "./config";
 
 /** What one update did, by entity: for tests and the development probe. */
@@ -59,18 +71,36 @@ export interface DoorLeaf {
 interface Entity {
   signature: string;
   object: THREE.Object3D;
+  /** the level it stands on */
+  level: string;
   /** a wall's cap at the cutaway's level, built from what the wall was */
   capAt?: (level: number) => THREE.Mesh | null;
+  /**
+   * The cut's height over the entity's own floor its cap was built for (null: built with no
+   * cut, so no cap); undefined until it is first capped. A cap is built again only when it moves.
+   */
+  capCut?: number | null;
 }
 
 /** What a click on the model picked: the plan entity a mesh belongs to, as the store selects it. */
 export interface Picked {
-  type: "wall" | "room" | "item";
+  type: "wall" | "room" | "item" | "stair";
   id: string;
+  /** the level it stands on */
+  levelId: string;
 }
 
 /** An entity's key, by the store's selection: a floor and its pendant are the room's. */
-const PICK_TYPE: Readonly<Record<string, Picked["type"]>> = Object.freeze({ wall: "wall", floor: "room", pendant: "room", item: "item" });
+const PICK_TYPE: Readonly<Record<string, Picked["type"]>> = Object.freeze({ wall: "wall", floor: "room", pendant: "room", item: "item", stair: "stair" });
+
+/** What an entity's ink stops at, as the entity does: a stair's at the cut and its storey's top. */
+const inkClipOf = (key: string): InkClip => (key.startsWith("stair:") ? "stair" : "none");
+
+/** What a stair is built from: its own numbers and the height it climbs. */
+const stairSignature = (s: Stair, rise: number) => JSON.stringify([s.shape, s.x, s.y, s.rotation, s.width, s.turn ?? "", s.split ?? "", s.risers ?? "", s.tread ?? "", rise]);
+
+/** A slab's signature: the outlines it covers, or the openings left in it. */
+const polysSignature = (polys: readonly Poly[]) => polys.map((p) => p.map((q) => `${q.x},${q.y}`).join(" ")).join("|");
 
 /** Bounds the camera frames when the plan has no walls yet. */
 const EMPTY_PLAN_BOUNDS = new THREE.Box3(new THREE.Vector3(-4, 0, -3), new THREE.Vector3(4, 3, 3));
@@ -95,6 +125,10 @@ export class PlanScene {
   readonly root = new THREE.Group();
   readonly materials: MaterialCache;
   private readonly entities = new Map<string, Entity>();
+  /** one group per level, at its elevation */
+  private readonly levels = new Map<string, THREE.Group>();
+  /** the levels shown (null: every one) */
+  private shown: ReadonlySet<string> | null = null;
   private readonly ground: THREE.Mesh;
   private leaves: DoorLeaf[] = [];
   /** per door id: where its leaves are going (0 shut, 1 open) and where they are */
@@ -117,8 +151,26 @@ export class PlanScene {
   update(model: PlanModel): ReconcileStats {
     const stats: ReconcileStats = { added: 0, rebuilt: 0, moved: 0, removed: 0, kept: 0 };
     const seen = new Set<string>();
-    const put = (key: string, signature: string, build: () => THREE.Object3D, capAt?: Entity["capAt"]): THREE.Object3D => {
+    // the storeys first: a group per level, at its elevation (a level that went takes its group)
+    const infos = levelsOf(model);
+    for (const info of infos) {
+      let group = this.levels.get(info.level.id);
+      if (!group) {
+        group = new THREE.Group();
+        group.name = `level:${info.level.id}`;
+        group.userData.levelId = info.level.id;
+        this.levels.set(info.level.id, group);
+        this.root.add(group);
+      }
+      group.position.y = info.elevation;
+      group.visible = this.shown === null || this.shown.has(info.level.id);
+    }
+    let level = "";
+    const put = (key: string, built: string, build: () => THREE.Object3D | null, capAt?: Entity["capAt"]): THREE.Object3D | null => {
       seen.add(key);
+      // what an entity is built from always includes the level it stands on: one moved to another
+      // level is built again in that level's group, whatever else it keeps
+      const signature = `${level}#${built}`;
       const current = this.entities.get(key);
       if (current?.signature === signature) {
         stats.kept++;
@@ -126,56 +178,80 @@ export class PlanScene {
       }
       if (current) {
         this.drop(current);
-        stats.rebuilt++;
-      } else stats.added++;
+        this.entities.delete(key);
+      }
       const object = build();
+      if (!object) {
+        // nothing to build (a slab under nothing): what was there is gone
+        if (current) stats.removed++;
+        return null;
+      }
+      if (current) stats.rebuilt++;
+      else stats.added++;
       object.userData.entity = key;
-      const entity: Entity = { signature, object, capAt };
+      const entity: Entity = { signature, object, level, capAt };
       this.style(key, entity);
       this.materials.retain(object);
-      this.root.add(object);
+      this.levels.get(level)!.add(object);
       this.entities.set(key, entity);
       return object;
     };
 
-    const before = { ...stats };
     const byWall = openingsByWall(model);
-    const curtained = curtainedWindows(model, byWall);
-    for (const w of model.walls) {
-      const openings = byWall.get(w.id) ?? [];
-      const ext = jointExtensions(w, model.walls);
-      put(`wall:${w.id}`, wallSignature(w, openings, ext, curtained), () => buildWall(w, openings, ext, curtained), (level) =>
-        wallCutCap(w, openings, ext, level),
-      );
-    }
-    const wallsChanged = stats.added + stats.rebuilt > before.added + before.rebuilt || this.walls.length !== model.walls.length;
-    const ceiling = ceilingOf(model);
-    for (const r of model.rooms) {
-      put(`floor:${r.id}`, JSON.stringify([r.x, r.y, r.w, r.h, r.floor]), () => buildFloor(r, this.materials));
-      put(`pendant:${r.id}`, JSON.stringify([r.x, r.y, r.w, r.h, ceiling]), () => buildPendant(r, ceiling));
-    }
     const catalog = catalogOf(model);
-    for (const it of model.items) {
-      const def = catalog.get(it.kind);
-      if (!def) continue;
-      const key = `item:${it.id}`;
-      const before = this.entities.get(key);
-      const piece = put(key, String(defId(def)), () => {
-        const built = buildFurniture(def, this.materials);
-        // what an occlusion pass used to darken: the floor the piece stands on (a rug lies flat)
-        if (!def.isRug) built.add(contactShadow(def.w, def.d));
-        return built;
-      });
-      // where a piece stands is not part of what it is built from: moving it moves it
-      const x = it.x;
-      const z = it.y;
-      const ry = (it.rotation * Math.PI) / 180;
-      if (before?.object === piece && (piece.position.x !== x || piece.position.z !== z || piece.rotation.y !== ry)) {
-        stats.kept--;
-        stats.moved++;
+    let wallsChanged = false;
+    for (const info of infos) {
+      level = info.level.id;
+      const slice = levelSlice(model, level);
+      const before = stats.added + stats.rebuilt;
+      const curtained = curtainedWindows(slice, byWall);
+      for (const w of slice.walls) {
+        const openings = byWall.get(w.id) ?? [];
+        const ext = jointExtensions(w, slice.walls);
+        put(`wall:${w.id}`, wallSignature(w, openings, ext, curtained), () => buildWall(w, openings, ext, curtained), (at) =>
+          wallCutCap(w, openings, ext, at),
+        );
       }
-      piece.position.set(x, FLOOR_TOP, z);
-      piece.rotation.y = ry;
+      if (stats.added + stats.rebuilt > before) wallsChanged = true;
+      const wells = info.index > 0 ? stairwellPolys(model, level) : [];
+      const wellSig = polysSignature(wells);
+      if (info.index > 0) {
+        const outline = slabOutline(slice);
+        put(`slab:${level}`, `${polysSignature(outline)}#${wellSig}`, () => buildSlab(outline, wells));
+      }
+      const ceiling = ceilingOf(slice);
+      for (const r of slice.rooms) {
+        // the stairwells that reach into this room: only those can change its floor
+        const near = wells.filter((w) => w.some((p) => p.x > r.x - 1e-9) && w.some((p) => p.x < r.x + r.w + 1e-9) && w.some((p) => p.y > r.y - 1e-9) && w.some((p) => p.y < r.y + r.h + 1e-9));
+        put(`floor:${r.id}`, JSON.stringify([r.x, r.y, r.w, r.h, r.floor, polysSignature(near)]), () => buildFloor(r, this.materials, near));
+        put(`pendant:${r.id}`, JSON.stringify([r.x, r.y, r.w, r.h, ceiling]), () => buildPendant(r, ceiling));
+      }
+      for (const st of slice.stairs) {
+        const g = stairGeometryIn(model, st);
+        if (g) put(`stair:${st.id}`, stairSignature(st, g.rise), () => buildStair(st, g));
+      }
+      for (const it of slice.items) {
+        const def = catalog.get(it.kind);
+        if (!def) continue;
+        const key = `item:${it.id}`;
+        const before = this.entities.get(key);
+        const piece = put(key, String(defId(def)), () => {
+          const built = buildFurniture(def, this.materials);
+          // what an occlusion pass used to darken: the floor the piece stands on (a rug lies flat)
+          if (!def.isRug) built.add(contactShadow(def.w, def.d));
+          return built;
+        })!;
+        // where a piece stands is not part of what it is built from: moving it moves it
+        const x = it.x;
+        const z = it.y;
+        const ry = (it.rotation * Math.PI) / 180;
+        if (before?.object === piece && (piece.position.x !== x || piece.position.z !== z || piece.rotation.y !== ry)) {
+          stats.kept--;
+          stats.moved++;
+        }
+        piece.position.set(x, FLOOR_TOP, z);
+        piece.rotation.y = ry;
+      }
     }
 
     for (const [key, entity] of this.entities) {
@@ -184,17 +260,55 @@ export class PlanScene {
       this.entities.delete(key);
       stats.removed++;
     }
+    for (const [id, group] of this.levels) {
+      if (infos.some((l) => l.level.id === id)) continue;
+      this.root.remove(group);
+      this.levels.delete(id);
+    }
     this.materials.sweep();
     if (this.edges && (wallsChanged || stats.removed > 0)) this.reink();
+    // a cap stands at the cut's height over its own floor, which a change of storey heights
+    // moves: capWall builds again only the caps whose height over their floor did change
+    if (this.cut !== null) for (const entity of this.entities.values()) this.capWall(entity);
     this.collectLeaves(model);
     this.hasWalls = model.walls.length > 0;
     return stats;
   }
 
+  /**
+   * Show the levels in `ids` and hide the rest (null: show every one). Returns whether anything
+   * changed.
+   */
+  setLevels(ids: ReadonlySet<string> | null): boolean {
+    this.shown = ids;
+    let changed = false;
+    for (const [id, group] of this.levels) {
+      const visible = ids === null || ids.has(id);
+      if (group.visible !== visible) changed = true;
+      group.visible = visible;
+    }
+    return changed;
+  }
+
+  /** Each level's group, by level id. */
+  get levelGroups(): ReadonlyMap<string, THREE.Group> {
+    return this.levels;
+  }
+
+  /** Is the level shown? */
+  private levelShown(id: string): boolean {
+    return this.levels.get(id)?.visible ?? false;
+  }
+
+  /** How far up the floor of an entity's level stands. */
+  private elevationOf(entity: Entity): number {
+    return this.levels.get(entity.level)?.position.y ?? 0;
+  }
+
   /** Give a newly built entity the drawing style the scene is in. */
   private style(key: string, entity: Entity): void {
     // a wall's ink depends on the walls it meets: drawn once they are all built (reink)
-    if (this.edges && !key.startsWith("wall:")) addInkEdges(entity.object);
+    if (this.edges && !key.startsWith("wall:")) addInkEdges(entity.object, false, [], inkClipOf(key));
     this.capWall(entity);
     if (key.startsWith("pendant:")) this.showPendant(entity.object);
   }
@@ -227,6 +341,9 @@ export class PlanScene {
    */
   private capWall(entity: Entity): void {
     if (!entity.capAt) return;
+    const at = this.cut === null ? null : this.cut - this.elevationOf(entity);
+    if (entity.capCut === at) return; // the cap there is the one this cut needs
+    entity.capCut = at;
     const curtains = entity.object.getObjectByName(CURTAINS);
     if (curtains) curtains.visible = !(this.cut !== null && CUTAWAY.hideCurtains);
     const old = entity.object.getObjectByName(CUT_CAP);
@@ -234,7 +351,7 @@ export class PlanScene {
       entity.object.remove(old);
       (old as THREE.Mesh).geometry.dispose();
     }
-    const cap = this.cut === null ? null : entity.capAt(this.cut);
+    const cap = at === null ? null : entity.capAt(at);
     if (cap) entity.object.add(cap);
   }
 
@@ -243,7 +360,7 @@ export class PlanScene {
     if (on === this.edges) return false;
     this.edges = on;
     for (const [key, { object }] of this.entities) {
-      if (on && !key.startsWith("wall:")) addInkEdges(object);
+      if (on && !key.startsWith("wall:")) addInkEdges(object, false, [], inkClipOf(key));
       else removeInkEdges(object);
       if (key.startsWith("pendant:")) this.showPendant(object);
     }
@@ -251,12 +368,20 @@ export class PlanScene {
     return true;
   }
 
-  /** Ink every wall afresh, against the walls it meets now. */
+  /** Ink every wall afresh, against the walls it meets now: the walls on its own floor. */
   private reink(): void {
-    const walls = this.walls;
-    for (const wall of walls) {
-      removeInkEdges(wall);
-      addInkEdges(wall, true, walls);
+    const byLevel = new Map<string, THREE.Object3D[]>();
+    for (const [key, { object, level }] of this.entities) {
+      if (!key.startsWith("wall:")) continue;
+      const list = byLevel.get(level);
+      if (list) list.push(object);
+      else byLevel.set(level, [object]);
+    }
+    for (const walls of byLevel.values()) {
+      for (const wall of walls) {
+        removeInkEdges(wall);
+        addInkEdges(wall, true, walls);
+      }
     }
   }
 
@@ -282,7 +407,8 @@ export class PlanScene {
       if (!key) continue;
       const colon = key.indexOf(":");
       const type = PICK_TYPE[key.slice(0, colon)];
-      return type ? { type, id: key.slice(colon + 1) } : null;
+      const entity = this.entities.get(key);
+      return type && entity ? { type, id: key.slice(colon + 1), levelId: entity.level } : null;
     }
     return null;
   }
@@ -292,15 +418,35 @@ export class PlanScene {
     return [...this.entities.values()].map((e) => e.object);
   }
 
-  /** The walls' objects: what can stand between the camera and a room. */
+  /** The walls' objects, on every level. */
   get walls(): THREE.Object3D[] {
     const walls: THREE.Object3D[] = [];
     for (const [key, { object }] of this.entities) if (key.startsWith("wall:")) walls.push(object);
     return walls;
   }
 
+  /** What can stand between the camera and a room on the levels shown: their walls and slabs. */
+  get occluders(): THREE.Object3D[] {
+    const found: THREE.Object3D[] = [];
+    for (const [key, { object, level }] of this.entities) {
+      if ((key.startsWith("wall:") || key.startsWith("slab:")) && this.levelShown(level)) found.push(object);
+    }
+    return found;
+  }
+
+  /** How many stairs and slabs the scene holds. */
+  get counts(): { stairs: number; slabs: number } {
+    let stairs = 0;
+    let slabs = 0;
+    for (const key of this.entities.keys()) {
+      if (key.startsWith("stair:")) stairs++;
+      else if (key.startsWith("slab:")) slabs++;
+    }
+    return { stairs, slabs };
+  }
+
   private drop(entity: Entity): void {
-    this.root.remove(entity.object);
+    entity.object.parent?.remove(entity.object);
     this.materials.release(entity.object);
     disposeObject(entity.object, this.materials);
   }
@@ -376,11 +522,14 @@ export class PlanScene {
     return this.hasWalls;
   }
 
-  /** The plan's content bounds, ground excluded — what the camera frames. */
+  /** The content of the levels shown, ground excluded — what the camera frames. */
   bounds(target = new THREE.Box3()): THREE.Box3 {
     if (!this.hasWalls) return target.copy(EMPTY_PLAN_BOUNDS);
     target.makeEmpty();
-    for (const { object } of this.entities.values()) target.expandByObject(object);
+    // the levels' groups stand at their elevations: their pieces' frames are measured through them
+    this.root.updateMatrixWorld(true);
+    for (const entity of this.entities.values()) if (this.levelShown(entity.level)) target.expandByObject(entity.object);
+    if (target.isEmpty()) target.copy(EMPTY_PLAN_BOUNDS);
     return target;
   }
 
@@ -393,6 +542,8 @@ export class PlanScene {
   dispose(): void {
     for (const entity of this.entities.values()) this.drop(entity);
     this.entities.clear();
+    for (const group of this.levels.values()) this.root.remove(group);
+    this.levels.clear();
     this.root.remove(this.ground);
     disposeObject(this.ground, this.materials);
     this.materials.dispose();

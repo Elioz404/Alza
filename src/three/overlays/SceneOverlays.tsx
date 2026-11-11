@@ -1,6 +1,7 @@
 /**
  * The 3D view's own chrome, floating over the scene: the camera switch (Orbit, Top view, Walk)
- * at the top left with the View settings beside it (ink edges, the cutaway and its height), and
+ * at the top left with the View settings beside it (ink edges, the cutaway and its height, and
+ * on a plan of several storeys the levels shown), and
  * one hint bar at the bottom centre that says what the pointer and the keys do in the current
  * camera, or how to finish placing a piece of furniture.
  *
@@ -12,8 +13,9 @@
  * boolean), so an agent's run of edits does not re-render the scene's chrome.
  */
 
-import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { pageActions } from "../../model/store";
+import { Fragment, useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
+import { activeLevel, pageActions } from "../../model/store";
+import { levelsShown, onLevelsShown, setLevelsShown } from "../levelView";
 import { CAMERA_MODES, CUT_HEIGHT, CUT_HEIGHT_STEP, type CameraMode } from "../../model/limits";
 import { catalogOf } from "../../model/catalog";
 import { runToolManually } from "../../mcp/tools";
@@ -57,6 +59,41 @@ export function CameraToolbar() {
 /** Metres as the plan writes a height. */
 const metres = (m: number) => `${m.toFixed(2)} m`;
 
+/** The plan's levels as "id\tname" lines, ground first: a string, so an edit elsewhere does not re-render. */
+const levelList = (levels: readonly { id: string; name: string }[]) => levels.map((l) => `${l.id}\t${l.name}`).join("\n");
+
+/**
+ * Which storeys the model shows, on a plan that has more than one: up to the level being worked
+ * on (the default), every level, or up to a level by name. A native select: its keys and its
+ * announcement are the platform's.
+ */
+function LevelsShownField() {
+  const list = useAppStore((s) => levelList(s.model.levels));
+  const active = useAppStore((s) => activeLevel(s).name);
+  const value = useSyncExternalStore(onLevelsShown, levelsShown);
+  const id = useId();
+  const levels = list ? list.split("\n").map((line) => line.split("\t") as [string, string]) : [];
+  if (levels.length < 2) return null;
+  // a level that is gone shows as the active one, as the view does
+  const current = value === "active" || value === "all" || levels.some(([lid]) => lid === value) ? value : "active";
+  return (
+    <div className="scene-view__levels">
+      <label htmlFor={id} className="scene-view__label">
+        Levels shown
+      </label>
+      <select id={id} className="input scene-view__select" value={current} onChange={(e) => setLevelsShown(e.target.value)}>
+        <option value="active">Up to the active level ({active})</option>
+        {levels.map(([lid, name]) => (
+          <option key={lid} value={lid}>
+            Up to {name}
+          </option>
+        ))}
+        <option value="all">All levels</option>
+      </select>
+    </div>
+  );
+}
+
 /**
  * The View settings: a button that shows and hides a small panel of the 3D view's drawing style
  * (the store's editor.scene, the same settings set_3d_style changes). A disclosure, not a menu:
@@ -96,7 +133,7 @@ export function ViewSettings() {
         ref={buttonRef}
         icon={IconEye}
         label="View"
-        hint="Ink edges and a cutaway"
+        hint="Ink edges, a cutaway and the levels shown"
         variant="ghost"
         className="scene-view__toggle"
         aria-expanded={open}
@@ -142,6 +179,7 @@ export function ViewSettings() {
               onChange={(e) => pageActions.setSceneStyle({ cutHeight: Number(e.target.value) })}
             />
           </div>
+          <LevelsShownField />
         </div>
       ) : null}
     </div>
@@ -158,13 +196,20 @@ function Item({ keys, children }: { keys?: readonly string[]; children: ReactNod
   );
 }
 
-/** The hint bar's segments for a camera, in reading order. */
-function cameraItems(camera: CameraMode, hasDoors: boolean): ReactNode[] {
+/** The hint bar's segments for a camera, in reading order; on a plan of several storeys, how to change level first. */
+function cameraItems(camera: CameraMode, hasDoors: boolean, storeys: boolean): ReactNode[] {
   const items: ReactNode[] = [];
+  if (storeys) {
+    items.push(
+      <Item key="level" keys={["pageup", "pagedown"]}>
+        change level
+      </Item>,
+    );
+  }
   if (camera === "walk") {
     items.push(
       <Item key="keys" keys={["w", "a", "s", "d"]}>
-        or the arrow keys to walk
+        {storeys ? "or the arrow keys to walk, up and down the stairs" : "or the arrow keys to walk"}
       </Item>,
       <Item key="look">Drag to look around</Item>,
     );
@@ -174,7 +219,7 @@ function cameraItems(camera: CameraMode, hasDoors: boolean): ReactNode[] {
     items.push(<Item key="orbit">Drag to orbit</Item>, <Item key="zoom">Scroll to zoom</Item>);
   }
   if (hasDoors) items.push(<Item key="door">Click a door to open or close it</Item>);
-  items.push(<Item key="select">Click a wall, room or piece to select it</Item>);
+  items.push(<Item key="select">{storeys ? "Click a wall, room, piece or stair to select it" : "Click a wall, room or piece to select it"}</Item>);
   return items;
 }
 
@@ -205,6 +250,8 @@ function Segments({ items }: { items: ReactNode[] }) {
 export function SceneHint() {
   const camera = useAppStore((s) => s.editor.camera);
   const hasDoors = useAppStore((s) => s.model.openings.some((o) => o.kind === "door"));
+  // on a plan of several storeys, the level being worked on is named (and announced as it changes)
+  const level = useAppStore((s) => (s.model.levels.length > 1 ? activeLevel(s).name : null));
   // a string, so an edit that leaves the selection alone does not re-render the hint
   const selected = useAppStore((s) => selectionTitle(s.editor, s.model));
   // a string, so a plan change that leaves it alone does not re-render the hint
@@ -235,11 +282,17 @@ export function SceneHint() {
       </div>
     );
   }
-  const items = cameraItems(camera, hasDoors);
+  const items = cameraItems(camera, hasDoors, level !== null);
   if (selected) items.unshift(<PartsItem key="remove" parts={REMOVE} />, <PartsItem key="deselect" parts={DESELECT} />);
   return (
     <div className="scene-float scene-hint" role="status">
       <span className="scene-hint__tool">{selected ?? tool?.label ?? camera}</span>
+      {level !== null ? (
+        <>
+          <span className="scene-hint__sep" aria-hidden="true" />
+          <span className="scene-hint__level">{level}</span>
+        </>
+      ) : null}
       <span className="scene-hint__sep" aria-hidden="true" />
       <Segments items={items} />
       {hasDoors ? (

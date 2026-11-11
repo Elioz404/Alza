@@ -18,6 +18,8 @@ import {
   HINGES,
   IMAGE_FRACTION,
   ITEM_CATEGORIES,
+  LEVEL_HEIGHT,
+  MAX_LEVELS,
   MAX_PARTS,
   OPACITY,
   OPENING_HEIGHT,
@@ -30,6 +32,9 @@ import {
   ROOM_SIZE,
   ROTATION,
   SIGNED_LENGTH,
+  STAIR,
+  STAIR_SHAPES,
+  STAIR_TURNS,
   SUPPLIER,
   SWING_SIDES,
   TEXT,
@@ -68,6 +73,17 @@ export const partOffset = inRange(PART_OFFSET);
 export const imageFraction = inRange(IMAGE_FRACTION);
 export const calibrationMeters = inRange(CALIBRATION_METERS);
 export const opacity = inRange(OPACITY);
+
+export const levelHeight = inRange(LEVEL_HEIGHT);
+/** A level's place in the stack: 0 is the ground level. */
+export const levelOrder = z.int().min(0).max(MAX_LEVELS - 1);
+export const stairWidth = inRange(STAIR.width);
+/** A count of risers (or of the risers up to an L-shaped stair's landing). */
+export const stairRiserCount = z.int().min(STAIR.risers.min).max(STAIR.risers.max);
+/** A going set on a stair: wide enough a range to record a drawing, which the checker then judges. */
+export const stairGoing = inRange(STAIR.treadSet);
+export const stairShape = z.enum(STAIR_SHAPES);
+export const stairTurn = z.enum(STAIR_TURNS);
 
 /** An id, or a human name such as "bedroom", that addresses an entity. */
 export const ref = text(TEXT.ref);

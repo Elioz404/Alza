@@ -111,6 +111,10 @@ export const LIGHT_TOKENS: TokenSheet = Object.freeze({
   "--plan-destructive": ref("--color-error"),
   "--plan-destructive-muted": ref("--color-error-muted"),
   "--plan-destructive-hatch": sheet.destructiveHatch,
+  /** the level below the one being worked on, as a ghost to line up with */
+  "--plan-ghost": sheet.ghost,
+  /** a stair's treads: furniture-white, so the linework reads over any floor */
+  "--plan-stair": ref("--plan-furniture"),
   // pens: the drawing is one SVG unit per screen pixel, so these keep their weight at every
   // zoom. Hairline for extension lines, fine for grid and detail, firm for outlines.
   "--pen-hair": "calc(var(--size-hairline) * 0.75)",
@@ -123,6 +127,10 @@ export const LIGHT_TOKENS: TokenSheet = Object.freeze({
   "--dash-preview": "6 4",
   "--dash-ghost": "4 3",
   "--dash-rug": "2 3",
+  /** hidden lines: what is above the plan's cut (a stair's upper treads) */
+  "--dash-hidden": "5 3",
+  /** the level below's walls, under the one being worked on: a dash-dot reference line */
+  "--dash-level-below": "8 3 2 3",
   // the 3D view
   "--scene-backdrop": scene.backdrop,
   "--scene-ink": scene.ink,
@@ -264,6 +272,7 @@ export const DARK_TOKENS: TokenSheet = Object.freeze({
   "--plan-floor-oak": dark.floorOak,
   "--plan-floor-carpet": dark.floorCarpet,
   "--plan-floor-tile": dark.floorTile,
+  "--plan-ghost": dark.ghost,
   "--shadow-low": `inset 0 0 0 1px ${dark.ringLow.css}`,
   "--shadow-med": `inset 0 0 0 1px ${dark.ringMed.css}`,
   "--shadow-high": `inset 0 0 0 1px ${dark.ringHigh.css}`,

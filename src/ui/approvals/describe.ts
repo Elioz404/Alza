@@ -12,6 +12,7 @@ import type { ApprovalTarget, PendingApproval, PlanModel } from "../../model/typ
 import { segLen, segPoint } from "../../model/geometry";
 import { openingSpan } from "../../model/issues";
 import { catalogOf } from "../../model/catalog";
+import { levelSlice, stairGeometryIn } from "../../model/levels";
 
 /** The word for a target's type, as a button and a sentence use it. */
 const NOUN: Record<ApprovalTarget["type"], string> = {
@@ -20,11 +21,13 @@ const NOUN: Record<ApprovalTarget["type"], string> = {
   window: "window",
   room: "room",
   item: "item",
+  stair: "stair",
+  level: "level",
   plan: "plan",
 };
 
 /** Types whose label is a name someone typed (shown quoted), rather than a size the page measured. */
-const NAMED: ReadonlySet<ApprovalTarget["type"]> = new Set(["room", "item", "plan"]);
+const NAMED: ReadonlySet<ApprovalTarget["type"]> = new Set(["room", "item", "level", "plan"]);
 
 const capitalise = (s: string): string => s[0].toUpperCase() + s.slice(1);
 
@@ -133,18 +136,35 @@ export function targetShapes(a: PendingApproval, model: PlanModel): Shape[] {
         if (it && def) shapes.push({ kind: "rect", cx: it.x, cy: it.y, w: def.w, h: def.d, rotation: it.rotation });
         break;
       }
+      case "stair": {
+        const st = model.stairs.find((x) => x.id === t.id);
+        const g = st && stairGeometryIn(model, st);
+        // each flight and the landing: the editor's rotate(-deg) is the rectangle's rot, in degrees, negated
+        for (const r of g ? g.footprint : []) shapes.push({ kind: "rect", cx: r.cx, cy: r.cy, w: 2 * r.hw, h: 2 * r.hd, rotation: (-r.rot * 180) / Math.PI });
+        break;
+      }
+      case "level": {
+        const extent = extentOf(levelSlice(model, t.id));
+        if (extent && model.levels.some((l) => l.id === t.id)) shapes.push(extent);
+        break;
+      }
       case "plan": {
-        const xs = [...model.walls.flatMap((w) => [w.ax, w.bx]), ...model.rooms.flatMap((r) => [r.x, r.x + r.w]), ...model.items.map((i) => i.x)];
-        const ys = [...model.walls.flatMap((w) => [w.ay, w.by]), ...model.rooms.flatMap((r) => [r.y, r.y + r.h]), ...model.items.map((i) => i.y)];
-        if (xs.length > 0) {
-          const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-          shapes.push({ kind: "rect", cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0, rotation: 0 });
-        }
+        const extent = extentOf(model);
+        if (extent) shapes.push(extent);
         break;
       }
     }
   }
   return shapes;
+}
+
+/** The rectangle around a plan's walls, rooms and items, or null when it has none. */
+function extentOf(model: PlanModel): Shape | null {
+  const xs = [...model.walls.flatMap((w) => [w.ax, w.bx]), ...model.rooms.flatMap((r) => [r.x, r.x + r.w]), ...model.items.map((i) => i.x)];
+  const ys = [...model.walls.flatMap((w) => [w.ay, w.by]), ...model.rooms.flatMap((r) => [r.y, r.y + r.h]), ...model.items.map((i) => i.y)];
+  if (xs.length === 0) return null;
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  return { kind: "rect", cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0, rotation: 0 };
 }
 
 /** A shape's corners, in metres (a segment as the four corners of its thickness). */

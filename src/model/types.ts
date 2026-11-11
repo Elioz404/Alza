@@ -1,10 +1,25 @@
 /** Domain model — all units are meters, plan lives on the XY plane (y grows downward in 2D view). */
 
-import type { Actor, FloorFinish, Hinge, ItemCategory, NoteAuthor, SwingSide } from "./limits";
+import type { Actor, FloorFinish, Hinge, ItemCategory, KindSource, NoteAuthor, OpeningKind, StairShape, StairTurn, SwingSide } from "./limits";
+import { GROUND_LEVEL_ID, LEVEL_DEFAULTS, LEVEL_NAMES, PLAN_FORMAT_VERSION } from "./limits";
 import type { PartInput } from "./schemas";
+
+/**
+ * One storey of the plan. Levels stack in the order the plan lists them, from the ground up:
+ * a level's floor stands at the sum of the floor-to-floor heights of the levels below it
+ * (model/levels.ts, levelsOf), so the elevation is derived and can never disagree with them.
+ */
+export interface Level {
+  id: string;
+  name: string;
+  /** floor-to-floor height, metres: from this level's floor to the floor of the level above */
+  height: number;
+}
 
 export interface Wall {
   id: string;
+  /** the level the wall stands on; its openings are on the same level */
+  levelId: string;
   ax: number;
   ay: number;
   bx: number;
@@ -13,7 +28,7 @@ export interface Wall {
   height: number; // meters, e.g. 2.7
 }
 
-export type OpeningKind = "door" | "window";
+export type { OpeningKind } from "./limits";
 
 export interface Opening {
   id: string;
@@ -35,6 +50,7 @@ export interface Opening {
 
 export interface Room {
   id: string;
+  levelId: string;
   x: number;
   y: number;
   w: number;
@@ -45,10 +61,43 @@ export interface Room {
 
 export interface Item {
   id: string;
+  levelId: string;
   kind: string; // catalog key
   x: number; // center
   y: number;
   rotation: number; // degrees, counterclockwise
+}
+
+/**
+ * A stair from the level it stands on (its bottom) to the level above it. Only where it starts,
+ * which way it climbs and how wide it is are stored: its risers, goings, flights, landing and
+ * the stairwell it opens in the floor above all follow from those and from the floor-to-floor
+ * height it climbs (model/stairs.ts, stairGeometry), so they stay right when a level changes.
+ */
+export interface Stair {
+  id: string;
+  /** the level the stair starts on; it arrives on the next level up */
+  levelId: string;
+  shape: StairShape;
+  /** centre of the bottom riser, on the plan */
+  x: number;
+  y: number;
+  /**
+   * The direction it climbs, degrees counterclockwise, with place_item's convention:
+   * 0 = toward +y (down the sheet), 90 = +x, 180 = -y, 270 = -x. For an L-shaped stair this is
+   * the first flight's direction.
+   */
+  rotation: number;
+  /** clear width of each flight, metres */
+  width: number;
+  /** L-shaped only: which way the second flight turns, as seen climbing (default "left") */
+  turn?: StairTurn;
+  /** L-shaped only: risers in the first flight, up to the landing (default: half of them) */
+  split?: number;
+  /** a set number of risers; by default the fewest that keep each under STAIR.riser.max */
+  risers?: number;
+  /** a set going (tread depth), metres; by default the one the step rule asks for */
+  tread?: number;
 }
 
 /**
@@ -59,12 +108,7 @@ export interface Item {
  */
 export type PartSpec = Readonly<PartInput>;
 
-/**
- * Where a kind comes from. "builtin" kinds ship with the app and have hand-modelled 3D
- * builders; "custom" kinds were defined by an agent with define_item_kind; "supplier" kinds
- * were adopted from the partner origin, so their text is third-party content.
- */
-export type KindSource = "builtin" | "custom" | "supplier";
+export type { KindSource } from "./limits";
 
 /** A kind of furniture: its footprint (metres), display metadata and, optionally, its 3D parts. */
 export interface KindDef {
@@ -104,7 +148,7 @@ export interface Underlay {
 }
 
 /** The kinds of thing an approval can be about. */
-export type TargetType = "wall" | "door" | "window" | "room" | "item" | "plan";
+export type TargetType = "wall" | "door" | "window" | "room" | "item" | "stair" | "level" | "plan";
 
 /**
  * One entity a parked call would act on, as the page found it in the model — never as the
@@ -146,11 +190,16 @@ export interface Note {
 }
 
 export interface PlanModel {
+  /** the data format the plan is written in (PLAN_FORMAT_VERSION); older ones migrate on load */
+  version: typeof PLAN_FORMAT_VERSION;
   name: string;
+  /** the storeys, from the ground up; a plan always has at least one */
+  levels: Level[];
   walls: Wall[];
   openings: Opening[];
   rooms: Room[];
   items: Item[];
+  stairs: Stair[];
   /**
    * The kinds this plan adds to the built-in catalogue: agent-defined pieces (with their 3D
    * parts) and adopted supplier products. They live in the plan so it is self-contained — a
@@ -183,12 +232,18 @@ export interface Issue {
   readonly refs: readonly string[]; // entity ids involved
 }
 
+/** The single level a fresh plan stands on. */
+export const groundLevel = (): Level => ({ id: GROUND_LEVEL_ID, name: LEVEL_NAMES[0], height: LEVEL_DEFAULTS.height });
+
 export const emptyModel = (): PlanModel => ({
+  version: PLAN_FORMAT_VERSION,
   name: "Untitled plan",
+  levels: [groundLevel()],
   walls: [],
   openings: [],
   rooms: [],
   items: [],
+  stairs: [],
   kinds: [],
   underlay: null,
 });

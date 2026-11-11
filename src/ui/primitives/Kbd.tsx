@@ -51,6 +51,8 @@ const KEY: Readonly<Record<string, { chip: string; spoken: string }>> = {
   space: { chip: "Space", spoken: "Space" },
   home: { chip: "Home", spoken: "Home" },
   end: { chip: "End", spoken: "End" },
+  pageup: { chip: "PgUp", spoken: "Page Up" },
+  pagedown: { chip: "PgDn", spoken: "Page Down" },
 };
 
 /** The platform's modifier: Command where the keyboard has one, Control elsewhere. */
