@@ -29,6 +29,7 @@ import type {
   Wall,
 } from "./types";
 import { emptyModel } from "./types";
+import { uid } from "./ids";
 import { imageAssetError, letGoOfAsset, releaseUnreferencedAssets, type AssetId } from "./assets";
 import { clampOpeningT } from "./issues";
 import { segLen, snap } from "./geometry";
@@ -170,9 +171,7 @@ export const UNDO_DEPTH = 50;
 /** How many entries the on-page activity feed keeps. */
 export const ACTIVITY_LIMIT = 200;
 
-let idCounter = 0;
-export const uid = (prefix: string): string =>
-  `${prefix}_${Date.now().toString(36)}_${(idCounter++).toString(36)}`;
+export { uid } from "./ids";
 
 const initialEditor: EditorState = {
   view: "2d",

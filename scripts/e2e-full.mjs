@@ -58,6 +58,24 @@ page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
 
 const S = async (name) => page.screenshot({ path: `${OUT}/${name}.png` });
+
+/** Start a download with `act` and read the file it gives: its name and text, or null when none came. */
+const downloadText = async (act) => {
+  const wait = page.waitForEvent("download", { timeout: 8000 }).catch(() => null);
+  await act();
+  const d = await wait;
+  if (!d) return null;
+  const { readFile } = await import("node:fs/promises");
+  return { name: d.suggestedFilename(), text: await readFile(await d.path(), "utf8") };
+};
+/** What an exported IFC file says about itself: whether it is framed as STEP, its schema, and how many of an entity it holds. */
+const ifcFacts = (file) => ({
+  framed: !!file && file.text.startsWith("ISO-10303-21;\nHEADER;") && file.text.trimEnd().endsWith("END-ISO-10303-21;"),
+  schema: file ? /FILE_SCHEMA\(\('([^']*)'\)\);/.exec(file.text)?.[1] : undefined,
+  view: file ? /FILE_DESCRIPTION\(\('([^']*)'\)/.exec(file.text)?.[1] : undefined,
+  count: (type) => (file ? (file.text.match(new RegExp(`^#\\d+=${type}\\(`, "gm")) ?? []).length : 0),
+  names: (type) => (file ? [...file.text.matchAll(new RegExp(`^#\\d+=${type}\\('[^']*',\\$,'([^']*)'`, "gm"))].map((m) => m[1]) : []),
+});
 const hook = await openStudio(page, BASE);
 const state = (expr) =>
   hook.evaluate((h, e) => {
@@ -345,6 +363,20 @@ r = await runTool("get_editor_state", {});
 check("tool get_editor_state", r.ok && r.editor);
 r = await runTool("get_notes", {});
 check("tool get_notes", r.ok && r.notes.length >= 1);
+{
+  let result = null;
+  const file = await downloadText(async () => {
+    result = await runTool("export_ifc", {});
+  });
+  const ifc = ifcFacts(file);
+  const walls = await state("s.model.walls.length");
+  check(
+    "tool export_ifc: downloads an IFC4 file named after the plan, and answers with its counts",
+    result?.ok && file?.name === "e2e-test-plan.ifc" && ifc.framed && ifc.schema === "IFC4" &&
+      ifc.count("IFCWALL") === walls && result.ifc.elements.walls === walls && result.ifc.bytes === file.text.length,
+    `${file?.name}, ${ifc.schema}, ${ifc.count("IFCWALL")}/${walls} walls, ${result?.summary}`,
+  );
+}
 r = await runTool("remove_room", { id: "Office" });
 check("tool remove_room", r.ok);
 r = await runTool("edit_wall", { id: (await state("s.model.walls[0].id")), thickness: 0.2 });
@@ -398,6 +430,31 @@ answered = await agentAnswer();
 check("gate: Esc keeps the next one", !answered.ok && (await state("s.approvals.length")) === 0);
 await page.keyboard.press("Control+z");
 check("gate: an approved removal undoes like any other change", await until(`s.model.rooms.some((x) => x.id === '${bathroomId}')`));
+// the agent's IFC export hands the human a file: it always asks, names the file, and downloads only when taken
+{
+  let downloaded = 0;
+  const count = () => downloaded++;
+  page.on("download", count);
+  await page.locator(PLAN_SVG).click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Escape");
+  await agentAsks("export_ifc", {});
+  await requestCard(page).waitFor({ timeout: 5000 });
+  const asked =
+    (await requestCard(page).getByRole("button", { name: "Download file" }).count()) === 1 &&
+    (await requestCard(page).getByRole("button", { name: "Don't download" }).count()) === 1 &&
+    ((await requestCard(page).textContent()) ?? "").includes("sunset-loft.ifc");
+  await page.keyboard.press("Escape");
+  answered = await agentAnswer();
+  page.off("download", count);
+  check("gate: the agent's IFC export waits for the human, naming the file, and Esc downloads nothing", asked && !answered.ok && /declined/.test(answered.summary) && downloaded === 0, answered.summary);
+  const file = await downloadText(async () => {
+    await agentAsks("export_ifc", {});
+    await requestCard(page).waitFor({ timeout: 5000 });
+    await page.keyboard.press("Control+Enter");
+  });
+  answered = await agentAnswer();
+  check("gate: approved, the IFC file downloads and the agent gets its counts", answered.ok && file?.name === "sunset-loft.ifc" && ifcFacts(file).framed && answered.ifc?.elements?.walls === 7, `${file?.name} ${answered.summary}`);
+}
 
 // ---------- 11b2. agent-authored furniture ----------
 r = await runTool("get_underlay", {});
@@ -759,6 +816,28 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   await tool("add_room", { x: 0.075, y: 0.075, w: 7.85, h: 5.85, label: "Upstairs", level: upper });
   const stairId = (await tool("add_stair", { x: 7.3, y: 5.5, rotation: 180, level: "Ground floor" })).id;
   await tool("set_active_level", { id: "Ground floor" });
+  // the IFC model is written from the plan, not the view: it exports from 2D, every storey in it
+  {
+    const file = await downloadText(() => exportMenu(page, "Building model"));
+    const ifc = ifcFacts(file);
+    check(
+      "IFC export: the Export menu downloads one IFC4 storey per level, from the 2D view",
+      (await state("s.editor.view")) === "2d" && file?.name === "sunset-loft.ifc" && ifc.framed && ifc.schema === "IFC4" &&
+        ifc.view === "ViewDefinition [DesignTransferView_V1.0]" && ifc.names("IFCBUILDINGSTOREY").join() === "Ground floor,First floor",
+      `${file?.name}: ${ifc.schema}, storeys ${ifc.names("IFCBUILDINGSTOREY").join()}`,
+    );
+    check(
+      "IFC export: the stair, its stairwell through the upper floor and every room and door are in it",
+      ifc.count("IFCSTAIR") === 1 && ifc.count("IFCSTAIRFLIGHT") === 1 && ifc.count("IFCSPACE") === 4 && ifc.count("IFCDOOR") === 3 &&
+        ifc.count("IFCOPENINGELEMENT") === 8 && ifc.count("IFCWALL") === 11,
+      `${ifc.count("IFCSTAIR")} stair, ${ifc.count("IFCSPACE")} spaces, ${ifc.count("IFCDOOR")} doors, ${ifc.count("IFCOPENINGELEMENT")} openings, ${ifc.count("IFCWALL")} walls`,
+    );
+    check(
+      "IFC export: each storey stands on one slab, and every room has its floor finish",
+      ifc.count("IFCSLAB") === 2 && ifc.count("IFCCOVERING") === 4 && ifc.count("IFCRELCOVERSSPACES") === 4,
+      `${ifc.count("IFCSLAB")} slabs, ${ifc.count("IFCCOVERING")} coverings`,
+    );
+  }
   await showView(page, "3D");
   // the camera is where the 3D view was left (walking): from outside, the storeys show as chosen
   await railButton(page, "Orbit").click();

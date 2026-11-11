@@ -38,6 +38,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { OBJExporter } from "three/examples/jsm/exporters/OBJExporter.js";
+import { downloadFile, downloadHref, exportFileName } from "../export/download";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { store, pageActions } from "../model/store";
 import { elevationOf, levelSlice, levelsOf, slabUnderside } from "../model/levels";
@@ -93,14 +94,6 @@ export interface ViewportOptions {
 /** WebGL contexts this page has created and released for 3D views, for the development probe. */
 const contexts = { created: 0, released: 0 };
 
-const fileName = (planName: string, ext: string) => `${planName.replace(/\s+/g, "-").toLowerCase()}.${ext}`;
-
-function download(href: string, name: string): void {
-  const a = document.createElement("a");
-  a.href = href;
-  a.download = name;
-  a.click();
-}
 
 export function createViewport(mount: HTMLElement, initialModel: PlanModel, initialMode: CameraMode, options: ViewportOptions = {}): Viewport {
   // No preserveDrawingBuffer: keeping every frame's buffer costs on every frame, and the only
@@ -588,14 +581,12 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     for (const [o, parent] of aids) parent.remove(o);
     const obj = new OBJExporter().parse(plan.root);
     for (const [o, parent] of aids) parent.add(o);
-    const url = URL.createObjectURL(new Blob([obj], { type: "text/plain" }));
-    download(url, fileName(model.name, "obj"));
-    URL.revokeObjectURL(url);
+    downloadFile(obj, exportFileName(model.name, "obj"), "text/plain");
   });
   const offPng = bus.on(EVENTS.EXPORT_PNG, () => {
     // the frame is drawn and read back in this task, before the browser may clear the buffer
     loop.renderNow();
-    download(renderer.domElement.toDataURL("image/png"), fileName(model.name, "png"));
+    downloadHref(renderer.domElement.toDataURL("image/png"), exportFileName(model.name, "png"));
   });
 
   // ---- resize: drawn at once, so the cleared canvas is never shown ----

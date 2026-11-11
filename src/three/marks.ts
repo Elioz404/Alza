@@ -78,10 +78,10 @@ function extentBox(model: PlanModel): MarkBox | null {
 
 /**
  * The level a mark stands on, by what it marks: an entity's own level; none for the plan (it
- * spans them all).
+ * spans them all) or a file (it is on none).
  */
 export function markLevel(type: ApprovalTarget["type"], id: string, model: PlanModel): string | undefined {
-  if (type === "plan") return undefined;
+  if (type === "plan" || type === "file") return undefined;
   if (type === "level") return id;
   return levelIdOf(model, id);
 }
@@ -172,6 +172,9 @@ function flatBox(type: ApprovalTarget["type"], id: string, model: PlanModel): Ma
       const top = Math.max(b.y1, ...model.walls.map((w) => elevationOf(model, w.levelId) + w.height));
       return { ...b, y1: top };
     }
+    // a file a call would download is nowhere in the scene
+    case "file":
+      return null;
   }
 }
 

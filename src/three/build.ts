@@ -20,10 +20,10 @@ import type { Item, Opening, PlanModel, Room, Wall } from "../model/types";
 import { catalogOf, type Catalog } from "../model/catalog";
 import { segLen } from "../model/geometry";
 import { openingSpan } from "../model/issues";
-import { DOUBLE_DOOR_CLEAR, WALL_DEFAULTS, type FloorFinish } from "../model/limits";
+import { DOUBLE_DOOR_CLEAR, REGION, WALL_DEFAULTS, type FloorFinish } from "../model/limits";
 import { keepStatic, type MaterialCache } from "./materials";
-import { CONTACT, CUTAWAY, FLOOR_TOP, LIGHTS, PENDANT, SCENE, SLAB } from "./config";
-import { piecesArea, regionPieces, regionRim, type Poly } from "./region";
+import { CONTACT, CUTAWAY, FLOOR_TOP, LIGHTS, PENDANT, SCENE } from "./config";
+import { piecesArea, regionPieces, regionRim, type Poly } from "../model/region";
 import { NO_INK, piecesGeometry, rimGeometry } from "./slabs";
 import { createSurfaceMaterial, ninePatch, projectSurfaceUVs, staticSurface, surface, type SurfaceName } from "./surfaces";
 import { CUT_CAP, POCHE, clipToCut } from "./cutaway";
@@ -86,47 +86,6 @@ export const FLOOR_SURFACE: Readonly<Record<FloorFinish, SurfaceName>> = Object.
   carpet: "floorCarpet",
   concrete: "floorConcrete",
 });
-
-/**
- * How far a wall's two ends reach past its endpoints: an end that touches another wall is
- * extended by half the partner's thickness, for a clean joint. This is the one thing a wall's
- * shape takes from its neighbours, so a neighbour that moves changes a wall exactly when it
- * changes these two numbers.
- */
-export function jointExtensions(wall: Wall, walls: readonly Wall[]): [number, number] {
-  const a = { x: wall.ax, y: wall.ay };
-  const b = { x: wall.bx, y: wall.by };
-  let extA = 0;
-  let extB = 0;
-  for (const o of walls) {
-    if (o.id === wall.id) continue;
-    const ends = [
-      { x: o.ax, y: o.ay },
-      { x: o.bx, y: o.by },
-    ];
-    for (const e of ends) {
-      // extend just up to the partner's OUTER face — extending further pokes past the corner (X artifact)
-      if (Math.hypot(e.x - a.x, e.y - a.y) < 0.09) extA = Math.max(extA, o.thickness / 2);
-      if (Math.hypot(e.x - b.x, e.y - b.y) < 0.09) extB = Math.max(extB, o.thickness / 2);
-    }
-    // T-junction: our endpoint lands mid-span of the partner
-    const pSeg = (p: { x: number; y: number }) => {
-      const dx = o.bx - o.ax;
-      const dy = o.by - o.ay;
-      const l2 = dx * dx + dy * dy;
-      if (l2 === 0) return Infinity;
-      const t = Math.max(0, Math.min(1, ((p.x - o.ax) * dx + (p.y - o.ay) * dy) / l2));
-      return Math.hypot(p.x - (o.ax + t * dx), p.y - (o.ay + t * dy));
-    };
-    // ...reaching on to the partner's middle, not through it: an end at its far face would lie in
-    // that face's plane, and its sides would show through it as a seam on the far side
-    const dA = pSeg(a);
-    const dB = pSeg(b);
-    if (dA < 0.09) extA = Math.max(extA, dA);
-    if (dB < 0.09) extB = Math.max(extB, dB);
-  }
-  return [extA, extB];
-}
 
 function box(
   w: number,
@@ -446,7 +405,7 @@ export function buildFloor(room: Room, materials?: MaterialCache, wells: readonl
   ];
   // a stairwell crosses the room when it takes some of its floor away
   const area = room.w * room.h;
-  const crossing = wells.filter((w) => piecesArea(regionPieces([outline], [w])) < area - SLAB.probe * SLAB.probe);
+  const crossing = wells.filter((w) => piecesArea(regionPieces([outline], [w])) < area - REGION.probe * REGION.probe);
   if (crossing.length > 0) {
     // a stairwell crosses the room: its floor is the room less the opening, in pieces cut at the
     // edge band's lines (so the band shades as the nine-patch's does), its sides along the rim

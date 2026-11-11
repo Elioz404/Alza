@@ -39,17 +39,18 @@ import {
   CURTAINS,
   wallCutCap,
   curtainedWindows,
-  jointExtensions,
   openingsByWall,
 } from "./build";
+import { jointExtensions } from "../model/joints";
 import { buildFurniture } from "./furniture";
 import { MaterialCache, disposeObject } from "./materials";
 import { contactShadow } from "./surfaces";
 import { addInkEdges, removeInkEdges, type InkClip } from "./edges";
 import { CUT_CAP } from "./cutaway";
-import { buildSlab, slabOutline, stairwellPolys } from "./slabs";
+import { buildSlab } from "./slabs";
+import { slabOutline, stairwellPolys } from "../model/floors";
 import { buildStair } from "./stairs";
-import type { Poly } from "./region";
+import type { Poly } from "../model/region";
 import { CUTAWAY, DOORS, FLOOR_TOP } from "./config";
 
 /** What one update did, by entity: for tests and the development probe. */

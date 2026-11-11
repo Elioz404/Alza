@@ -25,6 +25,7 @@ import { levelContents, levelRemovalError, levelSlice, levelStats, levelsOf, rer
 import { SUPPLIER_ORIGIN, SupplierError, getProduct, listProducts, type SupplierProduct } from "./supplier";
 import { dist, segLen } from "../model/geometry";
 import { bus, EVENTS } from "../model/sceneBus";
+import { exportIfc, ifcFileName, type IfcSummary } from "../export/ifcExport";
 import { defineTool, executeWrapped, type ToolDef } from "./registry";
 import {
   CUT_HEIGHT,
@@ -884,6 +885,48 @@ export const TOOLS: ToolDef[] = [
       if (door.kind !== "door") return { ok: false, summary: `${door.id} is a window — only doors swing.` };
       bus.emit(EVENTS.SET_DOORS, { state: i.state, id: door.id });
       return { ok: true, summary: `Door ${door.id} set to "${i.state}".`, id: door.id };
+    },
+  }),
+  defineTool({
+    name: "export_ifc",
+    title: "Export the plan as IFC (BIM)",
+    description:
+      "Export the whole plan, every level, as an IFC4 building model (an ISO 10303-21 .ifc file) for CAD and BIM tools: one storey per level at its elevation, walls with their doors and windows as real openings, a floor slab under every room (opened where a stair rises through it), rooms as spaces, stairs with their flights, and furniture as boxes with their catalogue names. The file goes to the human's downloads, so the human approves every export first, whatever the approval policy; you get back its summary only — schema, file name, size, and how many of each IFC entity it holds. Works from the 2D or the 3D view; the plan is unchanged.",
+    input: noArgs,
+    // it reads the plan and changes nothing in it, but the file it writes lands on the human's
+    // machine, so they consent to each one; what comes back is counts only, never a product
+    // name from the partner
+    annotations: { readOnlyHint: true, consentHint: true },
+    resolve: (input, { model }) => {
+      const fileName = ifcFileName(model.name);
+      return {
+        ok: true,
+        input,
+        request: "Download the plan as an IFC file",
+        targets: [{ type: "file", id: fileName, label: fileName }],
+        effects: ["An IFC4 building model of every level goes to your downloads. The plan itself does not change."],
+        // the plan as it is asked about: a change to it while the request waits is a different file
+        entities: [model],
+      };
+    },
+    execute: async () => {
+      const model = store.getState().model;
+      let ifc: IfcSummary;
+      try {
+        ifc = await exportIfc(model);
+      } catch (err) {
+        return { ok: false, summary: `The IFC file could not be written: ${err instanceof Error ? err.message : String(err)}. The plan is unchanged.` };
+      }
+      const e = ifc.elements;
+      const kb = (ifc.bytes / 1000).toFixed(1);
+      return {
+        ok: true,
+        summary:
+          `${ifc.schema} file "${ifc.fileName}" (${kb} kB) downloaded for the human: ${plural(e.storeys, "storey")}, ${plural(e.walls, "wall")}, ` +
+          `${plural(e.doors, "door")}, ${plural(e.windows, "window")}, ${plural(e.spaces, "space")}, ${plural(e.slabs, "slab")}, ` +
+          `${plural(e.stairs, "stair")}, ${plural(e.furniture, "piece", "pieces")} of furniture.`,
+        ifc,
+      };
     },
   }),
 

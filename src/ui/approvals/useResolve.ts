@@ -2,7 +2,8 @@
  * Answer a pending request, and say how it ended.
  *
  * Approving lets the parked call run; it lands a moment later, attributed to whoever asked. The
- * page waits for that line in the feed and then offers Undo for the change (or, if the plan had
+ * page waits for that line in the feed and then offers Undo for the change (none for a download,
+ * which changes nothing in the plan), or, if the plan had
  * moved and the call refused to run, says so with its reason). Keeping changes nothing, which the
  * plan already shows, so it gets no notice.
  */
@@ -23,12 +24,14 @@ const NOUN: Record<PendingApproval["targets"][number]["type"], string> = {
   stair: "Stair",
   level: "Level",
   plan: "Plan",
+  file: "File",
 };
 
 /** "Room “Bathroom” removed", "Plan cleared": what an approved request did, from the page's own account. */
 export function doneText(a: PendingApproval): string {
   const t = a.targets[0];
   if (!t || t.type === "plan") return "Plan cleared";
+  if (t.type === "file") return `File “${t.label}” downloaded`;
   const named = t.type === "room" || t.type === "item" || t.type === "level";
   return `${NOUN[t.type]}${named ? ` “${t.label}”` : ""} removed`;
 }
@@ -62,7 +65,8 @@ export function useResolveApproval(): (a: PendingApproval, granted: boolean) => 
         );
         if (!outcome) return false;
         stop();
-        if (outcome.ok) notify({ body: doneText(a), undoable: true });
+        // a downloaded file is the person's now: there is nothing in the plan to undo
+        if (outcome.ok) notify({ body: doneText(a), undoable: a.targets[0]?.type !== "file" });
         else notify({ body: outcome.summary, type: "error" });
         return true;
       };

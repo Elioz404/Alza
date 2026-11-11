@@ -11,6 +11,7 @@
  */
 
 import { LIGHT, MATERIAL } from "../ui/theme/sceneTokens";
+import { FLOOR_FINISH_DEPTH } from "../model/limits";
 
 /** A light: its colour, its intensity, and â€” for a directional one â€” where it shines from. */
 interface LightSpec {
@@ -526,22 +527,17 @@ export const STAIR_MODEL = Object.freeze({
 });
 
 /**
- * An upper level's floor slab (slabs.ts): SLAB_THICKNESS deep (model/limits.ts), under that
- * level's rooms and walls, with each stairwell from the level below left open. `edgeTolerance`
- * is how close (metres) two outlines must come to count as one edge, and `probe` how far either
- * side of an edge the slab is looked for, to tell its rim from an edge inside it.
- */
-export const SLAB = Object.freeze({ edgeTolerance: 1e-6, probe: 1e-4 });
-
-/**
  * The storeys in the view (levelView.ts): which are shown, from the ground up to the one the
  * View panel names ("active": the level being worked on, the default; "all": every level).
  * The cutaway slices the topmost one shown; walking shows them all and slices none.
  */
 export const LEVELS_VIEW = Object.freeze({ defaultShown: "active" as const });
 
-/** Height of the top of a room's floor slab: furniture stands on it and clicks land on it. */
-export const FLOOR_TOP = 0.04;
+/**
+ * Height of the top of a room's floor finish (FLOOR_FINISH_DEPTH, model/limits.ts): furniture
+ * stands on it and clicks land on it.
+ */
+export const FLOOR_TOP = FLOOR_FINISH_DEPTH;
 
 /** A pointer that travels further than this between press and click was a drag, not a click. */
 export const CLICK_SLOP_PX = 5;

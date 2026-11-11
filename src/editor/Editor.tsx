@@ -580,7 +580,8 @@ export function Editor() {
   const marks = useMemo(() => (showAgentMarks ? agentMarks(revisions, RECENT_AGENT_REVISIONS) : []), [revisions, showAgentMarks]);
   const pending = useMemo(() => {
     const byId = new Map<string, { target: ApprovalTarget; removal: boolean }>();
-    for (const a of approvals) for (const t of a.targets) byId.set(t.id, { target: t, removal: a.tool.startsWith("remove") || a.tool.startsWith("clear") });
+    // a file a request would download is no entity of the plan, whatever its name
+    for (const a of approvals) for (const t of a.targets) if (t.type !== "file") byId.set(t.id, { target: t, removal: a.tool.startsWith("remove") || a.tool.startsWith("clear") });
     return byId;
   }, [approvals]);
   const planPending = [...pending.values()].some((p) => p.target.type === "plan");
@@ -1169,8 +1170,8 @@ function PendingMark({
   S: number;
   hatch: string;
 }) {
-  // a level is outlined whole (PlanPendingMark), a stair hatched with the stair itself
-  if (target.type === "plan" || target.type === "level" || target.type === "stair") return null;
+  // a level is outlined whole (PlanPendingMark), a stair hatched with the stair itself; a file is on no plan
+  if (target.type === "plan" || target.type === "level" || target.type === "stair" || target.type === "file") return null;
   if (target.type === "room") {
     const r = model.rooms.find((i) => i.id === target.id);
     return r ? <rect className="pl-pending-outline" fill="none" x={r.x * S} y={r.y * S} width={r.w * S} height={r.h * S} /> : null;

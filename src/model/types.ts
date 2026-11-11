@@ -3,6 +3,7 @@
 import type { Actor, FloorFinish, Hinge, ItemCategory, KindSource, NoteAuthor, OpeningKind, StairShape, StairTurn, SwingSide } from "./limits";
 import { GROUND_LEVEL_ID, LEVEL_DEFAULTS, LEVEL_NAMES, PLAN_FORMAT_VERSION } from "./limits";
 import type { PartInput } from "./schemas";
+import { newPlanId } from "./ids";
 
 /**
  * One storey of the plan. Levels stack in the order the plan lists them, from the ground up:
@@ -147,8 +148,11 @@ export interface Underlay {
   ph?: number;
 }
 
-/** The kinds of thing an approval can be about. */
-export type TargetType = "wall" | "door" | "window" | "room" | "item" | "stair" | "level" | "plan";
+/**
+ * The kinds of thing an approval can be about: an entity of the plan, the whole plan, or a file
+ * the call would hand the person (its id and label are the file's name).
+ */
+export type TargetType = "wall" | "door" | "window" | "room" | "item" | "stair" | "level" | "plan" | "file";
 
 /**
  * One entity a parked call would act on, as the page found it in the model — never as the
@@ -192,6 +196,13 @@ export interface Note {
 export interface PlanModel {
   /** the data format the plan is written in (PLAN_FORMAT_VERSION); older ones migrate on load */
   version: typeof PLAN_FORMAT_VERSION;
+  /**
+   * The plan's identity, apart from every other plan's: random when the plan is started
+   * (ids.ts newPlanId), kept through every edit and every save. What a plan exports keeps its
+   * identity from it (the IFC GlobalIds), so two plans never share one and the same plan,
+   * exported again, is recognised as itself.
+   */
+  id: string;
   name: string;
   /** the storeys, from the ground up; a plan always has at least one */
   levels: Level[];
@@ -237,6 +248,7 @@ export const groundLevel = (): Level => ({ id: GROUND_LEVEL_ID, name: LEVEL_NAME
 
 export const emptyModel = (): PlanModel => ({
   version: PLAN_FORMAT_VERSION,
+  id: newPlanId(),
   name: "Untitled plan",
   levels: [groundLevel()],
   walls: [],

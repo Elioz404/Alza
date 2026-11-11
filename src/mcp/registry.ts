@@ -78,6 +78,13 @@ export interface ToolDef<S extends z.ZodType = z.ZodType> {
      * some equivalent signal for which tools are destructive.
      */
     destructiveHint?: boolean;
+    /**
+     * The call hands the person something outside the page, a file in their downloads, which
+     * undo cannot take back. Our own hint, like destructiveHint: such a call always waits for
+     * the person's approval, whatever the approval policy says (the policy covers changes to
+     * the plan, which undo can), and like a destructive one it must have a resolve step.
+     */
+    consentHint?: boolean;
     untrustedContentHint?: boolean;
   };
   /** secure origins this tool is shared with (WebMCP cross-origin exposure) */
@@ -210,8 +217,9 @@ export async function executeWrapped<S extends z.ZodType>(
   let input = parsed.data;
 
   const destructive = def.annotations?.destructiveHint === true;
+  const consent = def.annotations?.consentHint === true;
   const { resolve } = def;
-  if (destructive && !resolve) {
+  if ((destructive || consent) && !resolve) {
     // fail closed: without a resolve step there is nothing true to show the human
     return finish({ ok: false, summary: `${def.name} cannot say what it would act on, so it does not run.` });
   }
@@ -223,7 +231,7 @@ export async function executeWrapped<S extends z.ZodType>(
     input = found.input;
   }
 
-  if (destructive && resolve && resolution && store.getState().requireApproval) {
+  if (resolve && resolution && (consent || (destructive && store.getState().requireApproval))) {
     const { request, targets, effects } = resolution;
     const outcome = await actions.requestApproval({ tool: def.name, actor, request, targets, effects }, ctx.signal);
     if (outcome !== "approved") {

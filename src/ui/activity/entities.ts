@@ -33,6 +33,7 @@ export const TYPE_WORD: Record<TargetType, string> = {
   stair: "stair",
   level: "level",
   plan: "plan",
+  file: "file",
 };
 
 /**

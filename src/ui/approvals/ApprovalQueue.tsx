@@ -15,7 +15,7 @@ import { Button, DeltaMark } from "../primitives";
 import { requestText } from "./describe";
 import { requestReview } from "./review";
 
-const NAMED = new Set(["room", "item", "plan"]);
+const NAMED = new Set(["room", "item", "plan", "file"]);
 
 export function ApprovalQueue() {
   const approvals = useAppStore((s) => s.approvals);

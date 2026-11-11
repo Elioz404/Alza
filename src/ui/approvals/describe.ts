@@ -24,10 +24,14 @@ const NOUN: Record<ApprovalTarget["type"], string> = {
   stair: "stair",
   level: "level",
   plan: "plan",
+  file: "file",
 };
 
-/** Types whose label is a name someone typed (shown quoted), rather than a size the page measured. */
-const NAMED: ReadonlySet<ApprovalTarget["type"]> = new Set(["room", "item", "level", "plan"]);
+/**
+ * Types whose label is a name someone typed (shown quoted), rather than a size the page
+ * measured. A file's name is the plan's, made a file name.
+ */
+const NAMED: ReadonlySet<ApprovalTarget["type"]> = new Set(["room", "item", "level", "plan", "file"]);
 
 const capitalise = (s: string): string => s[0].toUpperCase() + s.slice(1);
 
@@ -49,6 +53,9 @@ export function requestText(a: PendingApproval): RequestText {
   const type = a.targets[0]?.type ?? "plan";
   if (type === "plan") {
     return { title: `${who} to clear the whole plan`, confirm: "Clear plan", keep: "Keep plan", verb: "clear", short: "Clear the whole plan" };
+  }
+  if (type === "file") {
+    return { title: `${who} to download a file`, confirm: "Download file", keep: "Don't download", verb: "download", short: "Download a file" };
   }
   const noun = NOUN[type];
   const article = /^[aeiou]/.test(noun) ? "an" : "a";
@@ -76,7 +83,7 @@ export interface TargetFact {
 export function targetFacts(a: PendingApproval, model: PlanModel): TargetFact[] {
   const facts: TargetFact[] = [];
   for (const t of a.targets) {
-    facts.push({ term: capitalise(NOUN[t.type]), value: t.label, quoted: NAMED.has(t.type), id: t.type === "plan" ? undefined : t.id });
+    facts.push({ term: capitalise(NOUN[t.type]), value: t.label, quoted: NAMED.has(t.type), id: t.type === "plan" || t.type === "file" ? undefined : t.id });
     if (t.type === "room") {
       const r = model.rooms.find((x) => x.id === t.id);
       if (r) facts.push({ term: "Area", value: `${(r.w * r.h).toFixed(2)} m²`, quoted: false });
@@ -85,8 +92,12 @@ export function targetFacts(a: PendingApproval, model: PlanModel): TargetFact[] 
   return facts;
 }
 
-/** The consequence, in sentences: what else goes with it, and that Undo brings it back. */
+/**
+ * The consequence, in sentences: what else goes with it, and that Undo brings it back; for a
+ * download, what the file holds, and nothing about undo, which cannot take a file back.
+ */
 export function consequenceOf(a: PendingApproval): string {
+  if (a.targets[0]?.type === "file") return a.effects.join(" ");
   // the page's own effects list says what else goes (a wall's openings, a plan's contents);
   // a room is only its floor area, which is the one thing people get wrong about it
   const base = a.targets[0]?.type === "room" ? "Only the floor area goes; its walls, doors and windows stay." : "";
@@ -153,6 +164,9 @@ export function targetShapes(a: PendingApproval, model: PlanModel): Shape[] {
         if (extent) shapes.push(extent);
         break;
       }
+      // a file is nowhere on the plan
+      case "file":
+        break;
     }
   }
   return shapes;

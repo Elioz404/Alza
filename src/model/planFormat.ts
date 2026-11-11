@@ -7,6 +7,9 @@
  * the level it stands on. A format-1 plan loads as one level, the ground floor, holding all of
  * it. A plan from a format newer than this page knows is refused rather than half-read.
  *
+ * A plan's id (PlanModel.id) came later than either format and is optional in both: a plan
+ * saved without one is given one, once, as it loads, and keeps it from then on.
+ *
  * The shape is checked before anything is migrated or loaded: types and references (every
  * level an entity names must exist), not the ranges the actions hold edits to. A plan that
  * breaks a range still loads, and the checker reports it, so a drawing is never lost because
@@ -14,20 +17,25 @@
  */
 
 import { z } from "zod";
+import { newPlanId } from "./ids";
 import { groundLevel, type Item, type PlanModel, type Room, type Stair, type Wall } from "./types";
 import { describeIssues, floorFinish, hinge, itemCategory, partList, swingSide } from "./schemas";
 import { KIND_SOURCES, OPENING_KINDS, PLAN_FORMAT_VERSION, STAIR_SHAPES, STAIR_TURNS } from "./limits";
 
 /** A plan in format 1: one storey, no levels or stairs, entities without a level. */
-export interface PlanModelV1 extends Omit<PlanModel, "version" | "levels" | "stairs" | "walls" | "rooms" | "items"> {
+export interface PlanModelV1 extends Omit<PlanModel, "version" | "id" | "levels" | "stairs" | "walls" | "rooms" | "items"> {
   version?: 1;
+  id?: string;
   walls: Omit<Wall, "levelId">[];
   rooms: Omit<Room, "levelId">[];
   items: Omit<Item, "levelId">[];
 }
 
+/** A plan in the current format, saved before plans had ids. */
+export type PlanModelUnidentified = Omit<PlanModel, "id"> & { id?: string };
+
 /** Any plan a page can be handed: the current format or an older one. */
-export type PlanInput = PlanModel | PlanModelV1;
+export type PlanInput = PlanModel | PlanModelUnidentified | PlanModelV1;
 
 // ---------------------------------------------------------------------------- the shape
 
@@ -79,6 +87,7 @@ const stairRecord = z.object({
 /** What any plan, of any format this page reads, must look like. */
 const planRecord = z.object({
   version: z.number().int().min(1).optional(),
+  id: id.optional(),
   name: z.string(),
   levels: z.array(levelRecord).optional(),
   walls: z.array(wallRecord),
@@ -111,7 +120,7 @@ export function migratePlan(input: unknown): Migration {
   }
   // the parsed copy is only the check: the plan is built from what was handed in
   const plan = input as PlanInput;
-  return from < 2 ? fromV1(plan as PlanModelV1) : checkLevels(plan as PlanModel, from);
+  return from < 2 ? fromV1(plan as PlanModelV1) : checkLevels(plan as PlanModelUnidentified, from);
 }
 
 /** Format 1 → 2: the one storey becomes the ground floor, and everything on it stands there. */
@@ -127,6 +136,7 @@ function fromV1(plan: PlanModelV1): Migration {
     model: {
       ...plan,
       version: PLAN_FORMAT_VERSION,
+      id: plan.id ?? newPlanId(),
       levels: [ground],
       walls: plan.walls.map(onGround),
       rooms: plan.rooms.map(onGround),
@@ -137,7 +147,7 @@ function fromV1(plan: PlanModelV1): Migration {
 }
 
 /** A plan in the current format, refused if it names a level it does not have. */
-function checkLevels(plan: PlanModel, from: number): Migration {
+function checkLevels(plan: PlanModelUnidentified, from: number): Migration {
   const levels = plan.levels ?? [];
   if (levels.length === 0) return refused("The plan has no levels; every plan has at least one. Nothing was loaded.");
   const ids = new Set(levels.map((l) => l.id));
@@ -149,5 +159,5 @@ function checkLevels(plan: PlanModel, from: number): Migration {
     ...(plan.stairs ?? []).map((s: Stair) => [s.id, s.levelId] as const),
   ].find(([, levelId]) => !levelId || !ids.has(levelId));
   if (lost) return refused(`${lost[0]} is on level ${JSON.stringify(lost[1] ?? null)}, which the plan does not have. Nothing was loaded.`);
-  return { ok: true, from, model: { ...plan, stairs: plan.stairs ?? [] } };
+  return { ok: true, from, model: { ...plan, id: plan.id ?? newPlanId(), stairs: plan.stairs ?? [] } };
 }

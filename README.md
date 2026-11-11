@@ -76,13 +76,13 @@ More stills in [`shots/showcase/`](shots/showcase/).
 1. Open the live app (link at the top of this repo).
 2. **In ChatGPT desktop:** open the URL in the in-app browser. WebMCP works out of the box.
    **In Google Chrome 149+:** enable `chrome://flags/#enable-webmcp-testing` and restart.
-   The agent status in the top bar turns green: **Agent tools on** (40 tools registered).
+   The agent status in the top bar turns green: **Agent tools on** (41 tools registered).
 3. Ask your agent, for example:
    - *"Add a 3 × 2.5 m study next to the bedroom, with a door and a window."*
    - *"The sofa placement feels off. Check the plan and fix any issues."*
    - *"Build the 3D and give me a walkthrough."*
 4. No WebMCP runtime? The app is still complete. Open **Activity → Developer tools** in the side
-   panel and run the exact same 41 tools manually; every call is logged in Activity.
+   panel and run the exact same 42 tools manually; every call is logged in Activity.
 
 ## Trace your own plan with the agent
 
@@ -115,7 +115,7 @@ document.modelContext.registerTool({
 });
 ```
 
-## The 40 tools (+ 1 dynamic)
+## The 41 tools (+ 1 dynamic)
 
 | Group | Tools |
 |---|---|
@@ -127,6 +127,7 @@ document.modelContext.registerTool({
 | **Furniture** | `place_item` · `move_item` · `remove_item` · `define_item_kind`, model a piece the catalogue lacks, from primitives |
 | **Levels & stairs** | `list_levels` · `add_level` · `update_level` (rename, floor-to-floor height — the walls that met the slab follow it unless `walls: "keep"` — or its place in the stack) · `remove_level` (needs approval) · `set_active_level` · `add_stair` (straight or L-shaped; risers and going derived from the storey height) · `update_stair` · `remove_stair` (needs approval) |
 | **Model & view** | `set_plan_name` · `clear_model` · `build_3d` · `set_camera` (orbit/top/walk) · `set_3d_style` (ink edges, dollhouse cutaway at a height) · `set_doors` (swing the leaves open/shut) |
+| **Export** | `export_ifc`, writes the whole plan as an IFC4 building model and downloads it for the human, who approves every export first, whatever the approval policy (a file on their machine is not something undo can take back); the agent gets the file's summary (schema, size, entities by type), not the file |
 | **Cross-origin** | `get_supplier_catalog` · `place_supplier_product`, read a **partner origin's** own WebMCP tools and drop its real products into the plan |
 | **Collaboration** | `leave_note` · `get_notes` |
 | **Dynamic** | `extend_selected_wall`, published **only while the human has a wall selected** (registered/unregistered live, per the spec's `toolchange` cycle). The human points, the agent acts on exactly that wall. |
@@ -226,6 +227,64 @@ plan, the model, the walker and the checker.
 Plans are saved in **format 2** (`version: 2`, `model/planFormat.ts`). A format-1 plan (one
 storey, no levels) loads as a single "Ground floor" holding everything; a plan from a newer
 format, or one that names a level it does not have, is refused and the current plan stays.
+Every plan has an `id` of its own, 128 random bits given when it is started (a demo loaded, a
+plan cleared); a plan saved without one is given one as it loads, and keeps it from then on.
+
+## Export to CAD and BIM (IFC)
+
+**Export → Building model (IFC)**, or the `export_ifc` tool, writes the whole plan, every level,
+as an **IFC4** file (ISO 10303-21 STEP, schema `IFC4`, view definition
+`DesignTransferView_V1.0`), so it opens in CAD and BIM tools as a building rather than a mesh.
+It is written from the plan, not from the 3D view, so it works from either view; nothing leaves
+the browser, and the writer is fetched the first time someone exports (a lazy chunk of about
+20 kB, 7.5 kB gzipped), never with the page.
+
+| In the plan | In the IFC file |
+|---|---|
+| the plan | `IfcProject` (metres, radians; a 3D *Model* context with *Body* and *Axis*, a 2D *Plan* context with *FootPrint*) › `IfcSite` › `IfcBuilding`, named after the plan |
+| each level | `IfcBuildingStorey`, with its name and elevation, standing on one `IfcSlab` `FLOOR` of plaster: under its rooms and its walls to their joints (the outline the 3D view builds its slab from, so there is no gap under any wall at a floor line), opened by an `IfcOpeningElement` wherever a stair from below rises through it; `Qto_SlabBaseQuantities` |
+| a wall | `IfcWall` (`STANDARD`): an *Axis* line and a *Body* extruded from its centreline, butt-jointed to the walls it meets (at a corner the wall whose id sorts first runs on to the other's outer face and the other stops at its inner face; a wall ending against another stops at its face; walls in line meet end to end), so no two bodies overlap; one `IfcMaterialLayerSetUsage` of plaster its thickness, `Pset_WallCommon.IsExternal` where the rooms tell (a room on one side only), `Qto_WallBaseQuantities` measured on the body |
+| a door / window | an `IfcOpeningElement` voiding its wall, reaching past every wall face it cuts (both sides, and the foot or top where it meets them), filled by an `IfcDoor` or `IfcWindow` with its overall width and height. A door's placement faces the side its leaf swings to (IFC opens a door towards its +Y) and its `OperationType` names the hinge side seen that way, so all four hinge/side combinations come out as the plan draws them |
+| a room | an `IfcSpace` under its storey (`LongName` = the room's name) with `Pset_SpaceCommon` and `Qto_SpaceBaseQuantities`, and its floor finish as an `IfcCovering` `FLOORING` laid on the slab (4 cm, less any stairwell), covering the space (`IfcRelCoversSpaces`), in the finish's `IfcMaterial`, with `Qto_CoveringBaseQuantities` |
+| a stair | `IfcStair` (straight run or quarter turn) made of `IfcStairFlight`s with their risers, treads, riser height and going, and, for an L-shaped one, its landing as an `IfcSlab` `LANDING`; `Pset_StairCommon` |
+| a piece of furniture | `IfcFurniture` named from the catalogue, its kind in `ObjectType`, standing on the floor finish; a Nordika product carries its sku and vendor in `Alza_Product`, the plan's own property set (the `Pset_` and `Qto_` prefixes are buildingSMART's, for the sets IFC4 defines) |
+
+Every element stands in its storey (`IfcRelContainedInSpatialStructure`) and is placed relative
+to it. GlobalIds are derived from the plan's id together with each element's own, so exporting
+the same plan again gives every element the same GlobalId and a tool that re-imports it updates
+rather than duplicates, while two different plans never share one. Every name is written as a
+clean label of at most 255 characters (`IfcLabel` and `IfcIdentifier` are `STRING(255)`): control
+characters and invisible formatting characters (bidirectional overrides and isolates, zero-width
+spaces) are taken out of plan text, a partner's product names and loaded ids included, then
+encoded in STEP's `\X2\` form where they are not plain ASCII (*Habitación*, *Baño*). The file
+name is the plan's name made safe the same way, with the characters file systems reserve
+replaced and capped at the plan name's 120 characters; the OBJ and PNG exports share it.
+
+A plan that holds a number outside the range the editor keeps it to (a wall 0 m thick, a room
+3 km off: a plan loaded as data is checked for its shape, not its ranges) is not exported: the
+menu and `export_ifc` answer with the values to fix, and no file is written. The writer itself
+also refuses a length IFC requires to be positive that is not, and a label past 255 characters,
+rather than writing a file a reader would reject; reals too large for fixed notation are
+written in STEP's exponent form (`1.E22`).
+
+What is simplified: walls, slabs, openings and furniture are extruded solids (furniture is its
+catalogue footprint and height, not its 3D model); walls are butt-jointed by their bodies, not
+connected with `IfcRelConnectsPathElements`; the ground floor stands on a slab like the floors
+above it; a stair's flights are stacked solid treads, and the floor finish runs under a stair as
+it does in the 3D view; there is no site geometry, roof, ceiling or owner history (optional in
+IFC4); `LoadBearing` is never stated because the plan does not know it; and supplier prices are
+not in the file, because the plan does not keep them.
+
+The tests read every exported file back with a STEP reader and an IFC4 checker written apart
+from the exporter (`tests/support/ifcCheck.ts`): syntax and escapes, every `#` reference and the
+kind of entity each may point to, the attribute count of every entity against IFC4 ADD2 TC1,
+required attributes, enumeration values, reals written as reals, positive lengths, labels within
+`STRING(255)`, property sets under buildingSMART's prefixes being standard ones, unique and valid
+GlobalIds, one storey per element, every opening voiding one element and every door or window
+filling one opening, and every placement chaining to its storey's. Beyond the checker, they
+rebuild the solids from the file and probe them: no two wall bodies overlap and every joint is
+filled once, the floor line under every wall is closed, every void passes the faces it cuts, and
+every door's placement and `OperationType` swing it and hang it as the plan does.
 
 ## Architecture
 
@@ -240,6 +299,16 @@ src/
             stairs.ts (a stair's whole shape — risers, treads, landing, walking line, clear
             zones, headroom, the guard round its stairwell — from the little the plan stores)
             planFormat.ts (the save format, version 2, and the migration of format-1 plans)
+            joints.ts (how far a wall reaches into the walls it meets: the 3D view's joints, and
+            the IFC export's butt joints) · floors.ts (what a storey's slab covers, for the 3D view
+            and IFC alike) · region.ts (flat regions with holes, cut into trapezoids)
+            text.ts (plan text made a clean name) · planRanges.ts (every number held to its range,
+            for what writes a plan out) · ids.ts (entity ids, and a plan's own random id)
+  export/   download.ts (every export's file name and download) · ifcExport.ts (the IFC export's
+            one path, menu and tool alike; fetches the writer on first use)
+            ifc/ (loaded on demand) step.ts (ISO 10303-21 encoding) · guid.ts (stable GlobalIds)
+            entities.ts (the IFC4 entities written, attributes in schema order) · model.ts (the
+            plan mapped to them) · config.ts · index.ts
   editor/   Editor.tsx — SVG drawing sheet: poché walls, chained walls (Shift keeps them
             straight, ends snap to ends), rooms, doors (D) and windows (N) placed on a wall,
             plan symbols for furniture, dimension chains, numbered revision marks for the
@@ -264,10 +333,10 @@ src/
             model) · edges.ts (ink edges) · screenLines.ts (marks a set width on screen)
             cutaway.ts (dollhouse cut, poché, the top of the storeys shown) · thumbnails.ts · config.ts
             stairs.ts (treads, risers, stringers, handrails, landing, the stairwell's balustrade)
-            slabs.ts (the floors between storeys, open over each stairwell) · region.ts (a region
-            less its holes, cut into pieces) · levelView.ts (which storeys the view shows)
+            slabs.ts (the floors between storeys, open over each stairwell, built over
+            model/floors.ts's outline) · levelView.ts (which storeys the view shows)
             overlays/ (the camera switch, View settings, hint bar, and the loading and failure states)
-  mcp/      registry.ts (registration + uniform logging) · tools.ts (40 + 1 dynamic)
+  mcp/      registry.ts (registration + uniform logging) · tools.ts (41 + 1 dynamic)
             bootstrap.ts (runtime detection, dynamic tool lifecycle, toolchange)
   ui/       App · theme/ (design tokens, Astryx theme, fonts) · primitives/ (buttons, fields, icons)
             shell/ (top bar, tool rail, canvas, side panel: Properties/Library/Issues/Notes + Activity)

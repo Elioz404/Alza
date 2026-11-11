@@ -8,10 +8,13 @@
 
 import type { PlanModel } from "./types";
 import { groundLevel } from "./types";
+import { newPlanId } from "./ids";
 import { GROUND_LEVEL_ID as G, LEVEL_DEFAULTS, LEVEL_NAMES, PLAN_FORMAT_VERSION } from "./limits";
 
 export const seedLoft = (): PlanModel => ({
   version: PLAN_FORMAT_VERSION,
+  // every demo loaded is a plan of its own, from that moment on
+  id: newPlanId(),
   name: "Sunset Loft",
   levels: [groundLevel()],
   walls: [
@@ -86,6 +89,7 @@ export const FIRST_LEVEL_ID = "level_first";
 
 export const seedTownhouse = (): PlanModel => ({
   version: PLAN_FORMAT_VERSION,
+  id: newPlanId(),
   name: "Hillside Townhouse",
   levels: [groundLevel(), { id: FIRST_LEVEL_ID, name: LEVEL_NAMES[1], height: LEVEL_DEFAULTS.height }],
   walls: [

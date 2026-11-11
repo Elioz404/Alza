@@ -13,11 +13,12 @@
  *    the other, with the side the region is not on. A slab's sides and a stairwell's lining are
  *    walls built along it.
  *
- * Plan coordinates (metres, y down the sheet), pure functions, no three.js.
+ * Plan coordinates (metres, y down the sheet), pure functions: the 3D view's floors and the IFC
+ * export's slabs and finishes (src/export/ifc) are cut by the same code, so they cover the same.
  */
 
-import type { Pt } from "../model/geometry";
-import { SLAB } from "./config";
+import type { Pt } from "./geometry";
+import { REGION } from "./limits";
 
 /** A convex outline on the plan, its corners in order (either way round). */
 export type Poly = readonly Pt[];
@@ -40,7 +41,7 @@ export interface RimEdge {
   readonly ny: number;
 }
 
-const EPS = SLAB.edgeTolerance;
+const EPS = REGION.edgeTolerance;
 
 /** y along the line through a and b (not vertical) at x. */
 type Bound = (x: number) => number;
@@ -184,7 +185,7 @@ export function regionRim(include: readonly Poly[], exclude: readonly Poly[] = [
   const edges = all.flatMap(edgesOf);
   const out: RimEdge[] = [];
   const seen = new Set<string>();
-  const key = (p: Pt) => `${Math.round(p.x / SLAB.probe)},${Math.round(p.y / SLAB.probe)}`;
+  const key = (p: Pt) => `${Math.round(p.x / REGION.probe)},${Math.round(p.y / REGION.probe)}`;
   for (const [a, b] of edges) {
     const dx = b.x - a.x;
     const dy = b.y - a.y;
@@ -214,8 +215,8 @@ export function regionRim(include: readonly Poly[], exclude: readonly Poly[] = [
       if ((ts[i + 1] - ts[i]) * len < EPS) continue;
       const tm = (ts[i] + ts[i + 1]) / 2;
       const m = { x: a.x + dx * tm, y: a.y + dy * tm };
-      const plus = inRegion({ x: m.x + nx * SLAB.probe, y: m.y + ny * SLAB.probe }, include, exclude);
-      const minus = inRegion({ x: m.x - nx * SLAB.probe, y: m.y - ny * SLAB.probe }, include, exclude);
+      const plus = inRegion({ x: m.x + nx * REGION.probe, y: m.y + ny * REGION.probe }, include, exclude);
+      const minus = inRegion({ x: m.x - nx * REGION.probe, y: m.y - ny * REGION.probe }, include, exclude);
       if (plus === minus) continue;
       const p = { x: a.x + dx * ts[i], y: a.y + dy * ts[i] };
       const q = { x: a.x + dx * ts[i + 1], y: a.y + dy * ts[i + 1] };

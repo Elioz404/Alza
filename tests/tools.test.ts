@@ -19,7 +19,7 @@ const PUBLIC_NAMES = [
   "list_levels", "add_level", "update_level", "remove_level", "set_active_level",
   "add_stair", "update_stair", "remove_stair",
   "set_plan_name", "clear_model",
-  "build_3d", "set_camera", "set_3d_style", "set_doors", "get_supplier_catalog", "place_supplier_product",
+  "build_3d", "set_camera", "set_3d_style", "set_doors", "export_ifc", "get_supplier_catalog", "place_supplier_product",
   "leave_note", "get_notes",
 ];
 
@@ -38,7 +38,9 @@ describe("tool surface", () => {
   });
 
   it("gives a resolve step to every tool the gate stops, and only to those", () => {
-    for (const t of TOOLS) expect(!!t.resolve, t.name).toBe(!!t.annotations?.destructiveHint);
+    // the gate stops what removes things (destructiveHint) and what hands the human a file (consentHint)
+    for (const t of TOOLS) expect(!!t.resolve, t.name).toBe(!!t.annotations?.destructiveHint || !!t.annotations?.consentHint);
+    expect(TOOLS.filter((t) => t.annotations?.consentHint).map((t) => t.name)).toEqual(["export_ifc"]);
   });
 });
 

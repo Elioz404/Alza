@@ -166,6 +166,22 @@ describe("the request card", () => {
     expect((await call).ok).toBe(false);
   });
 
+  it("asks before a download as a download: the file by name, nothing about undo, and declining downloads nothing", async () => {
+    const call = executeWrapped(tool("export_ifc"), {});
+    await flush();
+    const el = await render(PlanMarks);
+    const card = el.querySelector('[role="alertdialog"]')!;
+    expect(el.querySelector(".approval-card__title")?.textContent).toBe("Your agent wants to download a file");
+    expect(card.textContent).toContain("sunset-loft.ifc");
+    expect(card.textContent).toContain("The plan itself does not change.");
+    expect(card.textContent).not.toContain("Undo brings it back");
+    expect(buttonNamed(card, "Download file")).toBeTruthy();
+    await click(buttonNamed(card, "Don't download")!);
+    const r = await call;
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/declined/);
+  });
+
   it("pages through several requests, oldest first", async () => {
     const first = executeWrapped(tool("remove_room"), { id: "room_bath" });
     const second = executeWrapped(tool("remove_item"), { id: "item_plant" });
@@ -249,8 +265,11 @@ describe("Waiting for you and Activity", () => {
     expect(options).toContain("get_model (reads)");
     expect(options).toContain("set_camera (edits)");
     expect(options).toContain("remove_wall (removes, asks first)");
+    expect(options).toContain("export_ifc (downloads, asks first)");
     await act(async () => store.setState({ requireApproval: false }));
     expect([...el.querySelectorAll("option")].map((o) => o.textContent)).toContain("remove_wall (removes)");
+    // a file for the human's downloads is asked about whatever the policy says
+    expect([...el.querySelectorAll("option")].map((o) => o.textContent)).toContain("export_ifc (downloads, asks first)");
   });
 
   it("Developer tools counts the tools from the list", async () => {

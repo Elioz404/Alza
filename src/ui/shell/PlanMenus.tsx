@@ -6,10 +6,12 @@
 
 import { useCallback, useLayoutEffect, useRef } from "react";
 import { dispatch } from "../../model/commands";
+import { store } from "../../model/store";
+import { exportIfc } from "../../export/ifcExport";
 import { seedLoft } from "../../model/seed";
 import { bus, EVENTS } from "../../model/sceneBus";
 import { useAppStore } from "../useAppStore";
-import { IconCamera, IconDownload } from "../primitives";
+import { IconCamera, IconDownload, IconLevels } from "../primitives";
 import { Menu, MenuDivider, MenuItem, type MenuTriggerProps } from "../primitives/astryx";
 import { useBreakpoint } from "../theme/media";
 import { useShell } from "./ShellContext";
@@ -36,6 +38,8 @@ function useHandoffTrigger(handoff: TriggerHandoff) {
     [],
   );
 }
+
+const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 export function PlanMenu({ handoff }: MenuSlotProps) {
   const isEmpty = useAppStore((s) => s.model.walls.length + s.model.rooms.length + s.model.items.length + s.model.openings.length === 0);
@@ -80,12 +84,24 @@ export function PlanMenu({ handoff }: MenuSlotProps) {
   );
 }
 
-/** The export entries, shared by the Export menu and, at phone width, the plan menu. */
+/**
+ * The export entries, shared by the Export menu and, at phone width, the plan menu. The 3D
+ * view's OBJ and PNG are taken from the view; the IFC model is written from the plan itself,
+ * so it needs no view open.
+ */
 function ExportItems() {
   const in3d = useAppStore((s) => s.editor.view === "3d");
+  const notify = useNotify();
   const why = in3d ? undefined : "Open the 3D view to export";
+  const ifc = () => {
+    exportIfc(store.getState().model).then(
+      (s) => notify({ body: `${s.fileName} exported: ${plural(s.elements.storeys, "storey")}, ${plural(s.elements.walls, "wall")}, ${plural(s.elements.spaces, "space")}` }),
+      (err: unknown) => notify({ body: `The IFC file could not be written: ${err instanceof Error ? err.message : String(err)}`, type: "error" }),
+    );
+  };
   return (
     <>
+      <MenuItem label="Building model (IFC)" description="Storeys, walls, openings, rooms, stairs and furniture for CAD and BIM" icon={<IconLevels size="sm" />} onClick={ifc} />
       <MenuItem label="3D model (OBJ)" description={why} isDisabled={!in3d} icon={<IconDownload size="sm" />} onClick={() => bus.emit(EVENTS.EXPORT_OBJ)} />
       <MenuItem label="Snapshot (PNG)" description={why} isDisabled={!in3d} icon={<IconCamera size="sm" />} onClick={() => bus.emit(EVENTS.EXPORT_PNG)} />
     </>

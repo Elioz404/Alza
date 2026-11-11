@@ -184,9 +184,10 @@ export const requestCard = (page) => page.getByRole("alertdialog");
  */
 export async function answerRequest(page, decision) {
   const card = requestCard(page);
-  const keep = card.getByRole("button", { name: /^Keep / });
+  // a removal is kept or confirmed; a download is declined or taken
+  const keep = card.getByRole("button", { name: /^(Keep |Don't download$)/ });
   if (decision === "keep") await keep.click();
-  else await card.getByRole("button", { name: /^(Remove|Clear) / }).click();
+  else await card.getByRole("button", { name: /^(Remove|Clear|Download) / }).click();
 }
 
 /**

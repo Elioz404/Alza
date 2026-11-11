@@ -23,11 +23,11 @@ import {
   doorLeafMaterial,
   frameMaterial,
   glassMaterial,
-  jointExtensions,
   openingsByWall,
   wallCutCap,
   wallMaterial,
 } from "../src/three/build";
+import { jointExtensions } from "../src/model/joints";
 import { CUT_CAP, CUT_PLANE, POCHE, cutLevel, setCut } from "../src/three/cutaway";
 import { INK, INK_CLIPPED, INK_EDGE, INK_STAIR, addInkEdges, findCreases, removeInkEdges } from "../src/three/edges";
 import { SceneMarks, markBox, hatch, hatchGeometry, hatchImage } from "../src/three/marks";

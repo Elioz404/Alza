@@ -111,7 +111,11 @@ describe("partner text travels only under `untrusted`", () => {
     // a second piece on top of the first, so the checker has something to say about it
     await executeWrapped(tool("place_item"), { kind: supplierKind(product.sku), x: 1, y: 1 });
     for (const t of [...TOOLS, EXTEND_SELECTED_WALL].filter((d) => d.annotations?.readOnlyHint)) {
-      const r = await executeWrapped(t, t.name === "measure" ? { x1: 0, y1: 0, x2: 1, y2: 1 } : {});
+      const call = executeWrapped(t, t.name === "measure" ? { x1: 0, y1: 0, x2: 1, y2: 1 } : {});
+      // a read that hands the human a file (export_ifc) waits for them: approve it, so its answer is checked too
+      await flush();
+      for (const a of store.getState().approvals) actions.resolveApproval(a.id, true);
+      const r = await call;
       const all = JSON.stringify(r);
       if (!all.includes(CANARY)) continue;
       expect(hinted(t), `${t.name} returns partner text without untrustedContentHint`).toBe(true);

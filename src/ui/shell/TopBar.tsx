@@ -90,7 +90,7 @@ export function TopBar() {
         </span>
         <span className="topbar__divider" aria-hidden="true" />
         <PlanMenu />
-        <Tip content="This plan lives only in this tab: reloading starts over. Export saves a 3D model or a picture, not a plan you can open again.">
+        <Tip content="This plan lives only in this tab: reloading starts over. Export saves a building model for CAD (IFC), a 3D model or a picture, not a plan you can open again.">
           <span className="save-state" tabIndex={0}>
             Not saved
           </span>

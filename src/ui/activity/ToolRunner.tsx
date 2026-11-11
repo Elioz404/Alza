@@ -30,10 +30,19 @@ const ALL_TOOLS = [...TOOLS, EXTEND_SELECTED_WALL];
 
 /**
  * How a tool is marked in the list: what kind of tool it is, from its annotations, and for one
- * that removes things whether it waits for you, from the approval policy as it stands.
+ * that removes things whether it waits for you, from the approval policy as it stands. One that
+ * hands you a file always asks.
  */
 const effectOf = (t: (typeof ALL_TOOLS)[number], asks: boolean): string =>
-  t.annotations?.readOnlyHint ? "reads" : t.annotations?.destructiveHint ? (asks ? "removes, asks first" : "removes") : "edits";
+  t.annotations?.consentHint
+    ? "downloads, asks first"
+    : t.annotations?.readOnlyHint
+      ? "reads"
+      : t.annotations?.destructiveHint
+        ? asks
+          ? "removes, asks first"
+          : "removes"
+        : "edits";
 
 interface Outcome {
   ok: boolean;

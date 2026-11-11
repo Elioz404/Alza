@@ -51,6 +51,16 @@ export const WALL_MIN_LENGTH = 0.2;
 export const WALL_THICKNESS = range(0.02, 1);
 export const WALL_HEIGHT = range(0.3, 10);
 export const WALL_DEFAULTS = Object.freeze({ thickness: 0.15, height: 2.7 });
+/**
+ * How near a wall's end must come to another wall (one of its ends, or a point of its span) to
+ * be joined to it: the 3D view and the IFC export then reach the end on into the joint.
+ */
+export const WALL_JOINT_REACH = 0.09;
+/**
+ * Two walls whose directions differ by less than this (the sine of the angle between them) run
+ * in line: where they meet, one continues the other and neither is cut back to the other's face.
+ */
+export const WALL_IN_LINE_SINE = 1e-3;
 /** A wall's two endpoints: "a" is (ax, ay), "b" is (bx, by). */
 export const WALL_ENDS = ["a", "b"] as const;
 export type WallEnd = (typeof WALL_ENDS)[number];
@@ -182,6 +192,17 @@ export const GROUND_LEVEL_ID = "level_ground";
 export const LEVEL_HEIGHT = range(2.2, 10);
 /** Thickness of the floor slab between two levels; the 3D view builds the upper floors with it. */
 export const SLAB_THICKNESS = 0.2;
+/**
+ * How thick a room's floor finish is, laid on the slab: furniture stands on top of it, in the
+ * 3D view and in the exported building model.
+ */
+export const FLOOR_FINISH_DEPTH = 0.04;
+/**
+ * The precision the floors' regions are cut at (model/region.ts): a gap or an overlap smaller
+ * than `edgeTolerance` is none, and `probe` is how far off an edge a point is tested for which
+ * side of it the region is on.
+ */
+export const REGION = Object.freeze({ edgeTolerance: 1e-6, probe: 1e-4 });
 /**
  * How far a wall's top may sit from the underside of the slab over its level and still meet it.
  * Past it, a wall under a level stops short of the slab (an open band shows in 3D) or runs up
@@ -385,6 +406,8 @@ export const MAX_CANDIDATES = 10;
 // ---------------------------------------------------------------------------- supplier
 
 export const SUPPLIER = Object.freeze({
+  /** who the partner origin sells as: the vendor a supplier product names in an exported model */
+  vendor: "Nordika",
   /** e.g. NK-SOF-3S */
   sku: /^[A-Z0-9][A-Z0-9-]{0,31}$/i,
   currency: /^[A-Z]{3}$/,
