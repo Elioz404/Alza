@@ -20,7 +20,7 @@ const PUBLIC_NAMES = [
   "add_stair", "update_stair", "remove_stair",
   "set_plan_name", "clear_model",
   "build_3d", "set_camera", "set_3d_style", "set_doors", "export_ifc", "get_supplier_catalog", "place_supplier_product",
-  "leave_note", "get_notes",
+  "leave_note", "get_notes", "get_presence", "point_at",
 ];
 
 describe("tool surface", () => {

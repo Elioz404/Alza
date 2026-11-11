@@ -76,13 +76,13 @@ More stills in [`shots/showcase/`](shots/showcase/).
 1. Open the live app (link at the top of this repo).
 2. **In ChatGPT desktop:** open the URL in the in-app browser. WebMCP works out of the box.
    **In Google Chrome 149+:** enable `chrome://flags/#enable-webmcp-testing` and restart.
-   The agent status in the top bar turns green: **Agent tools on** (41 tools registered).
+   The agent status in the top bar turns green: **Agent tools on** (43 tools registered).
 3. Ask your agent, for example:
    - *"Add a 3 × 2.5 m study next to the bedroom, with a door and a window."*
    - *"The sofa placement feels off. Check the plan and fix any issues."*
    - *"Build the 3D and give me a walkthrough."*
 4. No WebMCP runtime? The app is still complete. Open **Activity → Developer tools** in the side
-   panel and run the exact same 42 tools manually; every call is logged in Activity.
+   panel and run the exact same 44 tools manually; every call is logged in Activity.
 
 ## Trace your own plan with the agent
 
@@ -115,7 +115,7 @@ document.modelContext.registerTool({
 });
 ```
 
-## The 41 tools (+ 1 dynamic)
+## The 43 tools (+ 1 dynamic)
 
 | Group | Tools |
 |---|---|
@@ -130,6 +130,7 @@ document.modelContext.registerTool({
 | **Export** | `export_ifc`, writes the whole plan as an IFC4 building model and downloads it for the human, who approves every export first, whatever the approval policy (a file on their machine is not something undo can take back); the agent gets the file's summary (schema, size, entities by type), not the file |
 | **Cross-origin** | `get_supplier_catalog` · `place_supplier_product`, read a **partner origin's** own WebMCP tools and drop its real products into the plan |
 | **Collaboration** | `leave_note` · `get_notes` |
+| **Shared session** | `get_presence`, what the person is doing right now: level, view, selection, what they are dragging, their pointer and the plan area on their screen (unless they switched sharing off), and the other tabs on the plan · `point_at`, a marker with a short message on a wall, room, piece or stair, in the plan and in 3D |
 | **Dynamic** | `extend_selected_wall`, published **only while the human has a wall selected** (registered/unregistered live, per the spec's `toolchange` cycle). The human points, the agent acts on exactly that wall. |
 
 `get_model`, `get_issues`, `add_wall`, `edit_wall`, `add_room`, `update_room`, `place_item`,
@@ -286,6 +287,42 @@ rebuild the solids from the file and probe them: no two wall bodies overlap and 
 filled once, the floor line under every wall is closed, every void passes the faces it cuts, and
 every door's placement and `OperationType` swing it and hang it as the plan does.
 
+## A shared session: the person, the agent and every tab on one plan
+
+The person and the agent work the same plan at the same time, and each sees the other move.
+
+- **The agent is seen at work.** While a tool call runs, a marker in the agent's colour glides to
+  what it touches, the entity gets a soft highlight, and a label says what it does ("Agent ·
+  moving Sofa"), on the plan and over the 3D model. Nothing in the tools does this: it follows
+  from `dispatch()` and the tool runner, so every tool, present and future, is seen. The activity
+  feed stays the record of what was done.
+- **The agent sees the person.** `get_presence` answers the person's level, view, selection, the
+  entity under their pointer, the plan area on their screen and whether they are dragging
+  something. The person can switch off sharing their pointer and view (the presence indicator
+  in the top bar, kept per browser and followed by every open tab at once). `point_at` lets the
+  agent show the person what it means; its message is also said through a polite live region
+  and kept in the activity feed.
+- **No edit under the hand.** While the person drags, nudges or types into something, an agent's
+  change to that same thing is refused with `conflict.code: "person_editing"` and
+  `retryAfterMs`: nothing changes, and the agent calls again once the hand lets go. Refused, not
+  queued, so a call never hangs on a hand that does not let go. Until then the page shows
+  "Agent · waiting for you". What a hand holds reaches the other tabs before the drag's first
+  frame does, so an agent in another tab is refused from that frame on.
+- **Tabs of one browser.** Two tabs with the studio open share one plan over a `BroadcastChannel`
+  (same origin only). A tab that opens later takes up the plan the others hold, once, keeping
+  whatever was changed in it before it joined. A change travels as entity writes stamped with a
+  Lamport clock; the last writer wins, per entity, so every tab ends on the same plan whatever
+  order the writes arrive in (past a plan's limits, such as its notes, the newest are kept the
+  same way everywhere). Another tab's change lands through `dispatch()` as one feed line
+  ("Another tab"), a whole drag as one. Undo stays local: it takes back the tab's own changes,
+  never another tab's, because each of its steps is rebased under the changes the other tabs
+  make. Every message is checked against a zod schema, and anything malformed or foreign is
+  ignored. Each tab shows the others' pointers, named "Tab 2" and so on, in colours that follow
+  the light and dark themes.
+
+There is no server: the session lives in the browser. `src/session/transport.ts` is the seam
+where a network relay could carry the same messages between machines.
+
 ## Architecture
 
 ```
@@ -304,6 +341,8 @@ src/
             and IFC alike) · region.ts (flat regions with holes, cut into trapezoids)
             text.ts (plan text made a clean name) · planRanges.ts (every number held to its range,
             for what writes a plan out) · ids.ts (entity ids, and a plan's own random id)
+            presence.ts (who is on the plan and where: never saved, never in undo)
+            touch.ts (what a command touches) · places.ts (where an entity is, by id)
   export/   download.ts (every export's file name and download) · ifcExport.ts (the IFC export's
             one path, menu and tool alike; fetches the writer on first use)
             ifc/ (loaded on demand) step.ts (ISO 10303-21 encoding) · guid.ts (stable GlobalIds)
@@ -336,7 +375,11 @@ src/
             slabs.ts (the floors between storeys, open over each stairwell, built over
             model/floors.ts's outline) · levelView.ts (which storeys the view shows)
             overlays/ (the camera switch, View settings, hint bar, and the loading and failure states)
-  mcp/      registry.ts (registration + uniform logging) · tools.ts (41 + 1 dynamic)
+  session/  (loaded once the page is idle) runtime.ts (joining, sending and merging changes,
+            presence) · replica.ts (the plan as last-writer-wins registers, Lamport clocks)
+            messages.ts (every message's zod schema) · transport.ts (BroadcastChannel, in-page,
+            and the seam for a network relay)
+  mcp/      registry.ts (registration + uniform logging) · tools.ts (43 + 1 dynamic) · presenceTools.ts (get_presence, point_at; their answers load on first use)
             bootstrap.ts (runtime detection, dynamic tool lifecycle, toolchange)
   ui/       App · theme/ (design tokens, Astryx theme, fonts) · primitives/ (buttons, fields, icons)
             shell/ (top bar, tool rail, canvas, side panel: Properties/Library/Issues/Notes + Activity)
@@ -356,7 +399,9 @@ tests/      domain: geometry, checker (incl. seed = 0 issues regression), rules,
             sceneStyle (selection, marks,
             cutaway, edges, names, camera moves), frames, scene3d, thumbnails · editorKeys
             agent surface: tools, validation, approval gate, trust, untrusted partner text,
-            supplier, transport, discovery, underlay · page: derived (what the UI reads off the tools),
+            supplier, transport, discovery, underlay · session (the agent seen from its calls, the
+            hand's hold, get_presence and point_at, hostile messages, tabs converging) and
+            sessionUi (the indicator, the plan's session layer) · page: derived (what the UI reads off the tools),
             theme, shell, panels, canvas, provenance, activityApprovals, firstRun, lazyView,
             deferred (what loads after the first paint)
             build and config: layering, config, sites, headers, production, serve-local, purge,
@@ -366,8 +411,10 @@ scripts/
               by mouse and keyboard: drawing, selection from "On the plan", shortcuts, every
               tool, the approval card (buttons, Ctrl+Enter, Esc), the 3D view (camera modes,
               the cutaway's slider, a wall selected by a click on the model, a pending removal
-              hatched on it), the drawer and bottom-sheet layouts; asserts zero console
-              errors — 123 checks (2 skip on Chrome builds
+              hatched on it), the drawer and bottom-sheet layouts, the shared session (the
+              agent's marker, get_presence, an edit held for the hand, two tabs of one browser
+              syncing and seeing each other's pointer); asserts zero console
+              errors — 213 checks (2 skip on Chrome builds
               without navigator.modelContextTesting, 3 when the partner origin does not
               answer; with either one there, a failure is a FAIL, never a skip)
   trace.mjs   the demo plan as data: walls, openings, rooms, furniture, and the kinds the

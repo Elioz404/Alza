@@ -9,9 +9,12 @@ import { actions, releaseHeldAsset, store } from "./model/store";
 import { runTool } from "./mcp/tools";
 import { blobFromDataUrl, putAsset } from "./model/assets";
 import { sceneProbe, type SceneLocatable } from "./model/sceneBus";
+import { presence } from "./model/presence";
 
 export const testHookHandle = () => ({
   store,
+  /** the shared session's presence: who is on the plan, what the agent touches (model/presence.ts) */
+  presence,
   actions,
   runTool: (name: string, input: unknown) => runTool(name, input, "agent"),
   /**

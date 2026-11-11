@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { contrast, oklch, oklchToHex, srgb } from "../src/ui/theme/color";
-import { BREAKPOINT, FLOOR_FILL, PLAN_HEX, THEME, mediaQuery } from "../src/ui/theme/tokens";
+import { BREAKPOINT, FLOOR_FILL, PLAN_HEX, THEME, mediaQuery, tabColour } from "../src/ui/theme/tokens";
 import { MATERIAL, SCENE_MARK } from "../src/ui/theme/sceneTokens";
 import { DARK_TOKENS, LIGHT_TOKENS, renderTokenCss } from "../src/ui/theme/tokenSheet";
 import { FLOOR_FINISHES } from "../src/model/limits";
@@ -92,6 +92,19 @@ describe("the palette meets its contrast targets", () => {
     ["--plan-ghost", "--plan-paper", 3],
   ])("%s on %s is at least %s:1", (fg, bg, min) => {
     expect(contrast(hexOf(fg), hexOf(bg))).toBeGreaterThanOrEqual(min);
+  });
+
+  // the session's other tabs: a cursor and its name in 11px text, on the paper, in either theme
+  const TABS = Object.keys(LIGHT_TOKENS).filter((name) => name.startsWith("--plan-tab-"));
+  it("has a colour for each of the session's tabs, in light and in dark", () => {
+    expect(TABS.length).toBeGreaterThan(1);
+    for (const name of TABS) expect(DARK_TOKENS[name]).toBeDefined();
+    for (let n = 1; n <= TABS.length * 2; n++) expect(TABS).toContain(tabColour(n).slice("var(".length, -1));
+  });
+  it.each(TABS.map((name) => [name]))("%s reads as text on the paper, light and dark", (name) => {
+    expect(contrast(hexOf(name), hexOf("--plan-paper"))).toBeGreaterThanOrEqual(4.5);
+    const dark = (n: string) => (DARK_TOKENS[n] as { hex: string }).hex;
+    expect(contrast(dark(name), dark("--plan-paper"))).toBeGreaterThanOrEqual(4.5);
   });
 
   it.each([

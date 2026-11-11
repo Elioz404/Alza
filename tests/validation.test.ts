@@ -72,6 +72,8 @@ const CONTRACT: Record<string, [Record<string, string>, string[]]> = {
   place_supplier_product: [{ sku: S, x: N, y: N, rotation: N, level: S }, ["sku", "x", "y"]],
   leave_note: [{ text: S }, ["text"]],
   get_notes: [{}, []],
+  get_presence: [{}, []],
+  point_at: [{ target: S, message: S }, ["target", "message"]],
   extend_selected_wall: [{ meters: N, end: S }, ["meters", "end"]],
 };
 

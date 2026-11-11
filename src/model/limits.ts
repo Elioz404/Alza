@@ -403,6 +403,75 @@ export const MAX_PENDING_APPROVALS = 5;
  */
 export const MAX_CANDIDATES = 10;
 
+// ---------------------------------------------------------------------------- the shared session
+
+/**
+ * The shared session (src/model/presence.ts, src/session/): who else is on the plan right now
+ * and where, and how the tabs of one browser keep one plan between them.
+ */
+export const SESSION = Object.freeze({
+  /** the BroadcastChannel the tabs of this origin meet on */
+  channel: "alza-session",
+  /** the message format; a message in any other is ignored */
+  protocol: 1,
+  /** how long a new tab listens for a tab that already holds the plan before it holds its own */
+  joinWaitMs: 400,
+  /** at most this often a tab tells the others where its pointer is */
+  presenceIntervalMs: 60,
+  /** and at least this often, so they know it is still there */
+  heartbeatMs: 2000,
+  /** a tab not heard from for this long has gone */
+  peerTimeoutMs: 6500,
+  /** how long the agent's marker stays on what it last touched once its call is done */
+  agentLingerMs: 2600,
+  /** how long a point_at marker stays */
+  pointMs: 6000,
+  /** points that can show at once; a new one beyond this replaces the oldest */
+  maxPoints: 3,
+  /** what the agent touched last, kept for get_presence */
+  lastEdited: 5,
+  /** how long an agent told the person is editing should wait before it calls again */
+  retryAfterMs: 1200,
+  /** the longest message a point_at may show */
+  pointMessage: 160,
+  /** the most registers one sync message may carry (a whole plan's snapshot fits) */
+  maxWrites: 20_000,
+  /** the longest key or summary a sync message may carry */
+  maxKey: 200,
+  maxSummary: 400,
+  /** joins and leaves announced closer together than this are said once */
+  announceMs: 1500,
+  /** the most entities one tab says its person edits, or its agent touches, at once */
+  maxFocus: 64,
+  /** another tab's gesture (a drag) is one step here too: it ends when no frame came for this long */
+  gestureIdleMs: 900,
+  /**
+   * Over the 3D view (ui/session/ScenePresence.tsx), metres: another tab's pointer is marked this
+   * far over its floor, and something with no top of its own (a door, a window) this far over it.
+   */
+  markerUp: Object.freeze({ pointer: 0.05, entity: 1.2 }),
+  /**
+   * How far into a room, from its corner, metres, a marker on it stands (the agent's, point_at's):
+   * clear of the room's name and area in its middle; at most this share of the room's side.
+   */
+  markerInset: Object.freeze({ metres: 0.45, share: 0.25 }),
+  /**
+   * The highest clock another tab's write may raise this tab's to (src/session/replica.ts):
+   * half of the highest integer a message carries exactly, so there are always more edits left
+   * than a session could make before this tab's own clock would pass what a message may carry.
+   */
+  maxClock: Math.floor(Number.MAX_SAFE_INTEGER / 2),
+});
+
+/** What a tool, or a command, is named: lowercase words joined by underscores ("move_item"). */
+export const TOOL_NAME = /^[a-z][a-z0-9_]*$/;
+
+/** Where a participant is working: the plan (2D) or the 3D view. */
+export const PRESENCE_VIEWS = ["2d", "3d"] as const;
+/** Who a participant is: a person at a tab, or an agent calling a tab's tools. */
+export const PARTICIPANT_KINDS = ["person", "agent"] as const;
+export type ParticipantKind = (typeof PARTICIPANT_KINDS)[number];
+
 // ---------------------------------------------------------------------------- supplier
 
 export const SUPPLIER = Object.freeze({

@@ -88,6 +88,26 @@ export const MARK = Object.freeze({
 });
 
 /**
+ * The shared session on the plan (PlanPresence.tsx), in pixels: the soft highlight on what the
+ * agent touches, its marker and label, a point_at ring, another tab's cursor and name tag.
+ */
+export const PRESENCE_MARK = Object.freeze({
+  /** the highlight stands this far off what it highlights */
+  pad: 6,
+  /** the agent's marker: a diamond this many pixels from its centre to a corner */
+  marker: 7,
+  /** its label sits this far right of the marker, and this far above its centre */
+  labelDx: 12,
+  labelDy: -12,
+  /** a point_at ring: its radius, at least this much, and this far round its entity */
+  ring: 16,
+  /** another tab's cursor: the arrow's length, and where its name tag starts */
+  cursor: 16,
+  tagDx: 14,
+  tagDy: 22,
+});
+
+/**
  * How a stair is drawn on the plan, in metres and fractions of the stair (so the symbol scales
  * with it). The plan is cut, as a floor plan is, at `cutHeight` above its floor: treads below
  * the cut are drawn, the ones above it hidden (dashed), with a break line where the cut crosses

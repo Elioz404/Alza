@@ -43,7 +43,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { store, pageActions } from "../model/store";
 import { elevationOf, levelSlice, levelsOf, slabUnderside } from "../model/levels";
 import { dispatch } from "../model/commands";
-import { bus, EVENTS, sceneProbe, type SceneLocatable, type ScenePoint, type SceneStats, type SetDoorsPayload } from "../model/sceneBus";
+import { bus, EVENTS, sceneFrameDrawn, sceneProbe, type SceneLocatable, type ScenePoint, type SceneStats, type SetDoorsPayload } from "../model/sceneBus";
 import { SCENE_STYLE_DEFAULTS, type CameraMode, type SceneStyle } from "../model/limits";
 import type { PendingApproval, PlanModel } from "../model/types";
 import { runToolManually } from "../mcp/tools";
@@ -56,7 +56,7 @@ import { CAMERA, CAMERA_FRAMING, CLICK_SLOP_PX, CONTROLS, FLOOR_TOP, LIGHTS, REN
 import { TONE_MAPPING } from "./surfaces";
 import { isAid } from "./edges";
 import { cutLevel, setCut, setStoreyTop, storeyTop } from "./cutaway";
-import { SceneMarks, markBox, roomLid, setMarkResolution, type Selected } from "./marks";
+import { SceneMarks, markBox, roomLid, setMarkResolution, type Focused, type Selected } from "./marks";
 import { RoomLabels } from "./labels";
 import { CameraMove, framedRadius, moveSeconds, newPose, orbitPose, prefersReducedMotion, type CameraPose } from "./transitions";
 
@@ -71,6 +71,8 @@ export interface Viewport {
   setSelection(selected: Selected | null): void;
   /** Hatch what the pending destructive requests would remove. */
   setPending(approvals: readonly PendingApproval[]): void;
+  /** Outline, in the agent's colour, what its call is touching (the shared session). */
+  setFocus(focus: readonly Focused[]): void;
   /** Work on another level: it is shown (up to it, by default), placed on, and walked on. */
   setActiveLevel(levelId: string): void;
   /** Show the levels up to this one (levelView.ts). */
@@ -182,6 +184,7 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
   let style: SceneStyle = options.style ?? SCENE_STYLE_DEFAULTS;
   let selected: Selected | null = options.selected ?? null;
   let approvals: readonly PendingApproval[] = options.approvals ?? [];
+  let focus: readonly Focused[] = [];
   const marks = new SceneMarks();
   scene.add(marks.root);
   setMarkResolution(mount.clientWidth, mount.clientHeight);
@@ -199,6 +202,7 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       approvals.flatMap((a) => a.targets),
       lidOf,
       shownIds,
+      focus,
     );
   };
   remark();
@@ -441,6 +445,8 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     }
     renderer.render(scene, cam);
     labels?.place(cam, width, height, occluders, cutLevel(), (room) => (coveredByShown(model, shownIds, room.levelId) ? null : lidOf(room.levelId)));
+    // what stands over the canvas (the session's markers) is placed for this very frame
+    sceneFrameDrawn();
     return again;
   });
   const invalidate = () => loop.invalidate();
@@ -624,6 +630,7 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     entities: plan.size,
     materials: plan.materials.size,
     marks: marks.counts,
+    agentMarks: marks.agentCount,
     labels: labels?.counts ?? { total: 0, shown: 0 },
     cut: cutLevel(),
     storeyTop: storeyTop(),
@@ -658,8 +665,20 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     controls.update();
     invalidate();
   };
+  const project = (x: number, y: number, levelId: string | undefined, up: number): ScenePoint | null => {
+    projected.set(x, elevationOf(model, levelId) + up, y).project(cam);
+    if (projected.z > 1) return null;
+    return { x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height };
+  };
+  // three.js axes to the plan's: x stays, three's z is the plan's y, three's y is up
+  const camera = () => ({
+    eye: { x: cam.position.x, y: cam.position.z, z: cam.position.y },
+    target: { x: controls.target.x, y: controls.target.z, z: controls.target.y },
+  });
   sceneProbe.locate = locate;
   sceneProbe.look = look;
+  sceneProbe.project = project;
+  sceneProbe.camera = camera;
 
   loop.invalidate();
   // the ink is drawn on the second frame: the first one shows the model as soon as it can
@@ -719,6 +738,10 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       remark();
       invalidate();
     },
+    setFocus(next) {
+      focus = next;
+      if (remark()) invalidate();
+    },
     setActiveLevel(next) {
       if (next === activeId) return;
       activeId = next;
@@ -759,6 +782,8 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       if (sceneProbe.read === stats) sceneProbe.read = null;
       if (sceneProbe.locate === locate) sceneProbe.locate = null;
       if (sceneProbe.look === look) sceneProbe.look = null;
+      if (sceneProbe.project === project) sceneProbe.project = null;
+      if (sceneProbe.camera === camera) sceneProbe.camera = null;
       plan.dispose();
       marks.dispose();
       labels?.dispose();

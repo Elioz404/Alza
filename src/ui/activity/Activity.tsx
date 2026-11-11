@@ -70,6 +70,7 @@ export const ACTOR: Record<ActivitySource, { word: string; icon: IconComponent }
   agent: { word: "Agent", icon: IconAgent },
   human: { word: "You", icon: IconPerson },
   system: { word: "System", icon: IconSystem },
+  peer: { word: "Another tab", icon: IconPerson },
 };
 
 const KIND_ICON: Partial<Record<EntryKind, IconComponent>> = {

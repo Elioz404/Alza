@@ -221,8 +221,11 @@ export interface PlanModel {
   underlay: Underlay | null;
 }
 
-/** Who a change or a feed line comes from: one of the two actors, or the page itself. */
-export type ActivitySource = Actor | "system";
+/**
+ * Who a change or a feed line comes from: one of the two actors, the page itself, or another tab
+ * of this browser working on the same plan (the shared session, src/session/).
+ */
+export type ActivitySource = Actor | "system" | "peer";
 
 export interface ActivityEntry {
   id: string;

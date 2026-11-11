@@ -55,6 +55,21 @@ describe("src/mcp sits on the model, below the presentation layers", () => {
   });
 });
 
+describe("src/session sits on the model, below the presentation layers", () => {
+  it.each([
+    ['import { PresenceIndicator } from "../ui/session/PresenceIndicator";', "PresenceIndicator"],
+    ['import { TOOLS } from "../mcp/tools";', "TOOLS"],
+    ['import { useState } from "react";', "useState"],
+  ])("refuses %s", async (line, name) => {
+    expect(await restricted("src/session/probe.ts", line + "\n" + use(name))).toHaveLength(1);
+  });
+
+  it("allows the model, and the model may not reach up to it", async () => {
+    expect(await restricted("src/session/probe.ts", 'import { dispatch } from "../model/commands";\n' + use("dispatch"))).toEqual([]);
+    expect(await restricted("src/model/probe.ts", 'import { startSession } from "../session/runtime";\n' + use("startSession"))).toHaveLength(1);
+  });
+});
+
 describe("the presentation layers change the plan through dispatch", () => {
   it.each(["src/ui/probe.tsx", "src/editor/probe.tsx", "src/three/probe.ts"])("%s may not take the raw actions or log by hand", async (file) => {
     const code = 'import { actions, logActivity } from "../model/store";\n' + use("actions", "logActivity");
@@ -77,8 +92,8 @@ describe("the presentation layers change the plan through dispatch", () => {
 });
 
 describe("the source obeys the layers", () => {
-  it("src/model, src/mcp, the presentation layers and the entry point lint clean under their rules", async () => {
-    const results = await eslint.lintFiles(["src/model", "src/mcp", "src/ui", "src/three", "src/editor", "src/main.tsx"]);
+  it("src/model, src/mcp, src/session, the presentation layers and the entry point lint clean under their rules", async () => {
+    const results = await eslint.lintFiles(["src/model", "src/mcp", "src/session", "src/ui", "src/three", "src/editor", "src/main.tsx"]);
     const broken = results.flatMap((r) =>
       r.messages.filter((m) => m.ruleId === "no-restricted-imports").map((m) => `${r.filePath}:${m.line} ${m.message}`),
     );

@@ -85,6 +85,9 @@ function indexOf(model: PlanModel): Map<string, EntityRef> {
   return map;
 }
 
+/** What `id` names on the plan, or null when it names nothing there now. */
+export const refOf = (model: PlanModel, id: string): EntityRef | null => indexOf(model).get(id) ?? null;
+
 /**
  * What a line can name: a room by its label in quotes ('Room "Bedroom" updated.'), an entity
  * by its type word and id ("Wall wall_e", "on wall wall_e", "Item sofa2"), or a bare

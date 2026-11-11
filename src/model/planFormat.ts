@@ -84,6 +84,13 @@ const stairRecord = z.object({
   tread: num.optional(),
 });
 
+/**
+ * Each kind of entity's record, as this page reads it in any format: what the shared session
+ * checks another tab's entities against (src/session/messages.ts, which also holds every entity
+ * to its level, as the current format does).
+ */
+export const ENTITY_RECORDS = Object.freeze({ levelRecord, wallRecord, openingRecord, roomRecord, itemRecord, stairRecord, kindRecord });
+
 /** What any plan, of any format this page reads, must look like. */
 const planRecord = z.object({
   version: z.number().int().min(1).optional(),

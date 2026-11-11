@@ -55,6 +55,12 @@ export interface MarkBox {
   ry: number;
 }
 
+/** Something the agent is touching (the shared session): any entity that stands on the plan. */
+export interface Focused {
+  type: Exclude<ApprovalTarget["type"], "plan" | "file" | "level">;
+  id: string;
+}
+
 /** The entity the store has selected, if any. */
 export interface Selected {
   type: "wall" | "room" | "item" | "stair";
@@ -208,6 +214,7 @@ const outlineMaterials = (color: string) =>
 
 export const MARK_MATERIALS = Object.freeze({
   selection: outlineMaterials(SCENE_MARK.selection.hex),
+  agent: outlineMaterials(SCENE_MARK.agent.hex),
   destructive: outlineMaterials(SCENE_MARK.destructive.hex),
   casing: Object.freeze({
     seen: lineMaterial(SCENE_MARK.casing.hex, MARKS.casing, "seen"),
@@ -217,6 +224,7 @@ export const MARK_MATERIALS = Object.freeze({
 
 const allLines: readonly ScreenLineMaterial[] = [
   ...Object.values(MARK_MATERIALS.selection),
+  ...Object.values(MARK_MATERIALS.agent),
   ...Object.values(MARK_MATERIALS.destructive),
   ...Object.values(MARK_MATERIALS.casing),
 ];
@@ -421,6 +429,7 @@ export class SceneMarks {
     pending: readonly ApprovalTarget[],
     lid: number | ((levelId: string) => number) = FLOOR_TOP,
     shown: ReadonlySet<string> | null = null,
+    focus: readonly Focused[] = [],
   ): boolean {
     const visible = (type: ApprovalTarget["type"], id: string) => {
       const level = markLevel(type, id, model);
@@ -432,8 +441,12 @@ export class SceneMarks {
       const b = visible(t.type, t.id) ? markBox(t.type, t.id, model) : null;
       return b ? [{ type: t.type, id: t.id, box: b }] : [];
     });
+    const agentAt = focus.flatMap((t) => {
+      const b = visible(t.type, t.id) ? markBox(t.type, t.id, model) : null;
+      return b ? [{ type: t.type, id: t.id, box: b }] : [];
+    });
     const lids = [...targets, ...(sel ? [sel] : [])].filter((t) => t.type === "room").map((t) => lidOfRoom(t.id));
-    const signature = JSON.stringify([sel, targets, lids]);
+    const signature = JSON.stringify([sel, targets, lids, agentAt]);
     if (signature === this.signature) return false;
     this.signature = signature;
     this.clear();
@@ -458,6 +471,13 @@ export class SceneMarks {
       }
       this.root.add(place(mark, box));
     }
+    // what the agent is touching: outlined in its colour, a room on its floor, the rest as a selection is
+    for (const { type, box } of agentAt) {
+      const mark = new THREE.Group();
+      mark.name = "mark:agent";
+      mark.add(outline(box, MARK_MATERIALS.agent, type === "room" ? "depthNoHidden" : "depth"));
+      this.root.add(place(mark, box));
+    }
     if (sel?.box) {
       const selection = MARK_MATERIALS.selection;
       const mark = new THREE.Group();
@@ -478,6 +498,11 @@ export class SceneMarks {
       else if (c.name === "mark:pending") pending++;
     }
     return { selection, pending };
+  }
+
+  /** How many of the agent's marks are showing (the shared session). */
+  get agentCount(): number {
+    return this.root.children.filter((c) => c.name === "mark:agent").length;
   }
 
   private clear(): void {

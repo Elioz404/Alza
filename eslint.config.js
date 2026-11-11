@@ -8,7 +8,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import { defineConfig, globalIgnores } from "eslint/config";
 import { DIST_DIR, LOCAL_DIST_DIR } from "./config/sites.js";
 
-// ---- layering: model ← mcp ← ui / three / editor ----
+// ---- layering: model ← mcp, session ← ui / three / editor ----
 // Each layer may import from the ones below it and never from the ones above, so the domain
 // can be tested and reused without a renderer, a framework or the agent surface. The rules
 // match import specifiers: a relative path into a higher layer's directory, or a package that
@@ -23,7 +23,14 @@ const layer = (message, ...regexes) => ({
 });
 
 const MODEL_RULES = layer(
-  "src/model is the pure domain: it may not depend on the agent adapter (mcp), the presentation layers (ui, three, editor) or their packages.",
+  "src/model is the pure domain: it may not depend on the agent adapter (mcp), the shared session (session), the presentation layers (ui, three, editor) or their packages.",
+  intoDirs(["mcp", "session", "ui", "three", "editor"]),
+  packagesAbove,
+);
+// The shared session keeps the tabs on one plan through the model's own pipeline (dispatch): it
+// sits on the model beside the agent adapter, and knows nothing of either's presentation.
+const SESSION_RULES = layer(
+  "src/session sits on the model: it may not depend on the agent adapter (mcp), the presentation layers (ui, three, editor) or their packages.",
   intoDirs(["mcp", "ui", "three", "editor"]),
   packagesAbove,
 );
@@ -62,6 +69,7 @@ export default defineConfig(
   },
   { files: ["src/model/**/*.{ts,tsx}"], rules: MODEL_RULES },
   { files: ["src/mcp/**/*.{ts,tsx}"], rules: MCP_RULES },
+  { files: ["src/session/**/*.{ts,tsx}"], rules: SESSION_RULES },
   { files: ["src/{ui,three,editor}/**/*.{ts,tsx}", "src/main.tsx"], rules: PRESENTATION_RULES },
   {
     // vite.config.ts is evaluated by Node, not shipped to the browser

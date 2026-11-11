@@ -56,6 +56,8 @@ export interface SceneStats {
   materials: number;
   /** the plan's marks on the model: the selection's outline, and the pending removals' hatches */
   marks: { selection: number; pending: number };
+  /** what the agent is touching, outlined in its colour (the shared session) */
+  agentMarks: number;
   /** the room names over the model, and how many of them show */
   labels: { total: number; shown: number };
   /** where the cutaway slices the walls (metres above the ground), null when it does not */
@@ -86,7 +88,24 @@ export type SceneLocatable = "wall" | "room" | "item" | "stair";
  * it goes; it is here, at the bottom layer, so the test hook can ask without importing three.js
  * into the page's first chunk.
  */
-export const sceneProbe: SceneProbe = { read: null, locate: null, look: null };
+export const sceneProbe: SceneProbe = { read: null, locate: null, look: null, project: null, camera: null };
+
+const frameListeners = new Set<() => void>();
+
+/**
+ * Hear every frame the mounted 3D view draws, right after it is drawn (the camera and the model
+ * as the frame shows them): what places things over the canvas (the session's markers) follows
+ * the view in the same frame, and does nothing while the view is at rest. Returns the way to stop.
+ */
+export function onSceneFrame(listener: () => void): () => void {
+  frameListeners.add(listener);
+  return () => frameListeners.delete(listener);
+}
+
+/** A frame was drawn (three/viewport.ts). */
+export function sceneFrameDrawn(): void {
+  for (const listener of frameListeners) listener();
+}
 
 /** Where an entity of the plan is on the 3D view's canvas: CSS pixels from its top left corner. */
 export interface ScenePoint {
@@ -104,4 +123,18 @@ export interface SceneProbe {
   locate: ((type: SceneLocatable, id: string) => ScenePoint | null) | null;
   /** Put the camera at `position`, looking at `target` (metres, three.js axes), as a drag would leave it. */
   look: ((position: readonly [number, number, number], target: readonly [number, number, number]) => void) | null;
+  /**
+   * Where a point of the plan (metres) on the floor of a level, `up` metres over it, shows on the
+   * canvas, or null when it is behind the camera: where the session's markers stand in 3D.
+   */
+  project: ((x: number, y: number, levelId: string | undefined, up: number) => ScenePoint | null) | null;
+  /** Where the camera is and what it looks at, in plan metres: x and y on the plan, z up. */
+  camera: (() => { eye: PlanSpacePoint; target: PlanSpacePoint }) | null;
+}
+
+/** A point over the plan: x and y on the plan, z up from the ground, metres. */
+export interface PlanSpacePoint {
+  x: number;
+  y: number;
+  z: number;
 }

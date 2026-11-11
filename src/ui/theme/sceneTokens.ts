@@ -138,6 +138,8 @@ export const SCENE_MARK = Object.freeze({
    */
   destructiveInk: oklch(40, 0.15, 27),
   casing: SCENE_AIR.backdrop,
+  /** what the agent is touching right now (the shared session): its verdigris, as on the plan */
+  agent: oklch(51.5, 0.09, 192),
 });
 
 // ============================================================================ FURNITURE

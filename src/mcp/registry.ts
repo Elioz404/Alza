@@ -21,6 +21,9 @@ import { actions, store, logActivity, type ActionResult, type AppState } from ".
 import { dispatch, type Actor, type Command } from "../model/commands";
 import { describeIssues } from "../model/schemas";
 import type { ApprovalTarget } from "../model/types";
+import { touchedBy } from "../model/touch";
+import { agentBegan, agentEnded, agentWaiting, heldByPerson } from "../model/presence";
+import { SESSION } from "../model/limits";
 import { isAllowedOrigin } from "../../config/origins.js";
 
 /** A JSON Schema object, as published in a tool descriptor. */
@@ -176,6 +179,21 @@ export interface CallContext {
   actor?: Actor;
 }
 
+/**
+ * The answer to an agent whose change would touch what the person is editing right now (a piece
+ * they are dragging, a wall end, the plan's name as they type it): nothing is changed, and the
+ * agent is told to call again in a moment. Refused rather than queued, so a call never hangs on
+ * a hand that does not let go, and the agent decides whether the change still makes sense once
+ * it sees what the person did (get_presence says what they are editing).
+ */
+export function personEditingRefusal(tool: string, ids: readonly string[]): ActionResult {
+  return {
+    ok: false,
+    summary: `Not done: the person is editing ${ids.join(", ")} right now, and ${tool} would change it under their hand. Nothing was changed — wait ${SESSION.retryAfterMs} ms and call ${tool} again (get_presence shows what they are still editing).`,
+    conflict: { code: "person_editing", entityIds: [...ids], retryAfterMs: SESSION.retryAfterMs },
+  };
+}
+
 /** Same entities, same objects, same order: nothing the call acts on has changed. */
 const sameEntities = (a: readonly unknown[], b: readonly unknown[]): boolean =>
   a.length === b.length && a.every((entity, i) => entity === b[i]);
@@ -198,6 +216,17 @@ export async function executeWrapped<S extends z.ZodType>(
   rawInput: unknown,
   ctx: CallContext = {},
 ): Promise<ActionResult> {
+  // the agent is seen while it works (model/presence.ts): the tool it runs, and what it touches
+  if ((ctx.actor ?? "agent") !== "agent") return run(def, rawInput, ctx);
+  agentBegan(def.name);
+  try {
+    return await run(def, rawInput, ctx);
+  } finally {
+    agentEnded();
+  }
+}
+
+async function run<S extends z.ZodType>(def: ToolDef<S>, rawInput: unknown, ctx: CallContext): Promise<ActionResult> {
   const actor = ctx.actor ?? "agent";
   const finish = (result: ActionResult): ActionResult => {
     logActivity(actor, def.name, result.summary, result.ok);
@@ -229,6 +258,7 @@ export async function executeWrapped<S extends z.ZodType>(
     if (!found.ok) return finish(found);
     resolution = found;
     input = found.input;
+    if (actor === "agent") agentBegan(def.name, found.targets.map((t) => t.id), store.getState().model);
   }
 
   if (resolve && resolution && (consent || (destructive && store.getState().requireApproval))) {
@@ -257,6 +287,14 @@ export async function executeWrapped<S extends z.ZodType>(
   let dispatched = false;
   const toolCtx: ToolContext = {
     dispatch: (command) => {
+      if (actor === "agent") {
+        const { model } = store.getState();
+        const held = heldByPerson(touchedBy(command, model));
+        if (held.length > 0) {
+          agentWaiting(held, model);
+          return personEditingRefusal(def.name, held);
+        }
+      }
       dispatched = true;
       return dispatch(command, { actor, as: def.name });
     },

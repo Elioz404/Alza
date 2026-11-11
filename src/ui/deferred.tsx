@@ -106,9 +106,13 @@ interface IdleWindow {
  * long an always-busy page waits before fetching anyway.
  */
 export function prefetchWhenIdle(win: IdleWindow, timeoutMs: number): void {
-  const start = () => void preloadDeferred();
-  if (win.requestIdleCallback) win.requestIdleCallback(start, { timeout: timeoutMs });
-  else win.setTimeout(start, 0);
+  whenIdle(win, timeoutMs, () => void preloadDeferred());
+}
+
+/** Run `task` once the browser is idle, or `timeoutMs` from now at the latest. */
+export function whenIdle(win: IdleWindow, timeoutMs: number, task: () => void): void {
+  if (win.requestIdleCallback) win.requestIdleCallback(task, { timeout: timeoutMs });
+  else win.setTimeout(task, 0);
 }
 
 /** What a deferred component's placeholder is told about its code. */

@@ -27,6 +27,7 @@ import { dist, segLen } from "../model/geometry";
 import { bus, EVENTS } from "../model/sceneBus";
 import { exportIfc, ifcFileName, type IfcSummary } from "../export/ifcExport";
 import { defineTool, executeWrapped, type ToolDef } from "./registry";
+import { PRESENCE_TOOLS } from "./presenceTools";
 import {
   CUT_HEIGHT,
   DEFAULT_FLOOR,
@@ -1012,6 +1013,8 @@ export const TOOLS: ToolDef[] = [
       return { ok: true, summary: `${notes.length} note(s).`, notes };
     },
   }),
+  // the shared session: what the person is doing right now, and pointing something out to them
+  ...PRESENCE_TOOLS,
 ];
 
 /** The dynamic tool — registered only while the human has a wall selected (see bootstrap.ts). */

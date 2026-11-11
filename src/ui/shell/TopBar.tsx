@@ -1,8 +1,8 @@
 /**
  * The top bar: the mark and the plan's name (its menu holds rename, the demo and clearing),
  * whether the plan is saved, the Plan | 3D switch (fixed in the centre, the same in both
- * views), Undo, Export, the agent's status with its waiting requests, help, and on narrow
- * screens the panel toggle.
+ * views), who is on the plan (the shared session), Undo, Export, the agent's status with its
+ * waiting requests, help, and on narrow screens the panel toggle.
  */
 
 import { useId, useState } from "react";
@@ -68,6 +68,9 @@ const LazyExportMenu = deferred("the export menu", () => import("./PlanMenus").t
   <ExportTrigger {...standInTriggerProps(handoff)} />
 ));
 
+/** Who is on the plan (the shared session), fetched after the first paint: nothing stands in for it. */
+const PresenceIndicator = deferred("the presence indicator", () => import("../session/PresenceIndicator").then((m) => m.PresenceIndicator), () => null);
+
 function PlanMenu() {
   const [handoff] = useState(createHandoff);
   return <LazyPlanMenu handoff={handoff} />;
@@ -100,6 +103,7 @@ export function TopBar() {
         <ViewSwitch />
       </div>
       <div className="topbar__end">
+        <PresenceIndicator />
         <IconButton
           icon={IconUndo}
           label="Undo"

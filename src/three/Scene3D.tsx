@@ -31,7 +31,20 @@ import { createViewport } from "./viewport";
 import { levelsShown, onLevelsShown } from "./levelView";
 import type { Selected } from "./marks";
 import { SceneOverlays } from "./overlays/SceneOverlays";
+import { presence, type PresenceState } from "../model/presence";
+import { entityInfo } from "../model/places";
+import type { Focused } from "./marks";
 import { SceneErrorBoundary } from "./overlays/SceneStates";
+
+/** What the agent is touching, and what it points at, as the 3D view outlines them in its colour. */
+function focusOf(p: PresenceState): Focused[] {
+  const model = store.getState().model;
+  const ids = [...new Set([...p.agent.focus, ...p.points.map((m) => m.entityId)])];
+  return ids.flatMap((id) => {
+    const info = entityInfo(model, id);
+    return info ? [{ type: info.type, id }] : [];
+  });
+}
 
 /** The store's selection, as the 3D view outlines it. */
 function selectedOf(editor: EditorState): Selected | null {
@@ -61,6 +74,10 @@ function SceneView() {
       levelsShown: levelsShown(),
     });
     const offShown = onLevelsShown(() => viewport.setLevelsShown(levelsShown()));
+    viewport.setFocus(focusOf(presence.getState()));
+    const offPresence = presence.subscribe((p, prev) => {
+      if (p.agent !== prev.agent || p.points !== prev.points) viewport.setFocus(focusOf(p));
+    });
     const unsubscribe = store.subscribe((s, prev) => {
       if (s.model !== prev.model) viewport.setModel(s.model);
       const active = activeLevelId(s);
@@ -68,6 +85,7 @@ function SceneView() {
       if (s.editor.camera !== prev.editor.camera) viewport.setCamera(s.editor.camera);
       if (s.editor.scene !== prev.editor.scene) viewport.setStyle(s.editor.scene);
       if (s.approvals !== prev.approvals) viewport.setPending(s.approvals);
+      if (s.model !== prev.model) viewport.setFocus(focusOf(presence.getState()));
       const e = s.editor;
       const p = prev.editor;
       if (
@@ -82,6 +100,7 @@ function SceneView() {
     });
     return () => {
       unsubscribe();
+      offPresence();
       offShown();
       viewport.dispose();
     };

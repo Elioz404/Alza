@@ -1141,6 +1141,289 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
 }
 
+// ---------- 12h. the shared session: the agent seen at work, the person seen by the agent, two tabs ----------
+{
+  const SESSION_SHOTS = process.env.ALZA_SESSION_SHOTS ?? `${OUT}/session`;
+  mkdirSync(SESSION_SHOTS, { recursive: true });
+  const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+  await showView(page, "Plan");
+  await page.getByRole("group", { name: "Zoom" }).getByRole("button", { name: "Fit", exact: true }).click();
+  await page.waitForTimeout(400);
+
+  // the agent moves the sofa: its marker goes to the sofa, labelled with what it does, and the sofa is highlighted
+  await tool("move_item", { id: "item_sofa", x: 3.1, y: 5.3 });
+  const marker = page.locator(`${PLAN_SVG} [data-session="agent"]`);
+  await marker.waitFor({ timeout: 5000 }).catch(() => undefined);
+  check(
+    "session: an agent's tool call puts its marker on the entity it touched, labelled with what it does",
+    (await marker.getAttribute("data-entity")) === "item_sofa" && (await marker.textContent()) === "Agent · moving Sofa" && (await page.locator(`${PLAN_SVG} .ss-highlight`).count()) >= 1,
+    `${await marker.getAttribute("data-entity").catch(() => null)} ${await marker.textContent().catch(() => null)}`,
+  );
+  await page.waitForTimeout(500);
+  const sofaAt = await px(3.1, 5.3);
+  const box = await marker.locator(".ss-agent__marker").boundingBox();
+  check(
+    "session: the agent's marker stands on the sofa on screen",
+    !!box && Math.hypot(box.x + box.width / 2 - sofaAt[0], box.y + box.height / 2 - sofaAt[1]) < 4,
+    JSON.stringify({ box, sofaAt }),
+  );
+  await page.screenshot({ path: `${SESSION_SHOTS}/agent-marker-plan.png` });
+  check("session: the agent's marker goes once its call is done", await marker.waitFor({ state: "detached", timeout: 6000 }).then(() => true, () => false));
+
+  // point_at: a ring and the agent's message on the room
+  const pointed = await tool("point_at", { target: "Bedroom", message: "Is this the guest room?" });
+  const ring = page.locator(`${PLAN_SVG} [data-session="point"]`);
+  await ring.waitFor({ timeout: 5000 }).catch(() => undefined);
+  check(
+    "session: point_at shows the person the room with the agent's message",
+    pointed.ok && (await ring.getAttribute("data-entity")) === "room_bed" && (await ring.textContent()) === "Is this the guest room?",
+  );
+  const spoken = await page.locator('.session [aria-live="polite"]').textContent().catch(() => null);
+  const pointLine = await state("s.activity.at(-1)");
+  check(
+    "session: what the agent points at is said to the person and kept in the feed, not only drawn",
+    spoken === "The agent points at Bedroom: Is this the guest room?" && pointLine?.tool === "point_at" && pointLine.summary.includes('"Is this the guest room?"'),
+    `${spoken} / ${pointLine?.summary}`,
+  );
+  await page.waitForTimeout(500);
+  const bedroom = await state("s.model.rooms.find((r) => r.id === 'room_bed')");
+  const middle = await px(bedroom.x + bedroom.w / 2, bedroom.y + bedroom.h / 2);
+  const ringBox = await ring.locator(".ss-point__ring").boundingBox();
+  check(
+    "session: the ring on a room stands clear of the room's name and area in its middle",
+    !!ringBox && Math.hypot(ringBox.x + ringBox.width / 2 - middle[0], ringBox.y + ringBox.height / 2 - middle[1]) > ringBox.width * 1.5,
+    JSON.stringify({ ringBox, middle }),
+  );
+  await page.screenshot({ path: `${SESSION_SHOTS}/point-at.png` });
+
+  // get_presence: what the person has selected and the level they are on, live
+  await page.mouse.click(...(await px(6.85, 1.2)));
+  await until("s.editor.selectedItemId === 'item_bed'");
+  await page.mouse.move(...(await px(2.9, 4.3)));
+  await page.waitForTimeout(100);
+  const seen = await tool("get_presence", {});
+  check(
+    "session: get_presence says what the person has selected, the level they are on and what is under their pointer",
+    seen.ok && seen.person.selection?.id === "item_bed" && seen.person.level.id === "level_ground" && seen.person.view === "plan" && seen.person.hover?.id === "item_coffee" && seen.person.viewport !== null && seen.person.pointer !== null,
+    JSON.stringify(seen.person).slice(0, 300),
+  );
+
+  // the person drags the coffee table: an agent's change to it waits for them, and goes through once they let go
+  await page.mouse.down();
+  await page.mouse.move(...(await px(3.2, 4.3)), { steps: 4 });
+  const held = await tool("move_item", { id: "item_coffee", x: 1, y: 1 });
+  const waitingMarker = page.locator(`${PLAN_SVG} [data-session="agent"][data-waiting]`);
+  const showsWaiting = await waitingMarker.waitFor({ timeout: 3000 }).then(() => true, () => false);
+  const waitingText = await waitingMarker.textContent().catch(() => null);
+  const waitingName = (await page.locator(".session__chip").getAttribute("aria-label")) ?? "";
+  await page.screenshot({ path: `${SESSION_SHOTS}/agent-waiting.png` });
+  check(
+    "session: while the person holds what the agent would change, the plan and the indicator show the agent waiting for them",
+    showsWaiting && waitingText === "Agent · waiting for you" && waitingName.includes("the agent (waiting for you)"),
+    `${waitingText} / ${waitingName}`,
+  );
+  const during = await tool("get_presence", {});
+  await page.mouse.up();
+  check(
+    "session: while the person drags a piece, an agent's change to it is refused with person_editing and nothing changes",
+    !held.ok && held.conflict?.code === "person_editing" && held.conflict.entityIds.includes("item_coffee") && during.person.dragging && (await state("s.model.items.find((i) => i.id === 'item_coffee').x")) !== 1,
+    held.summary,
+  );
+  const retried = await tool("move_item", { id: "item_coffee", x: 2.9, y: 4.3 });
+  check("session: once they let go, the agent's call goes through", retried.ok, retried.summary);
+
+  // the privacy switch: the pointer and the view are the person's to keep
+  const chip = page.locator(".session__chip");
+  await chip.click();
+  const share = page.getByRole("switch", { name: "Share my pointer and view" });
+  await share.click();
+  await page.mouse.move(...(await px(3, 4.3)));
+  const privateSeen = await tool("get_presence", {});
+  check(
+    "session: with sharing switched off, get_presence keeps the pointer and the view to the person",
+    privateSeen.person.sharing === false && privateSeen.person.pointer === null && privateSeen.person.viewport === null && privateSeen.person.selection?.id === "item_coffee",
+    JSON.stringify(privateSeen.person).slice(0, 300),
+  );
+  await share.click();
+  await page.keyboard.press("Escape");
+  check(
+    "session: Escape closes the list and gives focus back to its button",
+    (await chip.getAttribute("aria-expanded")) === "false" && (await page.evaluate(() => document.activeElement?.classList.contains("session__chip"))),
+  );
+
+  // in 3D: the agent's marker over the model and its outline on what it touches
+  await showView(page, "3D");
+  await railButton(page, "Orbit").click();
+  await sceneUntil((s) => !s.moving);
+  await tool("move_item", { id: "item_sofa", x: 3.0, y: 5.3 });
+  const marker3d = page.locator('.ss-scene [data-session="agent"]');
+  await marker3d.waitFor({ timeout: 5000 }).catch(() => undefined);
+  check(
+    "session: in 3D the agent's marker shows over what it touched, and the model outlines it in the agent's colour",
+    (await marker3d.getAttribute("data-entity").catch(() => null)) === "item_sofa" && (await marker3d.isVisible().catch(() => false)) && (await sceneUntil((s) => s.agentMarks >= 1)),
+    String((await scene())?.agentMarks),
+  );
+  await page.screenshot({ path: `${SESSION_SHOTS}/agent-marker-3d.png` });
+  // with the marker up and nothing moving, nothing asks for frames: the markers follow the view's own
+  const framesBefore = (await scene())?.frames;
+  const asked = await page.evaluate(async (ms) => {
+    let n = 0;
+    const raf = window.requestAnimationFrame;
+    window.requestAnimationFrame = (cb) => {
+      n++;
+      return raf(cb);
+    };
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    window.requestAnimationFrame = raf;
+    return n;
+  }, 500);
+  check(
+    "session: in 3D a marker over the view costs nothing while the view is at rest",
+    asked === 0 && (await scene())?.frames === framesBefore && (await marker3d.isVisible().catch(() => false)),
+    `${asked} frames asked, ${framesBefore} -> ${(await scene())?.frames}`,
+  );
+  await showView(page, "Plan");
+
+  // two tabs of one browser on one plan: an edit in one is in the other, and each sees the other's pointer
+  const context = await browser.newContext({ viewport: DESKTOP });
+  const tabErrors = [];
+  const one = await context.newPage();
+  const watch = (p) => {
+    p.on("console", (m) => m.type() === "error" && tabErrors.push(m.text()));
+    p.on("pageerror", (e) => tabErrors.push(String(e)));
+  };
+  watch(one);
+  const hookOne = await openStudio(one, BASE);
+  const live = (p, h) => p.waitForFunction((hh) => hh.presence.getState().session.state === "live", h, { timeout: 10000 }).then(() => true, () => false);
+  const liveOne = await live(one, hookOne);
+  // the first tab works on its plan before the second arrives: the second takes it up
+  await hookOne.evaluate((h) => h.runTool("set_plan_name", { name: "Shared loft" }));
+  const two = await context.newPage();
+  watch(two);
+  const hookTwo = await openStudio(two, BASE);
+  const liveTwo = await live(two, hookTwo);
+  const nameTwo = await two.waitForFunction((h) => h.store.getState().model.name === "Shared loft", hookTwo, { timeout: 5000 }).then(() => true, () => false);
+  check("session: a second tab joins the first and takes up its plan", liveOne && liveTwo && nameTwo);
+
+  await hookOne.evaluate((h) => h.runTool("move_item", { id: "item_desk", x: 4.0, y: 0.45 }));
+  const synced = await two
+    .waitForFunction((h) => h.store.getState().model.items.find((i) => i.id === "item_desk")?.x === 4.0, hookTwo, { timeout: 5000 })
+    .then(() => true, () => false);
+  const peerLine = await hookTwo.evaluate((h) => h.store.getState().activity.at(-1));
+  check("session: an edit in one tab is in the other, as one line from that tab", synced && peerLine?.source === "peer" && peerLine?.tool === "move_item", JSON.stringify(peerLine));
+
+  // and back: a drag in the second tab moves the piece in the first
+  await two.bringToFront();
+  await two.mouse.move(...(await planToScreen(two, 6.85, 1.2)));
+  await two.mouse.down();
+  await two.mouse.move(...(await planToScreen(two, 6.85, 1.6)), { steps: 5 });
+  await two.mouse.up();
+  const backSynced = await one
+    .waitForFunction((h) => Math.abs(h.store.getState().model.items.find((i) => i.id === "item_bed").y - 1.6) < 1e-6, hookOne, { timeout: 5000 })
+    .then(() => true, () => false);
+  check("session: a drag in the other tab reaches the first", backSynced, String(await hookOne.evaluate((h) => h.store.getState().model.items.find((i) => i.id === "item_bed").y)));
+
+  // Undo in the second tab takes back its own drag, not the first tab's move of the desk
+  await two.keyboard.press("Control+z");
+  const bedOf = (h) => h.store.getState().model.items.find((i) => i.id === "item_bed").y;
+  const deskOf = (h) => h.store.getState().model.items.find((i) => i.id === "item_desk").x;
+  const undoneInOne = await one.waitForFunction((h) => Math.abs(h.store.getState().model.items.find((i) => i.id === "item_bed").y - 1.2) < 1e-6, hookOne, { timeout: 5000 }).then(() => true, () => false);
+  check(
+    "session: Undo in one tab takes back that tab's own change, in both tabs, and leaves the other tab's",
+    undoneInOne && Math.abs((await hookTwo.evaluate(bedOf)) - 1.2) < 1e-6 && (await hookOne.evaluate(deskOf)) === 4.0 && (await hookTwo.evaluate(deskOf)) === 4.0,
+    `${await hookOne.evaluate(bedOf)} ${await hookOne.evaluate(deskOf)} ${await hookTwo.evaluate(deskOf)}`,
+  );
+
+  // the person in the second tab takes hold of the bed: the first tab's agent is refused from the first frame on
+  await two.mouse.move(...(await planToScreen(two, 6.85, 1.2)));
+  await two.mouse.down();
+  await two.mouse.move(...(await planToScreen(two, 6.85, 1.4)), { steps: 2 });
+  const sawFrame = await one.waitForFunction((h) => h.store.getState().model.items.find((i) => i.id === "item_bed").y > 1.2 + 1e-6, hookOne, { timeout: 5000 }).then(() => true, () => false);
+  const raced = await hookOne.evaluate((h) => h.runTool("move_item", { id: "item_bed", x: 3, y: 3 }));
+  await two.mouse.up();
+  check(
+    "session: an agent's change to what another tab's person has just taken hold of is refused at once, not overwritten later",
+    sawFrame && !raced.ok && raced.conflict?.code === "person_editing" && raced.conflict.entityIds.includes("item_bed"),
+    raced.summary,
+  );
+  const released = await one.waitForFunction((h) => h.presence.getState().peers.every((p) => p.editing.length === 0), hookOne, { timeout: 5000 }).then(() => true, () => false);
+  const settledBed = await hookOne.evaluate((h) => h.runTool("move_item", { id: "item_bed", x: 6.85, y: 1.2 }));
+  const bothBed = await two.waitForFunction((h) => Math.abs(h.store.getState().model.items.find((i) => i.id === "item_bed").y - 1.2) < 1e-6, hookTwo, { timeout: 5000 }).then(() => true, () => false);
+  check("session: once that person lets go, the agent's change goes through in both tabs", released && settledBed.ok && bothBed, settledBed.summary);
+
+  // the sharing switch is the browser's: switched off in one tab, the other stops sharing its pointer too
+  await one.bringToFront();
+  await one.locator(".session__chip").click();
+  await one.getByRole("switch", { name: "Share my pointer and view" }).click();
+  await one.keyboard.press("Escape");
+  const followed = await two.waitForFunction((h) => h.presence.getState().sharing === false, hookTwo, { timeout: 5000 }).then(() => true, () => false);
+  await two.bringToFront();
+  await two.mouse.move(...(await planToScreen(two, 4, 4)));
+  await two.mouse.move(...(await planToScreen(two, 4.5, 4)), { steps: 3 });
+  await one.waitForTimeout(400);
+  const twoSeen = await hookTwo.evaluate((h) => h.runTool("get_presence", {}));
+  const pointerInOne = await hookOne.evaluate((h) => h.presence.getState().peers.map((p) => p.pointer));
+  check(
+    "session: sharing switched off in one tab keeps the pointer private in the person's other tabs too",
+    followed && twoSeen.person.pointer === null && twoSeen.person.viewport === null && pointerInOne.every((p) => p === null),
+    JSON.stringify({ followed, pointer: twoSeen.person.pointer, pointerInOne }),
+  );
+  await one.bringToFront();
+  await one.locator(".session__chip").click();
+  await one.getByRole("switch", { name: "Share my pointer and view" }).click();
+  await one.keyboard.press("Escape");
+  await two.waitForFunction((h) => h.presence.getState().sharing === true, hookTwo, { timeout: 5000 }).catch(() => undefined);
+
+  // each tab shows the other's pointer, named after its tab
+  await one.bringToFront();
+  await one.mouse.move(...(await planToScreen(one, 2, 2)));
+  await one.mouse.move(...(await planToScreen(one, 2.5, 2.5)), { steps: 3 });
+  const cursorInTwo = two.locator(`${PLAN_SVG} [data-session="cursor"]`);
+  const sawOne = await cursorInTwo.waitFor({ timeout: 5000 }).then(() => true, () => false);
+  await two.bringToFront();
+  await two.mouse.move(...(await planToScreen(two, 5, 5)));
+  await two.mouse.move(...(await planToScreen(two, 5.5, 5)), { steps: 3 });
+  const cursorInOne = one.locator(`${PLAN_SVG} [data-session="cursor"]`);
+  const sawTwo = await cursorInOne.waitFor({ timeout: 5000 }).then(() => true, () => false);
+  check(
+    "session: each tab shows the other's pointer, named after its tab",
+    sawOne && sawTwo && (await cursorInTwo.textContent()) === "Tab 1" && (await cursorInOne.textContent()) === "Tab 2",
+    `${await cursorInTwo.textContent().catch(() => null)} / ${await cursorInOne.textContent().catch(() => null)}`,
+  );
+  check(
+    "session: the presence indicator names the other tab",
+    ((await one.locator(".session__chip").getAttribute("aria-label")) ?? "").includes("Tab 2") && ((await two.locator(".session__chip").getAttribute("aria-label")) ?? "").includes("Tab 1"),
+  );
+  await one.locator(".session__chip").click();
+  await one.screenshot({ path: `${SESSION_SHOTS}/two-tabs-first.png` });
+  await one.keyboard.press("Escape");
+  await two.screenshot({ path: `${SESSION_SHOTS}/two-tabs-second.png` });
+
+  // a tab that closes leaves the other's list
+  await two.close({ runBeforeUnload: true });
+  const left = await one.waitForFunction((h) => h.presence.getState().peers.length === 0, hookOne, { timeout: 10000 }).then(() => true, () => false);
+  check("session: a tab that closes leaves the plan", left);
+
+  // at phone width the indicator fits the top bar
+  await one.setViewportSize(PHONE);
+  await one.waitForTimeout(300);
+  const fits = await one.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth && !!document.querySelector(".session__chip"));
+  await one.screenshot({ path: `${SESSION_SHOTS}/phone.png` });
+  check("session: at 390px the presence indicator fits without a sideways scroll", fits);
+  await one.locator(".session__chip").click();
+  const panelBox = await one.locator(".session__panel").boundingBox();
+  const switchBox = await one.getByRole("switch", { name: "Share my pointer and view" }).boundingBox();
+  await one.screenshot({ path: `${SESSION_SHOTS}/phone-panel.png` });
+  check(
+    "session: at 390px the list opens within the screen's gutters, its switch whole",
+    !!panelBox && !!switchBox && panelBox.x >= 0 && panelBox.x + panelBox.width <= PHONE.width && switchBox.x >= panelBox.x && switchBox.x + switchBox.width <= panelBox.x + panelBox.width,
+    JSON.stringify({ panelBox, switchBox }),
+  );
+  await one.keyboard.press("Escape");
+  check("session: no console errors in the two tabs", tabErrors.length === 0, tabErrors.slice(0, 3).join(" ;; "));
+  await context.close();
+}
+
 // ---------- 13. console errors ----------
 check("zero console errors across the whole run", errors.length === 0, errors.slice(0, 3).join(" ;; "));
 

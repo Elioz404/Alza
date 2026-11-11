@@ -46,7 +46,15 @@ export const SHIPPED = Object.freeze({
     // unique, the removal refused before it is asked and the stairs it reroutes disclosed, and the
     // keyboard path of the stair tool — model, tool and first-paint shell code; the stairwell's
     // guard, which only the deferred plan symbol and the 3D view read, stays out (stairGuard.ts)
-    js: { min: 507_733, gzip: 164_975 },
+    // Raised again from 507_733 / 164_975 (measured 520_919 / 169_826; the build before it was
+    // 510.9 kB / 166.2 kB in the build log) for the shared session: what has to run at boot, in dispatch and the tool
+    // runner, is first-load — the presence store (the agent's focus, what the hand holds), what a
+    // command touches (the person-editing refusal is decided synchronously in the tool runner),
+    // the two new tools' schemas and descriptions (registered at boot like every tool), the
+    // sync command and its checked apply, and ids unique per page. Everything else stays out:
+    // the session runtime, its merge and message schemas, the tools' answers, the indicator and
+    // the plan's and 3D view's markers all load after the first paint.
+    js: { min: 520_919, gzip: 169_826 },
     css: { min: 110_997, gzip: 18_767 },
   },
   partner: {

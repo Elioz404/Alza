@@ -123,6 +123,12 @@ export type ViewMode = "2d" | "3d";
  * entity an undo brings back is the same object a pending approval was shown.
  */
 export interface UndoStep {
+  /**
+   * Which step it is. Another tab's change is folded into every step this tab keeps (the shared
+   * session rebases them, src/session/), which replaces the step's plan but not the step: its
+   * key stays, so a gesture still knows the step it records into.
+   */
+  readonly key: number;
   readonly model: PlanModel;
   readonly notes: Note[];
 }
@@ -249,12 +255,18 @@ export function logActivity(source: ActivityEntry["source"], tool: string, summa
  * step), "once" (the first request inside withUndo records, the rest fold into it) or "none".
  */
 let undoMode: "each" | "once" | "none" = "each";
+let undoKeys = 0;
 
 function pushUndo() {
   if (undoMode === "none") return;
   if (undoMode === "once") undoMode = "none";
-  store.setState((s) => ({ undoStack: [...s.undoStack.slice(-(UNDO_DEPTH - 1)), { model: s.model, notes: s.notes }] }));
+  const key = ++undoKeys;
+  store.setState((s) => ({ undoStack: [...s.undoStack.slice(-(UNDO_DEPTH - 1)), { key, model: s.model, notes: s.notes }] }));
 }
+
+/** Whether `next` holds the same steps as `held`, in the same order (each perhaps rebased). */
+const sameSteps = (held: readonly UndoStep[], next: readonly UndoStep[]): boolean =>
+  held.length === next.length && held.every((step, i) => step.key === next[i].key);
 
 /**
  * Run `fn` recording at most one undo step for everything it changes — or none, when `record`
@@ -791,6 +803,32 @@ const planActions = {
       `Plan "${model.name}" loaded: ${storeys}${model.walls.length} walls, ${model.rooms.length} rooms, ${model.items.length} items${stairs}.`,
       migrated.from < model.version ? { migratedFrom: migrated.from } : {},
     );
+  },
+
+  /**
+   * The plan as the shared session has it (src/session/): another tab's change merged into this
+   * one's, or the plan this tab takes up as it joins the others. It is not this tab's change, so
+   * it records no undo step here: Undo takes back what this tab did, never another tab's work.
+   * `history` is this tab's own steps with that change folded into each (the session rebases
+   * them), so undoing one afterwards puts back only what that step changed; a history that is not
+   * this tab's steps is not taken. The plan is checked as a loaded one is (migratePlan); the
+   * underlay stays this tab's own, as its image is.
+   */
+  applySync(input: PlanModel, notes: Note[], summary: string, history: readonly UndoStep[] | null = null): ActionResult {
+    const migrated = migratePlan(input);
+    if (!migrated.ok) return fail(migrated.summary);
+    if (!Array.isArray(notes) || notes.length > MAX_NOTES) return fail(`A plan holds at most ${MAX_NOTES} notes.`);
+    const bad = textError("summary", summary, TEXT.note, true);
+    if (bad) return fail(bad);
+    const { model: current, undoStack } = store.getState();
+    const model: PlanModel = {
+      ...migrated.model,
+      kinds: migrated.model.kinds.map((k) => (Object.isFrozen(k) ? k : freezeKind(k))),
+      underlay: current.underlay,
+    };
+    const rebased = history && sameSteps(undoStack, history) ? [...history] : undoStack;
+    store.setState({ model, notes, lastChangeAt: Date.now(), undoStack: rebased });
+    return ok(summary);
   },
 
   // ---- levels ----

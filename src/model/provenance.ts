@@ -109,7 +109,8 @@ function onChange(s: AppState, prev: AppState): void {
   if (s.undoStack !== prev.undoStack) {
     const top = s.undoStack.at(-1);
     // a step was recorded (not taken off by an undo): its plan is the one before this change
-    if (top && !prev.undoStack.includes(top)) stepBefore = top.model;
+    // (a step rebased under another tab's change keeps its key: it is not a new one)
+    if (top && !prev.undoStack.some((step) => step.key === top.key)) stepBefore = top.model;
   }
   if (s.activity === prev.activity) return;
 

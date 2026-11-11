@@ -113,6 +113,8 @@ export const LIGHT_TOKENS: TokenSheet = Object.freeze({
   "--plan-destructive-hatch": sheet.destructiveHatch,
   /** the level below the one being worked on, as a ghost to line up with */
   "--plan-ghost": sheet.ghost,
+  /** the shared session's other tabs: a cursor and its name (ui/session/participants.ts, tabColour) */
+  ...Object.fromEntries(sheet.tabs.map((c, i) => [`--plan-tab-${i + 1}`, c])),
   /** a stair's treads: furniture-white, so the linework reads over any floor */
   "--plan-stair": ref("--plan-furniture"),
   // pens: the drawing is one SVG unit per screen pixel, so these keep their weight at every
@@ -273,6 +275,7 @@ export const DARK_TOKENS: TokenSheet = Object.freeze({
   "--plan-floor-carpet": dark.floorCarpet,
   "--plan-floor-tile": dark.floorTile,
   "--plan-ghost": dark.ghost,
+  ...Object.fromEntries(dark.tabs.map((c, i) => [`--plan-tab-${i + 1}`, c])),
   "--shadow-low": `inset 0 0 0 1px ${dark.ringLow.css}`,
   "--shadow-med": `inset 0 0 0 1px ${dark.ringMed.css}`,
   "--shadow-high": `inset 0 0 0 1px ${dark.ringHigh.css}`,

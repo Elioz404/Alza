@@ -26,8 +26,8 @@ export const REJECTED_PREFIX = "Rejected: ";
 /** Tools that only read the plan: they never change it. */
 const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name));
 
-/** Tools that move the view rather than the plan. */
-const VIEW_TOOLS: ReadonlySet<string> = new Set(["build_3d", "set_camera", "set_3d_style", "set_doors"]);
+/** Tools that move the view rather than the plan (point_at shows the person something). */
+const VIEW_TOOLS: ReadonlySet<string> = new Set(["build_3d", "set_camera", "set_3d_style", "set_doors", "point_at"]);
 
 export type EntryKind =
   /** a change to the plan (numbered when it touched walls, openings, rooms or pieces) */

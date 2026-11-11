@@ -27,6 +27,8 @@ const viewport = vi.hoisted(() => ({
   styles: [] as unknown[],
   selections: [] as unknown[],
   pending: [] as unknown[][],
+  /** what the agent is touching, as the viewport was told to outline it */
+  focus: [] as unknown[][],
   /** what the viewport was created with: its label layer and its first selection and style */
   options: null as null | { labels?: HTMLElement | null; style?: unknown; selected?: unknown },
   /** when set, creating a viewport throws this, as WebGLRenderer does without a context */
@@ -44,6 +46,7 @@ vi.mock("../src/three/viewport", () => ({
       setStyle: (s: unknown) => viewport.styles.push(s),
       setSelection: (s: unknown) => viewport.selections.push(s),
       setPending: (a: unknown[]) => viewport.pending.push(a),
+      setFocus: (f: unknown[]) => viewport.focus.push(f),
       dispose: () => viewport.disposed++,
     };
   },
@@ -61,7 +64,7 @@ beforeAll(() => {
 beforeEach(async () => {
   resetStore();
   dispatch({ type: "load_model", model: seedLoft() }, { actor: "system", undoable: false });
-  Object.assign(viewport, { created: 0, disposed: 0, models: [], cameras: [], styles: [], selections: [], pending: [], options: null, failWith: null });
+  Object.assign(viewport, { created: 0, disposed: 0, models: [], cameras: [], styles: [], selections: [], pending: [], focus: [], options: null, failWith: null });
   renders = 0;
   host = document.createElement("div");
   root = createRoot(host);

@@ -27,8 +27,10 @@ import {
 } from "./store";
 import type { PlanInput } from "./planFormat";
 import type { SupplierProductData } from "./catalog";
-import type { ActivitySource, Underlay } from "./types";
+import type { ActivitySource, Note, PlanModel, Underlay } from "./types";
 import type { Actor, Hinge, SwingSide } from "./limits";
+import { touchedBy } from "./touch";
+import { agentTouched, holdEditing, releaseEditing } from "./presence";
 
 export type { Actor };
 
@@ -64,7 +66,13 @@ export type Command =
   | { type: "set_underlay"; underlay: Underlay | null }
   | { type: "calibrate_underlay"; u1: number; v1: number; u2: number; v2: number; meters: number; opacity?: number }
   | { type: "leave_note"; text: string }
-  | { type: "undo" };
+  | { type: "undo" }
+  /**
+   * The plan as the shared session has it (src/session/): another tab's change, merged, or the
+   * plan a tab takes up as it joins the others. `summary` is what that change was; `history` is
+   * this tab's undo steps with the change folded into them (store.ts, applySync).
+   */
+  | { type: "sync_remote"; model: PlanModel; notes: Note[]; summary: string; history?: readonly UndoStep[] };
 
 export type CommandType = Command["type"];
 
@@ -133,6 +141,7 @@ const HANDLERS: Handlers = {
   // signs none: leaveNote refuses a "system" author)
   leave_note: (c, ctx) => actions.leaveNote(ctx.actor, c.text),
   undo: () => actions.undo(),
+  sync_remote: (c) => actions.applySync(c.model, c.notes, c.summary, c.history ?? null),
 };
 
 /** Run one command's action, turning a throw into a failed result like any other refusal. */
@@ -148,9 +157,41 @@ function apply(command: Command, ctx: DispatchContext): ActionResult {
 const record = (command: Command, ctx: DispatchContext, result: ActionResult): void =>
   logActivity(ctx.actor, ctx.as ?? command.type, result.summary, result.ok);
 
+/** One command applied, whatever its outcome: what the shared session hears of every change. */
+export interface Applied {
+  command: Command;
+  ctx: DispatchContext;
+  result: ActionResult;
+  /** the gesture it is a frame of, if any: the same object for every frame of one gesture */
+  gesture: object | null;
+}
+
+const appliedListeners = new Set<(applied: Applied) => void>();
+
+/** Hear every command as it is applied (the shared session, src/session/). Returns the way to stop. */
+export function onApplied(listener: (applied: Applied) => void): () => void {
+  appliedListeners.add(listener);
+  return () => appliedListeners.delete(listener);
+}
+
+/**
+ * Run a command and tell whoever listens. The agent's presence follows from here: what its
+ * change touched is where its marker goes (model/presence.ts), with no work for the tool.
+ */
+function applyAndTell(command: Command, ctx: DispatchContext, record: boolean, gesture: object | null): ActionResult {
+  const before = store.getState().model;
+  const result = withUndo(record, () => apply(command, ctx));
+  if (ctx.actor === "agent" && result.ok) {
+    const touched = touchedBy(command, before);
+    agentTouched(ctx.as ?? command.type, [...new Set([...(touched === "all" ? [] : touched), ...(typeof result.id === "string" ? [result.id] : [])])], before);
+  }
+  for (const listener of appliedListeners) listener({ command, ctx, result, gesture });
+  return result;
+}
+
 /** Change the plan: one checked action, one undo step, one line in the activity feed. */
 export function dispatch(command: Command, ctx: DispatchContext): ActionResult {
-  const result = withUndo(ctx.undoable !== false, () => apply(command, ctx));
+  const result = applyAndTell(command, ctx, ctx.undoable !== false, null);
   record(command, ctx, result);
   return result;
 }
@@ -174,6 +215,9 @@ export interface Gesture {
 export function beginGesture(ctx: DispatchContext): Gesture {
   /** the undo step this gesture's frames fold into, once a frame has recorded one */
   let step: UndoStep | null = null;
+  /** this gesture, as the person's presence holds what it edits and the session tells its frames apart */
+  const self = Symbol("gesture");
+  const token = {};
   let last: { command: Command; result: ActionResult } | null = null;
   const newest = (): UndoStep | undefined => store.getState().undoStack.at(-1);
   const close = () => {
@@ -184,13 +228,24 @@ export function beginGesture(ctx: DispatchContext): Gesture {
   return {
     update(command) {
       // someone else recorded (or undid) a step since our last frame: theirs is not ours to join
-      if (step && newest() !== step) close();
+      // (a step rebased under another tab's change is still ours: it keeps its key)
+      if (step && newest()?.key !== step.key) close();
       const before = store.getState().undoStack;
-      const result = withUndo(step === null, () => apply(command, ctx));
-      if (step === null && store.getState().undoStack !== before) step = newest() ?? null;
+      // what the hand holds, so an agent's change to it waits until it lets go (mcp/registry.ts)
+      if (ctx.actor === "human") {
+        const touched = touchedBy(command, store.getState().model);
+        if (touched !== "all") holdEditing(self, touched);
+      }
+      // a gesture that is not undoable (another tab's drag, src/session/) records no step at all
+      const recording = ctx.undoable !== false;
+      const result = applyAndTell(command, ctx, recording && step === null, token);
+      if (recording && step === null && store.getState().undoStack !== before) step = newest() ?? null;
       last = { command, result };
       return result;
     },
-    end: close,
+    end() {
+      releaseEditing(self);
+      close();
+    },
   };
 }

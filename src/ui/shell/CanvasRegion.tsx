@@ -57,6 +57,12 @@ const LevelSwitcher = deferred(
   overlayPlaceholder("The level switcher", useInPlanView),
 );
 
+/**
+ * The shared session over the 3D view: the agent's marker, what it points at, the other tabs'
+ * pointers (src/ui/session/ScenePresence.tsx). Fetched after the first paint; nothing stands in.
+ */
+const ScenePresence = deferred("the session's 3D markers", () => import("../session/ScenePresence").then((m) => m.ScenePresence), () => null);
+
 const loadScene3D: ViewLoader = () => import("../../three/Scene3D").then((m) => ({ default: m.Scene3D }));
 
 export function CanvasRegion() {
@@ -66,6 +72,7 @@ export function CanvasRegion() {
     <main id={CANVAS_REGION_ID} className="canvas" data-view={view} aria-label={view === "2d" ? "Plan" : "3D view"} tabIndex={-1}>
       {view === "2d" ? <Editor /> : <LazyView load={loadScene3D} loading={<SceneLoading />} failed={(retry) => <SceneLoadFailed retry={retry} />} />}
       <div className="canvas__overlays">
+        {view === "3d" ? <ScenePresence /> : null}
         <div className="canvas__slot canvas__slot--marks">
           <PlanMarks />
         </div>

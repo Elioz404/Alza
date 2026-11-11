@@ -35,6 +35,7 @@ import { useGesture } from "../ui/useGesture";
 import { bus, EVENTS } from "../model/sceneBus";
 import { isInsideOverlay, isTypingTarget } from "../ui/keys";
 import { deselectAll, handleSelectionKey } from "./selectionKeys";
+import { setHover, setPointer as sharePointer } from "../model/presence";
 import {
   DEFAULT_FLOOR,
   DOOR_DEFAULTS,
@@ -104,6 +105,16 @@ const StairDrawing = deferred<StairDrawingProps>(
   "the stair symbols",
   () => import("./StairDrawing").then((m) => m.StairDrawing),
   ({ geometry, S, className }) => <StairOutline geometry={geometry} S={S} className={`${className} pl-stair-pending`} />,
+);
+
+/**
+ * The shared session's layer (PlanPresence.tsx): the agent's marker and highlight, what it points
+ * at, the other tabs' cursors. Fetched after the first paint; until then there is nothing to show.
+ */
+const PlanPresence = deferred<{ S: number; levelId: string }>(
+  "the session's plan layer",
+  () => import("./PlanPresence").then((m) => m.PlanPresence),
+  () => null,
 );
 
 
@@ -238,6 +249,18 @@ export function Editor() {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
+
+  // What the person points at, for the shared session (model/presence.ts): the entity under the
+  // pointer (the pointer itself is told as it moves, and the part of the plan the canvas shows by
+  // the session's layer, PlanPresence.tsx)
+  useEffect(() => setHover(hoverId), [hoverId]);
+  useEffect(
+    () => () => {
+      setHover(null);
+      sharePointer(null);
+    },
+    [],
+  );
 
   // ---- keyboard ----
   // Subscribed once: the handler reads the selection and the tool from the stores when a key is
@@ -426,6 +449,7 @@ export function Editor() {
   // ---- pointer handlers ----
   const onPointerMove = (e: React.PointerEvent) => {
     const raw = toWorld(e.clientX, e.clientY);
+    sharePointer(raw);
     let at = snapPoint(raw, dragEnd ?? undefined);
     if (editor.drawMode === "wall" && editor.pendingWallStart) at = straighten(editor.pendingWallStart, at, e.shiftKey);
     setPointer({ raw, at });
@@ -629,6 +653,7 @@ export function Editor() {
       onPointerUp={onPointerUp}
       onPointerLeave={() => {
         if (panning || dragItem || dragRoom || dragEnd || dragStair || stairStart) return;
+        sharePointer(null);
         setPointer(null);
         setOpeningFits(null);
       }}
@@ -813,6 +838,9 @@ export function Editor() {
 
       {/* the snap cursor: where a click lands */}
       {pointer && drawing && !panning ? <SnapCursor at={pointer.at} S={S} /> : null}
+
+      {/* the shared session: the agent at work, what it points at, the other tabs' cursors */}
+      <PlanPresence S={S} levelId={levelId} />
     </svg>
   );
 }

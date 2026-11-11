@@ -92,6 +92,12 @@ const sheet = {
    * it stays at the 3:1 a line that carries information needs on the paper.
    */
   ghost: oklch(63, 0.03, 220),
+  /**
+   * The other tabs of the shared session, in hues of their own, kept apart from the person's
+   * accent, the agent's verdigris and the error red. A tab's cursor and its name are drawn in
+   * it on the paper, so each holds the 4.5:1 of text there.
+   */
+  tabs: [oklch(55, 0.15, 300), oklch(54, 0.13, 65), oklch(52, 0.15, 340), oklch(53, 0.12, 140)],
 } as const;
 
 // ============================================================================ dark rendering
@@ -130,6 +136,8 @@ const dark = {
   floorCarpet: oklch(26, 0.015, 145),
   floorTile: oklch(26, 0.01, 230),
   ghost: oklch(56, 0.03, 220),
+  /** the session's tabs, lightened to hold 4.5:1 on the graphite paper as the light ones do on theirs */
+  tabs: [oklch(73, 0.13, 300), oklch(75, 0.12, 65), oklch(73, 0.14, 340), oklch(74, 0.12, 140)],
   ringLow: oklch(30, 0.011, 255),
   ringMed: oklch(34, 0.011, 255),
   ringHigh: oklch(38, 0.011, 255),
@@ -389,6 +397,18 @@ export const PLAN_HEX = Object.freeze({
   oakGrain: sheet.floorOakGrain.hex,
   tileJoint: sheet.floorTileJoint.hex,
 });
+
+/**
+ * The shared session's colours (src/model/presence.ts): the person in the accent, the agent in
+ * its verdigris, the other tabs of the browser in theirs (the sheet's `tabs`). They are the
+ * stylesheet's custom properties, not fixed values, so each follows the theme — the dark sheet
+ * has its own — and script hands them on as they are: a marker's or a cursor's colour is the
+ * custom property --ss-colour, set to one of these (ui/session/place.ts).
+ */
+export const PRESENCE_COLOUR = Object.freeze({ person: "var(--color-accent)", agent: "var(--color-agent)" });
+
+/** The colour of the tab numbered `ordinal` (from 1) in the session: one of --plan-tab-1… */
+export const tabColour = (ordinal: number): string => `var(--plan-tab-${((Math.max(1, ordinal) - 1) % sheet.tabs.length) + 1})`;
 
 /** Room fill per floor finish on the plan. */
 export const FLOOR_FILL: Readonly<Record<FloorFinish, string>> = Object.freeze({

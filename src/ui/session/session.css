@@ -1,0 +1,192 @@
+/*
+ * The shared session: the agent's marker and highlight on the plan, what it points at, the other
+ * tabs' cursors (PlanPresence.tsx), their markers over the 3D view (ScenePresence.tsx) and the
+ * presence indicator in the top bar (PresenceIndicator.tsx). Tokens only. A marker's position and
+ * colour arrive as custom properties set through the CSSOM (place.ts): --ss-x, --ss-y and
+ * --ss-colour. Movement eases over --duration-move, which reduced motion sets to zero.
+ */
+@layer alza-surfaces {
+  /* ---------------------------------------------------------------- on the plan */
+  .ss-layer { pointer-events: none; }
+  .ss-highlight {
+    fill: var(--plan-agent-muted);
+    fill-opacity: 0.55;
+    stroke: var(--plan-agent);
+    stroke-opacity: 0.7;
+    stroke-width: var(--pen-medium);
+    stroke-linecap: round;
+  }
+  line.ss-highlight { stroke: var(--plan-agent-muted); stroke-opacity: 0.85; }
+  .ss-highlight--point { fill-opacity: 0.35; }
+
+  .ss-agent,
+  .ss-point,
+  .ss-cursor {
+    transform: translate(var(--ss-x, 0), var(--ss-y, 0));
+    transition: transform var(--duration-move) var(--ease-out);
+  }
+  .ss-cursor { transition-duration: var(--duration-fast); }
+  @media (prefers-reduced-motion: reduce) {
+    .ss-agent,
+    .ss-point,
+    .ss-cursor { transition: none; }
+  }
+  .ss-agent__marker {
+    fill: var(--plan-agent);
+    stroke: var(--plan-paper);
+    stroke-width: var(--pen-medium);
+  }
+  .ss-agent[data-waiting] .ss-agent__marker { fill: var(--plan-paper); stroke: var(--plan-agent); stroke-width: var(--pen-bold); }
+
+  .ss-label {
+    font-family: var(--font-family-body);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    fill: var(--color-text-agent);
+    paint-order: stroke;
+    stroke: var(--plan-paper);
+    stroke-width: var(--pen-halo);
+    stroke-linejoin: round;
+  }
+  .ss-label--tab { font-weight: var(--font-weight-regular); fill: var(--ss-colour, var(--color-text-secondary)); }
+
+  .ss-point__ring {
+    fill: none;
+    stroke: var(--plan-agent);
+    stroke-width: var(--pen-bold);
+    animation: ss-pulse var(--duration-pulse) var(--ease-out) infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  @keyframes ss-pulse {
+    from { opacity: 1; scale: 0.7; }
+    to { opacity: 0.35; scale: 1.15; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ss-point__ring { animation: none; }
+  }
+  .ss-cursor__arrow { fill: var(--ss-colour, var(--color-text-secondary)); stroke: var(--plan-paper); stroke-width: var(--pen-medium); stroke-linejoin: round; }
+
+  /* ---------------------------------------------------------------- over the 3D view */
+  .ss-scene {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .ss-scene__marker {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1);
+    transform: translate(var(--ss-x, 0), var(--ss-y, 0)) translate(calc(-1 * var(--size-dot) / 2), -50%);
+    font-family: var(--font-family-body);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    color: var(--scene-ink);
+    white-space: nowrap;
+  }
+  .ss-scene__marker[hidden] { display: none; }
+  .ss-scene__dot {
+    flex: none;
+    width: var(--size-dot);
+    height: var(--size-dot);
+    border-radius: var(--radius-full);
+    background: var(--ss-colour, var(--color-agent));
+    box-shadow: 0 0 0 var(--size-dot-stroke) var(--scene-backdrop);
+  }
+  .ss-scene__text {
+    padding: var(--spacing-1) var(--spacing-2);
+    border-radius: var(--radius-inner);
+    background: var(--color-background-card);
+    box-shadow: var(--shadow-low);
+    color: var(--color-text-primary);
+  }
+  .ss-scene__marker--agent .ss-scene__text { color: var(--color-text-agent); }
+
+  /* ---------------------------------------------------------------- the indicator */
+  .session { position: relative; flex: none; }
+  .session__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    height: var(--size-control);
+    min-width: var(--size-control);
+    padding: 0 var(--spacing-2);
+    border: var(--size-hairline) solid var(--color-border);
+    border-radius: var(--radius-full);
+    background: var(--color-background-surface);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+  }
+  .session__chip:active { translate: 0 var(--press-offset); }
+  @media (hover: hover) {
+    .session__chip:hover { background: var(--color-background-muted); }
+  }
+  .session__dots { display: inline-flex; align-items: center; }
+  .session__dot {
+    width: var(--size-dot);
+    height: var(--size-dot);
+    border-radius: var(--radius-full);
+    background: var(--ss-colour, var(--color-accent));
+    box-shadow: 0 0 0 var(--size-dot-stroke) var(--color-background-surface);
+  }
+  .session__dot + .session__dot { margin-left: calc(-1 * var(--size-dot-stroke)); }
+  /* busy: ringed in its colour, which holds still for whoever asks for less motion, and breathing */
+  .session__dot[data-busy] {
+    outline: var(--size-dot-stroke) solid var(--ss-colour, var(--color-accent));
+    outline-offset: var(--size-dot-stroke);
+    animation: ss-breathe var(--duration-pulse) var(--ease-out) infinite alternate;
+  }
+  @keyframes ss-breathe {
+    to { opacity: 0.45; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .session__dot[data-busy] { animation: none; }
+  }
+  .session__count { font-variant-numeric: tabular-nums; }
+
+  .session__panel {
+    position: absolute;
+    top: calc(100% + var(--spacing-2));
+    right: 0;
+    z-index: var(--z-dropdown);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+    width: var(--size-request-card);
+    max-width: calc(100vw - var(--spacing-8));
+    padding: var(--spacing-4);
+    border-radius: var(--radius-container);
+    background: var(--color-background-popover);
+    box-shadow: var(--shadow-high);
+    color: var(--color-text-primary);
+  }
+  .session__panel[hidden] { display: none; }
+  .session__title { margin: 0; font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
+  .session__list { display: flex; flex-direction: column; gap: var(--spacing-2); margin: 0; padding: 0; list-style: none; }
+  .session__who { display: grid; grid-template-columns: auto 1fr; align-items: baseline; column-gap: var(--spacing-2); }
+  .session__who .session__dot { align-self: center; }
+  .session__name { font-weight: var(--font-weight-semibold); }
+  .session__what { grid-column: 2; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+  .session__note { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+
+  @media (max-width: 40rem) {
+    .session__count { display: none; }
+    .session__chip { justify-content: center; padding: 0 var(--spacing-1); }
+    /* the chip sits mid-bar on a phone: the list hangs under the whole bar, within its gutters */
+    .session { position: static; }
+    .session__panel {
+      position: fixed;
+      top: calc(var(--size-topbar) + var(--spacing-2));
+      left: var(--spacing-4);
+      right: var(--spacing-4);
+      width: auto;
+      max-width: none;
+    }
+  }
+}
