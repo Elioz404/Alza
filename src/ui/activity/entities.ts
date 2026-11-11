@@ -11,7 +11,7 @@
 import type { PlanModel, TargetType } from "../../model/types";
 import { catalogOf, kindName } from "../../model/catalog";
 import { openingName, stairName, wallName, type EntityRef as NamedEntityRef } from "../inspector/entities";
-import { stairGeometryIn } from "../../model/levels";
+import { placeOf as placeOfEntity } from "../../model/places";
 
 /** Something on the plan a line can point at: an entity, or one of its levels. */
 export type EntityRef = Pick<NamedEntityRef, "id"> & { type: NamedEntityRef["type"] | "level" };
@@ -149,35 +149,15 @@ export interface PlanPoint {
   y: number;
 }
 
-/** Where an entity sits on the plan: its centre. */
+/**
+ * Where an entity sits on the plan: its middle as the plan itself says (model/places.ts placeOf:
+ * a wall's middle and an opening's centre along its arc, a room's anchor), so a feed link brings
+ * into view what the agent's marker and point_at point at.
+ */
 export function centreOf(model: PlanModel, ref: EntityRef): PlanPoint | null {
-  switch (ref.type) {
-    case "wall": {
-      const w = model.walls.find((x) => x.id === ref.id);
-      return w ? { x: (w.ax + w.bx) / 2, y: (w.ay + w.by) / 2 } : null;
-    }
-    case "door":
-    case "window": {
-      const o = model.openings.find((x) => x.id === ref.id);
-      const w = o && model.walls.find((x) => x.id === o.wallId);
-      return o && w ? { x: w.ax + (w.bx - w.ax) * o.t, y: w.ay + (w.by - w.ay) * o.t } : null;
-    }
-    case "room": {
-      const r = model.rooms.find((x) => x.id === ref.id);
-      return r ? { x: r.x + r.w / 2, y: r.y + r.h / 2 } : null;
-    }
-    case "item": {
-      const it = model.items.find((x) => x.id === ref.id);
-      return it ? { x: it.x, y: it.y } : null;
-    }
-    case "stair": {
-      const st = model.stairs.find((x) => x.id === ref.id);
-      const g = st ? stairGeometryIn(model, st) : null;
-      return g ? { x: (g.box.minX + g.box.maxX) / 2, y: (g.box.minY + g.box.maxY) / 2 } : null;
-    }
-    case "level":
-      return null;
-  }
+  if (ref.type === "level") return null;
+  const place = placeOfEntity(model, ref.id);
+  return place ? { x: place.x, y: place.y } : null;
 }
 
 /** "… placed at (2.00, 3.50)." and "… moved to (2.00, 3.50).": the coordinates a line names. */

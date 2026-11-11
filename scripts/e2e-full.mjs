@@ -22,6 +22,7 @@ import {
   answerRequest,
   blueprintInput,
   exportMenu,
+  fitPlan,
   librarySource,
   openDeveloperTools,
   openStudio,
@@ -718,7 +719,15 @@ check("levels: approved, the storey goes with what stood on it", answered.ok && 
 const oldPlan = await hook.evaluate((h) => {
   const m = h.store.getState().model;
   const strip = ({ levelId, ...e }) => (void levelId, e);
-  return { name: "Saved before levels", walls: m.walls.map(strip), openings: m.openings, rooms: m.rooms.map(strip), items: m.items.map(strip), kinds: m.kinds, underlay: null };
+  // formats 1 and 2 wrote a room as its rectangle
+  const asRect = ({ points, ...e }) => {
+    const xs = points.map((q) => q.x);
+    const ys = points.map((q) => q.y);
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    return { ...e, x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+  };
+  return { name: "Saved before levels", walls: m.walls.map(strip), openings: m.openings, rooms: m.rooms.map((r) => strip(asRect(r))), items: m.items.map(strip), kinds: m.kinds, underlay: null };
 });
 const loaded = await hook.evaluate((h, plan) => h.actions.loadModel(plan), oldPlan);
 check(
@@ -1016,12 +1025,20 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   const v1 = await hook.evaluate((h) => {
     const m = h.store.getState().model;
     const strip = ({ levelId, ...e }) => (void levelId, e);
-    return { version: 1, name: "Saved as format 1", walls: m.walls.map(strip), openings: m.openings, rooms: m.rooms.map(strip), items: m.items.map(strip), kinds: m.kinds, underlay: null };
+    // formats 1 and 2 wrote a room as its rectangle
+    const asRect = ({ points, ...e }) => {
+      const xs = points.map((q) => q.x);
+      const ys = points.map((q) => q.y);
+      const x = Math.min(...xs);
+      const y = Math.min(...ys);
+      return { ...e, x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+    };
+    return { version: 1, name: "Saved as format 1", walls: m.walls.map(strip), openings: m.openings, rooms: m.rooms.map((r) => strip(asRect(r))), items: m.items.map(strip), kinds: m.kinds, underlay: null };
   });
   const loadedV1 = await hook.evaluate((h, p) => h.actions.loadModel(p), v1);
   check(
     "storeys: a format 1 plan loads as one ground floor, and the 3D view builds it",
-    loadedV1.ok && loadedV1.migratedFrom === 1 && (await until("s.model.name === 'Saved as format 1' && s.model.version === 2")) &&
+    loadedV1.ok && loadedV1.migratedFrom === 1 && (await until("s.model.name === 'Saved as format 1' && s.model.version === 3")) &&
       (await sceneUntil((s) => s.levels.total === 1 && s.stairs === 0 && s.slabs === 0)),
     loadedV1.summary,
   );
@@ -1187,7 +1204,7 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   );
   await page.waitForTimeout(500);
   const bedroom = await state("s.model.rooms.find((r) => r.id === 'room_bed')");
-  const middle = await px(bedroom.x + bedroom.w / 2, bedroom.y + bedroom.h / 2);
+  const middle = await px((bedroom.points[0].x + bedroom.points[2].x) / 2, (bedroom.points[0].y + bedroom.points[2].y) / 2);
   const ringBox = await ring.locator(".ss-point__ring").boundingBox();
   check(
     "session: the ring on a room stands clear of the room's name and area in its middle",
@@ -1422,6 +1439,375 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   await one.keyboard.press("Escape");
   check("session: no console errors in the two tabs", tabErrors.length === 0, tabErrors.slice(0, 3).join(" ;; "));
   await context.close();
+}
+
+// ---------- 12i. free shapes: polygon rooms, arc edges, curved walls, the Crescent House demo ----------
+{
+  const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+  await page.bringToFront();
+  await page.setViewportSize(DESKTOP);
+  await showView(page, "Plan");
+  await planMenu(page, "Clear plan");
+  await until("s.model.walls.length === 0 && s.model.rooms.length === 0");
+
+  // a curved wall by its sagitta: stored as a bulge, read back with its arc and its length along it
+  const bent = await tool("add_wall", { ax: 0, ay: 0, bx: 6, by: 0, thickness: 0.2, curve: { sagitta: -1.5 } });
+  const read = await tool("get_model", {});
+  const arcWall = read.model?.walls.find((w) => w.id === bent.id);
+  check(
+    "shapes: add_wall bends a wall by its sagitta; get_model gives its arc, radius and length along it",
+    bent.ok && !!arcWall?.arc && Math.abs(arcWall.arc.sagitta + 1.5) < 1e-3 && Math.abs(arcWall.arc.radius - 3.75) < 1e-3 && arcWall.length > 6.9 && arcWall.length < 7,
+    `${bent.summary} ${JSON.stringify(arcWall?.arc)} ${arcWall?.length}`,
+  );
+  const win = await tool("add_window", { wallId: bent.id, t: 0.5, width: 1.2 });
+  const tooWide = await tool("add_window", { wallId: bent.id, t: 0.2, width: 3 });
+  check("shapes: a window sits on the arc; one too wide for the bend is refused with the reason", win.ok && !tooWide.ok && /too wide for the bend/.test(tooWide.summary), tooWide.summary);
+  const straight = await tool("edit_wall", { id: bent.id, curve: { sagitta: 0 } });
+  check("shapes: edit_wall straightens it again", straight.ok && (await state(`s.model.walls.find((w) => w.id === '${bent.id}').bulge === undefined`)));
+  // a removal asked by the agent waits for the person; this one is the person's own
+  await hook.evaluate((h, id) => h.actions.removeWall(id), bent.id);
+  await until("s.model.walls.length === 0", 2000);
+
+  // an L by its corners, given anticlockwise, with one edge bowed out of it
+  const ell = await tool("add_room", { points: [[0, 0], [0, 4], [5, 4], [5, 2], [2, 2], [2, 0]], arcs: [{ edge: 1, sagitta: 0.8 }], label: "Ell", floor: "oak" });
+  const ellRoom = (await tool("get_model", {})).model?.rooms.find((r) => r.id === ell.id);
+  check(
+    "shapes: add_room takes an outline with an arc edge; get_model gives its area, perimeter and an anchor inside it",
+    ell.ok && ellRoom?.points.length === 6 && ellRoom.points.some((p) => p.bulge !== undefined) && ellRoom.area > 16.5 && ellRoom.area < 17 && !ellRoom.rect && ellRoom.anchor.y > 2 && ellRoom.anchor.y < 4.8,
+    `${ell.summary} ${JSON.stringify({ area: ellRoom?.area, anchor: ellRoom?.anchor })}`,
+  );
+  check("shapes: the plan draws the outline as one path", (await page.locator(`${PLAN_SVG} path.pl-floor`).count()) === 1);
+  const crossed = await tool("add_room", { points: [[0, 0], [4, 4], [4, 0], [0, 4]], label: "Bow tie" });
+  check("shapes: an outline that crosses itself is refused", !crossed.ok && /cross/.test(crossed.summary), crossed.summary);
+  // a corner added at the middle of a straight edge, as the plan's edge handle adds one
+  const reshaped = await hook.evaluate((h, id) => {
+    const pts = h.store.getState().model.rooms.find((r) => r.id === id).points;
+    const edge = pts.findIndex((p) => p.bulge === undefined);
+    const a = pts[edge];
+    const b = pts[(edge + 1) % pts.length];
+    return h.actions.reshapeRoom(id, { op: "insert_vertex", edge, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  }, ell.id);
+  check("shapes: the reshape_room command (the person's action) adds a corner on an edge", reshaped.ok && reshaped.corners === 7 && (await state("s.model.rooms[0].points.length")) === 7, reshaped.summary);
+  const viaTool = await tool("update_room", { id: "Ell", points: [[0, 0], [4, 0], [4, 3], [0, 3]] });
+  check("shapes: update_room reshapes by points; the room is a rectangle again", viaTool.ok && Math.abs(viaTool.area - 12) < 1e-6 && !!(await tool("get_model", {})).model?.rooms[0].rect, viaTool.summary);
+  // fit: four walls round a point, and the room fills them to their inner faces
+  for (const [ax, ay, bx, by] of [[10, 0, 14, 0], [14, 0, 14, 3], [14, 3, 10, 3], [10, 3, 10, 0]]) await tool("add_wall", { ax, ay, bx, by, thickness: 0.2 });
+  const fitted = await tool("add_room", { fit: [12, 1.5], label: "Fitted" });
+  check("shapes: add_room { fit } fills the space the walls close off", fitted.ok && Math.abs(fitted.area - 3.8 * 2.8) < 1e-3, fitted.summary);
+
+  // a format-2 plan, rooms as rectangles: loads migrated, its rooms as their four corners
+  const v2 = await hook.evaluate((h) => {
+    const m = h.store.getState().model;
+    return { ...m, version: 2, name: "Saved as format 2", rooms: [{ id: "room_old", levelId: m.levels[0].id, x: 1, y: 1, w: 3, h: 2, label: "Old", floor: "tile" }] };
+  });
+  const loadedV2 = await hook.evaluate((h, p) => h.actions.loadModel(p), v2);
+  check(
+    "shapes: a format-2 plan loads, each rectangle room as its four corners",
+    loadedV2.ok && loadedV2.migratedFrom === 2 && (await until("s.model.version === 3 && s.model.rooms[0].points.length === 4 && s.model.rooms[0].points[2].x === 4 && s.model.rooms[0].points[2].y === 3")),
+    loadedV2.summary,
+  );
+
+  // the free-shapes demo: two storeys of curves and angles, clean, on the plan and in 3D
+  await planMenu(page, "Load Crescent House demo");
+  const demo = await until("s.model.name === 'Crescent House'", 5000);
+  const demoIssues = await tool("get_issues", {});
+  const curved = await state("s.model.walls.filter((w) => w.bulge !== undefined).length");
+  check("shapes: the Crescent House demo loads from the plan menu, clean, with curved walls", demo && demoIssues.ok && demoIssues.issues.length === 0 && curved >= 2, `${demoIssues.summary} ${curved}`);
+  const shownRooms = await state("s.model.rooms.filter((r) => r.levelId === 'level_ground').length");
+  check("shapes: the demo's ground-floor rooms are drawn as outlines", (await page.locator(`${PLAN_SVG} path.pl-floor`).count()) === shownRooms, String(shownRooms));
+  check("shapes: no two of the demo's doors swing into each other", !demoIssues.issues?.some((i) => i.code === "doors_swing_together"));
+  // the curved facade in Properties: named by the room it runs along, read on its arc
+  await hook.evaluate((h) => h.actions.selectWall("g_facade"));
+  await panelTab(page, "Properties");
+  const facadeProps = page.getByRole("tabpanel", { name: "Properties" });
+  check("shapes: Properties says the curved facade runs along the living room", await facadeProps.getByText("Along Living").first().isVisible().catch(() => false), ((await facadeProps.textContent().catch(() => "")) ?? "").slice(0, 200));
+  await hook.evaluate((h) => h.actions.selectWall(null));
+  // the bottom row: the room tool's hint sits beside the zoom dock, never over it
+  await page.keyboard.press("r");
+  await until("s.editor.drawMode === 'room'");
+  {
+    const hintBox = await page.locator(".canvas__hint .hint").boundingBox();
+    const zoomBox = await page.locator(".canvas__zoom .zoom").boundingBox();
+    const apart = !!hintBox && !!zoomBox && (hintBox.x >= zoomBox.x + zoomBox.width || hintBox.y + hintBox.height <= zoomBox.y);
+    check("shapes: the room tool's hint leaves the zoom controls and Fit uncovered", apart && (await page.getByRole("button", { name: /^Fit/ }).first().isVisible()), JSON.stringify({ hintBox, zoomBox }));
+  }
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await S("12i-crescent-plan");
+  // upstairs, the roof terrace's parapets stop below the plan's cut: drawn in outline, not poché
+  await tool("set_active_level", { id: "First floor" });
+  const parapets = await page
+    .waitForFunction((sel) => document.querySelectorAll(sel).length === 3, `${PLAN_SVG} .pl-wall-fill--below-cut`, { timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  check("shapes: the roof terrace's three parapets are drawn below the cut, in outline", parapets);
+  await S("12i-crescent-first");
+  await tool("set_active_level", { id: "Ground floor" });
+  await showView(page, "3D");
+  check("shapes: the 3D view builds the demo's two storeys and its stair", await sceneUntil((s) => s.levels.total === 2 && s.stairs === 1 && s.entities > 0, 8000), JSON.stringify((await scene())?.levels));
+  await S("12i-crescent-3d");
+  // its curved walls are solids like any other: one is picked by a click on its top, and outlined
+  await railButton(page, "Top view").click();
+  await sceneUntil((s) => !s.moving, 4000);
+  const facadeAt = await hook.evaluate((h) => h.sceneLocate("wall", "g_facade"));
+  const canvasAt = await page.locator(SCENE_CANVAS).boundingBox();
+  if (facadeAt && canvasAt) await page.mouse.click(canvasAt.x + facadeAt.x, canvasAt.y + facadeAt.y);
+  check(
+    "shapes: a click on the curved facade in 3D selects it, and the model outlines it",
+    !!facadeAt && (await until("s.editor.selectedWallId === 'g_facade'")) && (await sceneUntil((s) => s.marks.selection === 1)),
+    JSON.stringify(facadeAt),
+  );
+  await S("12i-crescent-3d-facade");
+  await hook.evaluate((h) => h.actions.selectWall(null));
+  await railButton(page, "Orbit").click();
+  // the building model: curved walls on their arcs, shaped rooms by their outlines
+  {
+    const file = await downloadText(() => exportMenu(page, "Building model"));
+    const ifc = ifcFacts(file);
+    const arcs = file ? (file.text.match(/IFCARCINDEX\(/g) ?? []).length : 0;
+    check(
+      "shapes: the IFC export writes curved walls and shaped rooms with IFC4 arcs, every wall, space and opening in it",
+      file?.name === "crescent-house.ifc" && ifc.framed && ifc.schema === "IFC4" && ifc.count("IFCWALL") === 25 && ifc.count("IFCSPACE") === 12 &&
+        ifc.count("IFCOPENINGELEMENT") === 29 && ifc.count("IFCINDEXEDPOLYCURVE") > 0 && arcs >= 6,
+      `${file?.name}: ${ifc.count("IFCWALL")} walls, ${ifc.count("IFCSPACE")} spaces, ${ifc.count("IFCOPENINGELEMENT")} openings, ${ifc.count("IFCINDEXEDPOLYCURVE")} curves, ${arcs} arcs`,
+    );
+  }
+  await showView(page, "Plan");
+  await page.keyboard.press("Control+z");
+  check("shapes: Undo brings back the plan the demo replaced", await until("s.model.name === 'Saved as format 2'", 3000));
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+}
+
+// ---------- 12j. free shapes by hand: the room tool corner by corner, the handles, bending a wall ----------
+{
+  const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+  const drag = async (from, to) => {
+    await page.mouse.move(...(await px(...from)));
+    await page.mouse.down();
+    await page.mouse.move(...(await px(...to)), { steps: 6 });
+    await page.mouse.up();
+  };
+  await page.bringToFront();
+  await page.setViewportSize(DESKTOP);
+  await showView(page, "Plan");
+  await planMenu(page, "Clear plan");
+  await until("s.model.walls.length === 0 && s.model.rooms.length === 0");
+
+  // the room tool from the rail by keyboard: Enter on its button hands the keys to the plan,
+  // whose arrows move the cross, C puts a corner down and Enter closes the outline
+  await railButton(page, "Select").focus();
+  await railButton(page, "Draw a room").focus();
+  await page.keyboard.press("Enter");
+  await until("s.editor.drawMode === 'room'");
+  const planHasKeys = await page
+    .waitForFunction(() => document.activeElement?.id === "canvas", undefined, { timeout: 3000 })
+    .then(() => true)
+    .catch(() => false);
+  check("shapes by hand: choosing Draw a room with Enter on the rail hands the keyboard to the plan", planHasKeys);
+  const right = Array(6).fill("Shift+ArrowRight");
+  const down = Array(4).fill("Shift+ArrowDown");
+  for (const key of ["c", ...right, "c", ...down, "c"]) await page.keyboard.press(key);
+  const crossSaid = (await page.locator(".hint").textContent()) ?? "";
+  check("shapes by hand: the hint letters the keyboard's cross and the edge it would make", crossSaid.includes("Cross at X ") && crossSaid.includes(" m, Y ") && crossSaid.includes("would be"), crossSaid);
+  await page.keyboard.press("Enter");
+  check("shapes by hand: Draw a room chosen from the rail with Enter draws a room from the keys alone", await until("s.model.rooms.length === 1 && s.model.rooms[0].points.length === 3"), JSON.stringify(await state("s.model.rooms.map((r) => r.points)")));
+  await page.keyboard.press("Control+z");
+  await until("s.model.rooms.length === 0");
+
+  // an L, a click at each corner, closed with a click on the first
+  await railButton(page, "Draw a room").click();
+  for (const [x, y] of [[1, 1], [5, 1], [5, 3], [3, 3], [3, 5], [1, 5]]) await click(x, y);
+  check("shapes by hand: each click puts a corner down", (await page.locator(`${PLAN_SVG} .pl-preview-draft[data-corners="6"]`).count()) === 1);
+  await page.keyboard.press("Backspace");
+  check("shapes by hand: Backspace takes the last corner back", (await page.locator(`${PLAN_SVG} .pl-preview-draft[data-corners="5"]`).count()) === 1);
+  await click(1, 5);
+  await click(1, 1);
+  check(
+    "shapes by hand: a click on the first corner closes the outline into one L-shaped room",
+    await until("s.model.rooms.length === 1 && s.model.rooms[0].points.length === 6"),
+    JSON.stringify(await state("s.model.rooms[0] && s.model.rooms[0].points")),
+  );
+
+  // its handles: a corner dragged, an edge bowed out from its middle, each one undo step
+  await railButton(page, "Select").click();
+  await click(2, 4);
+  check("shapes by hand: the selected room shows a handle on each corner and edge", (await page.locator(`${PLAN_SVG} .pl-corner-handle`).count()) === 6 && (await page.locator(`${PLAN_SVG} .pl-edge-handle`).count()) >= 4);
+  await drag([5, 3], [6, 3.5]);
+  check("shapes by hand: dragging a corner moves it", await until("s.model.rooms[0].points.some((p) => p.x === 6 && p.y === 3.5)"));
+  await drag([3, 1], [3, 0.3]);
+  check(
+    "shapes by hand: dragging an edge's middle bends it out of the room",
+    await until("s.model.rooms[0].points.some((p) => p.bulge > 0)"),
+  );
+  check("shapes by hand: the arc edge is lettered with its radius", (await page.locator(`${PLAN_SVG} .pl-edge-dim`).filter({ hasText: "R " }).count()) >= 1);
+  await page.keyboard.press("Control+z");
+  // the drag was many frames: one Undo taking it all back shows it was one step
+  check("shapes by hand: one Undo straightens the whole drag again", await until("s.model.rooms[0].points.every((p) => p.bulge === undefined)"));
+  // from the keyboard: Properties lists the corners, and adds one on an edge
+  await panelTab(page, "Properties");
+  const props = page.getByRole("tabpanel", { name: "Properties" });
+  await props.getByRole("button", { name: "Add a corner on edge 1" }).click();
+  check("shapes by hand: Properties adds a corner on an edge", await until("s.model.rooms[0].points.length === 7"));
+
+  // a wall bent from its middle, drawn with arcs, a window cut along it
+  const wall = await tool("add_wall", { ax: 1, ay: 6.5, bx: 7, by: 6.5, thickness: 0.2 });
+  await click(4, 6.5);
+  check("shapes by hand: the wall is selected and offers its bend handle", (await page.locator(`${PLAN_SVG} .pl-bend-handle`).count()) === 1);
+  await drag([4, 6.5], [4, 5.8]);
+  check("shapes by hand: dragging a wall's middle bends it into an arc", await until(`(s.model.walls.find((w) => w.id === '${wall.id}') || {}).bulge > 0`));
+  check("shapes by hand: the curved wall's poché is drawn with arcs", ((await page.locator(`${PLAN_SVG} .pl-wall-fill[data-wall="${wall.id}"]`).getAttribute("d")) ?? "").includes("A"));
+  const win = await tool("add_window", { wallId: wall.id, t: 0.5 });
+  const gap = win.ok ? await page.locator(`${PLAN_SVG} [data-opening="${win.id}"] .pl-gap`).getAttribute("d") : "";
+  check("shapes by hand: a window on the arc is cut along it", win.ok && (gap ?? "").includes("A"), win.summary);
+  await S("12j-shapes-by-hand");
+  await page.keyboard.press("Escape");
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+}
+
+// ---------- 12k. an agent builds a shaped house, tool call by tool call ----------
+// Two storeys: a curved living-room facade, a wing turned 45° off the east wall, an L kitchen
+// round a pantry, a roof terrace over the wing, a stair; every room fitted to its walls.
+{
+  const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+  await page.bringToFront();
+  await page.setViewportSize(DESKTOP);
+  await showView(page, "Plan");
+  await planMenu(page, "Clear plan");
+  await until("s.model.walls.length === 0 && s.model.rooms.length === 0");
+  const refused = [];
+  const T = async (name, args) => {
+    const r = await tool(name, args);
+    if (!r.ok) refused.push(`${name}: ${r.summary}`);
+    return r;
+  };
+  await T("set_plan_name", { name: "Hillside House" });
+  const F = (await T("add_level", {})).id;
+  const [W, D, X6, Y] = [12, 7, 6, 3.5];
+  const turn = Math.PI / 4;
+  const cm = (v) => Math.round(v * 100) / 100;
+  const NE = [cm(W + Math.cos(turn) * 4.6), cm(3 + Math.sin(turn) * 4.6)];
+  const back = (NE[0] - W) * Math.cos(turn) + (NE[1] - D) * Math.sin(turn);
+  const SE = [cm(W + Math.cos(turn) * back), cm(D + Math.sin(turn) * back)];
+  const ids = {};
+  const wall = async (key, ax, ay, bx, by, thickness, extra = {}) => (ids[key] = (await T("add_wall", { ax, ay, bx, by, thickness, ...extra })).id);
+  for (const [tag, on] of [["g", {}], ["f", { level: F }]]) {
+    await wall(`${tag}_n`, 0, 0, W, 0, 0.2, on);
+    await wall(`${tag}_e`, W, 0, W, D, 0.2, on);
+    await wall(`${tag}_s`, W, D, X6, D, 0.2, on);
+    // west along the south side: its left is the garden, so a positive sagitta bows the facade out
+    await wall(`${tag}_facade`, X6, D, 0, D, 0.2, { ...on, curve: { sagitta: 1.4 } });
+    await wall(`${tag}_w`, 0, D, 0, 0, 0.2, on);
+    const wing = tag === "f" ? { ...on, height: 1.1 } : on;
+    await wall(`${tag}_wing_n`, W, 3, ...NE, 0.2, wing);
+    await wall(`${tag}_wing_end`, ...NE, ...SE, 0.2, wing);
+    await wall(`${tag}_wing_s`, ...SE, W, D, 0.2, wing);
+  }
+  await wall("g_mid_w", 0, Y, X6, Y, 0.1);
+  await wall("g_mid_e", X6, Y, W, Y, 0.1);
+  await wall("g_x6", X6, 0, X6, D, 0.1);
+  await wall("g_pantry_w", 4, 0, 4, 1.6, 0.1);
+  await wall("g_pantry_s", 4, 1.6, X6, 1.6, 0.1);
+  await wall("f_mid", 0, Y, W, Y, 0.1, { level: F });
+  await wall("f_x5", 5, 0, 5, Y, 0.1, { level: F });
+  await wall("f_x6", X6, Y, X6, D, 0.1, { level: F });
+  await wall("f_x85", 8.5, Y, 8.5, D, 0.1, { level: F });
+  const door = (key, t, extra = {}) => T("add_door", { wallId: ids[key], t, ...extra });
+  const win = (key, t, extra = {}) => T("add_window", { wallId: ids[key], t, ...extra });
+  const bay = { width: 1.4, sill: 0.6, height: 1.6 };
+  await door("g_e", 2.5 / D, { hinge: "b", side: "left" });
+  // clear of the pantry door's swing in the kitchen's corner (doors_swing_together)
+  const hallDoor = await door("g_x6", 2.95 / D);
+  await door("g_mid_w", 4.5 / X6, { width: 1.4 });
+  await door("g_pantry_s", 0.5, { width: 0.8 });
+  await door("g_mid_e", 1 / (W - X6));
+  await door("g_e", 5.2 / D);
+  const gardenDoor = await door("g_facade", 0.5);
+  for (const t of [0.22, 0.78]) await win("g_facade", t, bay);
+  for (const [key, t, extra] of [["g_n", 1.4 / W], ["g_w", (D - 1.75) / D], ["g_w", (D - 5.25) / D], ["g_n", 9 / W], ["g_s", 0.5], ["g_wing_n", 0.6], ["g_wing_end", 0.5, { width: 1.2 }]]) await win(key, t, extra);
+  await door("f_x5", 2.1 / Y);
+  for (const t of [5.5 / W, 7.25 / W]) await door("f_mid", t, { width: 0.8 });
+  await door("f_mid", 10.25 / W);
+  await door("f_e", 5.25 / D, { side: "left" });
+  for (const t of [0.22, 0.5, 0.78]) await win("f_facade", t, bay);
+  for (const t of [2.5 / W, 9 / W]) await win("f_n", t);
+  await win("f_s", (W - 7.25) / (W - X6), { width: 0.8, sill: 1.2, height: 0.9 });
+  await win("f_s", (W - 10.25) / (W - X6));
+  const fit = (label, floor, at, level) => T("add_room", { fit: at, label, floor, ...(level ? { level } : {}) });
+  for (const [label, floor, at] of [["Kitchen", "tile", [1, 1]], ["Pantry", "tile", [5, 0.8]], ["Living", "oak", [3, 5]], ["Hall", "concrete", [9, 2]], ["Study", "oak", [9, 5]], ["Guest room", "carpet", [13.2, 5.5]]]) await fit(label, floor, at);
+  for (const [label, floor, at] of [["Bedroom", "carpet", [2, 2]], ["Landing", "oak", [8, 2]], ["Main bedroom", "oak", [3, 5]], ["Bathroom", "tile", [7, 5]], ["Lounge", "oak", [10, 5]], ["Roof terrace", "concrete", [13.2, 5.5]]]) await fit(label, floor, at, F);
+  await T("add_stair", { x: 11, y: 0.6, rotation: 270, width: 0.9 });
+  for (const item of [
+    { kind: "sofa_3", x: 2.4, y: 4.04, rotation: 0 },
+    { kind: "rug", x: 2.4, y: 5.3, rotation: 0 },
+    { kind: "dining_table", x: 2.4, y: 2.3, rotation: 0 },
+    { kind: "kitchen_counter", x: 1.4, y: 0.41, rotation: 0 },
+    { kind: "desk", x: 8, y: 6.57, rotation: 180 },
+    { kind: "bed_double", x: 3, y: 4.58, rotation: 0, level: F },
+    { kind: "armchair", x: 13.4, y: 6.2, rotation: 135, level: F },
+  ])
+    await T("place_item", item);
+  check("hillside: every tool call of the build is taken", refused.length === 0, refused.slice(0, 3).join(" ;; "));
+
+  const built = (await tool("get_model", {})).model;
+  const roomNamed = (label) => built?.rooms.find((r) => r.label === label);
+  const wing = built?.walls.find((w) => w.id === ids.g_wing_n);
+  const wingTurn = wing ? (Math.atan2(wing.by - wing.ay, wing.bx - wing.ax) * 180) / Math.PI : NaN;
+  check(
+    "hillside: two storeys, curved facades on both, a wing at 45°, an L kitchen, shaped rooms reported with area and perimeter",
+    built?.levels.length === 2 && built.walls.length === 25 && built.walls.filter((w) => w.arc).length === 2 && Math.abs(wingTurn - 45) < 0.5 &&
+      roomNamed("Kitchen")?.points.length === 6 && !roomNamed("Kitchen")?.rect && roomNamed("Living")?.points.some((p) => p.bulge !== undefined) &&
+      !roomNamed("Guest room")?.rect && !roomNamed("Roof terrace")?.rect && built.rooms.every((r) => r.area > 0 && r.perimeter > 0) && built.stairs.length === 1,
+    JSON.stringify({ walls: built?.walls.length, wingTurn, rooms: built?.rooms.map((r) => `${r.label}:${r.points.length}`) }),
+  );
+  check(
+    "hillside: fitted rooms carry no corner where a wall only meets their side",
+    roomNamed("Landing")?.points.length === 4 && roomNamed("Hall")?.points.length === 4,
+    JSON.stringify({ landing: roomNamed("Landing")?.points.length, hall: roomNamed("Hall")?.points.length }),
+  );
+  const hillIssues = await tool("get_issues", {});
+  check("hillside: the house the agent built has no issues", hillIssues.ok && hillIssues.issues.length === 0, `${hillIssues.summary} ${JSON.stringify(hillIssues.issues?.map((i) => i.message))}`);
+  // the hall door moved back up the kitchen wall swings into the pantry door: the checker says so
+  await tool("move_opening", { id: hallDoor.id, t: 2.5 / D });
+  const clash = await tool("get_issues", {});
+  check(
+    "hillside: two doors whose leaves meet when open are reported, and the move back clears it",
+    clash.ok && clash.issues.some((i) => i.code === "doors_swing_together" && i.refs?.includes(hallDoor.id)) && (await tool("move_opening", { id: hallDoor.id, t: 2.95 / D })).ok && (await tool("get_issues", {})).issues.length === 0,
+    JSON.stringify(clash.issues?.map((i) => i.message)),
+  );
+  check("hillside: the garden door sits on the curved facade", gardenDoor.ok && (await state(`s.model.openings.some((o) => o.id === '${gardenDoor.id}' && o.wallId === '${ids.g_facade}')`)));
+  await tool("set_active_level", { id: "level_ground" });
+  await fitPlan(page);
+  await page.waitForTimeout(300);
+  check(
+    "hillside: the plan draws the ground floor's rooms as outlines and the facade's poché with arcs",
+    (await page.locator(`${PLAN_SVG} path.pl-floor`).count()) === 6 && ((await page.locator(`${PLAN_SVG} .pl-wall-fill[data-wall="${ids.g_facade}"]`).getAttribute("d")) ?? "").includes("A"),
+  );
+  await S("12k-hillside-plan");
+  await tool("set_active_level", { id: F });
+  const built3d = await tool("build_3d", {});
+  check("hillside: build_3d raises both storeys and the stair", built3d.ok && (await sceneUntil((s) => s.levels.total === 2 && s.stairs === 1 && s.entities > 0, 8000)), JSON.stringify((await scene())?.levels));
+  check("hillside: the curved facade upstairs stands in the 3D view where it can be found", !!(await hook.evaluate((h, id) => h.sceneLocate("wall", id), ids.f_facade)));
+  await S("12k-hillside-3d");
+  {
+    const file = await downloadText(() => exportMenu(page, "Building model"));
+    const ifc = ifcFacts(file);
+    const arcs = file ? (file.text.match(/IFCARCINDEX\(/g) ?? []).length : 0;
+    // each space by its id, its room's name as its LongName
+    const spaces = file ? file.text.split("\n").filter((l) => /^#\d+=IFCSPACE\(/.test(l)) : [];
+    const named = ["Kitchen", "Living", "Guest room", "Roof terrace"].filter((n) => spaces.some((l) => l.includes(`'${n}'`)));
+    check(
+      "hillside: its IFC is framed IFC4, a storey per level, a space per room by name, its curves as IfcArcIndex",
+      file?.name === "hillside-house.ifc" && ifc.framed && ifc.schema === "IFC4" && ifc.names("IFCBUILDINGSTOREY").join() === "Ground floor,First floor" &&
+        spaces.length === 12 && named.length === 4 && ifc.count("IFCWALL") === 25 && arcs >= 4,
+      `${file?.name}: ${ifc.names("IFCBUILDINGSTOREY").join()}; ${spaces.length} spaces, named ${named.join()}; ${ifc.count("IFCWALL")} walls, ${arcs} arcs`,
+    );
+  }
+  await tool("set_active_level", { id: "level_ground" });
+  await showView(page, "Plan");
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
 }
 
 // ---------- 13. console errors ----------

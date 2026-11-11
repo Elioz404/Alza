@@ -7,29 +7,49 @@
  * and tested on its own, and a new one is added by writing it and listing it in RULES.
  */
 
-import type { Issue, Item, KindDef, Opening, PlanModel, Room, Wall } from "./types";
+import type { Issue, Item, KindDef, Opening, OpeningKind, PlanModel, Room, Wall } from "./types";
 import {
-  aabbOverlap,
   areCollinear,
   boxOf,
   boxesApart,
   collinearOverlap,
   dist,
-  pointOnSeg,
-  pointSegDist,
   satRectRect,
-  satRectWall,
   segLen,
-  segPoint,
   segmentsCross,
   rectCorners,
-  wallAsRect,
   type Box,
   type ORect,
   type Pt,
 } from "./geometry";
+import {
+  closestOnEdge,
+  edgeBox,
+  edgeIntersections,
+  edgeLength,
+  edgesOverlap,
+  isCurved,
+  openingSag,
+  outlineAnchor,
+  outlineArea,
+  outlineBox,
+  outlineDistance,
+  outlineEdges,
+  outlineSelfIntersection,
+  pointInOutline,
+  tessellateOutline,
+  wallArcError,
+  wallDistance,
+  wallEdge,
+  wallLength,
+  wallPieces,
+  wallPointAt,
+  wallTangentAt,
+  type Edge,
+} from "./shapes";
+import { sharedArea } from "./region";
 import { catalogOf, kindName, type Catalog } from "./catalog";
-import { ROOM_SIZE, SLAB_THICKNESS, STAIR, WALL_MIN_LENGTH, WALL_SLAB_TOLERANCE } from "./limits";
+import { ARC_TESSELLATION, BULGE, DOOR_SWING_DEFAULTS, DOOR_SWINGS_TOUCH, DOUBLE_DOOR_CLEAR, ROOM_SHAPE, ROOM_SIZE, SLAB_THICKNESS, STAIR, WALL_MIN_LENGTH, WALL_SLAB_TOLERANCE } from "./limits";
 import { levelAbove, levelInfo, levelSlice, levelsOf, slabUnderside, stairwellsOf, type LevelInfo, type Stairwell } from "./levels";
 import { stairGeometry } from "./stairs";
 
@@ -39,26 +59,91 @@ const DOOR_CLEAR = 0.1; // furniture must keep this margin in front of openings
 const wA = (w: Wall): Pt => ({ x: w.ax, y: w.ay });
 const wB = (w: Wall): Pt => ({ x: w.bx, y: w.by });
 
-/** Center point of an opening in world coordinates. */
+/** Center point of an opening in world coordinates: at its t along the wall's centreline (an arc's too). */
 export function openingCenter(wall: Wall, o: Opening): Pt {
-  return segPoint(wA(wall), wB(wall), o.t);
+  return wallPointAt(wall, o.t);
 }
 
-/** Opening span (start/end t) clamped so the full vano fits inside the wall. */
+/**
+ * Opening span (start/end t). An opening's width is measured along its wall's centreline, the
+ * arc of a curved wall, so its jambs stand width/2 to either side of its centre along it.
+ */
 export function openingSpan(wall: Wall, o: Opening): [number, number] {
-  const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
+  const len = wallLength(wall);
   const half = o.width / 2 / Math.max(len, 1e-9);
   return [o.t - half, o.t + half];
 }
 
+/** One leaf of a door as it swings: its hinge, where its tip is shut and open, and its radius. */
+export interface DoorLeaf {
+  readonly hinge: Pt;
+  readonly shut: Pt;
+  readonly open: Pt;
+  readonly r: number;
+}
+
+/**
+ * A door's leaves, hinged `face` metres off the centreline on the side it swings to (half the
+ * wall's thickness: its face). A leaf is straight, a chord's length, and swings square to the
+ * vano's chord, to the door's side (walking from A to B, right is the +y side of the chord's
+ * frame); a door wider than DOUBLE_DOOR_CLEAR is a pair, one leaf on each jamb. What the plan
+ * draws and what the checker tests two doors' swings with.
+ */
+export function doorLeaves(wall: Wall, o: Opening, face: number = wall.thickness / 2): DoorLeaf[] {
+  const [t0, t1] = openingSpan(wall, o);
+  const p0 = wallPointAt(wall, t0);
+  const p1 = wallPointAt(wall, t1);
+  const s = (o.side ?? DOOR_SWING_DEFAULTS.side) === "right" ? 1 : -1;
+  const chord = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1;
+  const nx = (-(p1.y - p0.y) / chord) * s;
+  const ny = ((p1.x - p0.x) / chord) * s;
+  const tm = (t0 + t1) / 2;
+  const spans: { hinge: number; to: number }[] =
+    (t1 - t0) * wallLength(wall) > DOUBLE_DOOR_CLEAR ? [{ hinge: t0, to: tm }, { hinge: t1, to: tm }] : (o.hinge ?? DOOR_SWING_DEFAULTS.hinge) === "b" ? [{ hinge: t1, to: t0 }] : [{ hinge: t0, to: t1 }];
+  return spans.map(({ hinge, to }) => {
+    const from = wallPointAt(wall, hinge);
+    const u = wallTangentAt(wall, hinge);
+    const h = { x: from.x - u.y * s * face, y: from.y + u.x * s * face };
+    const closed = wallPointAt(wall, to);
+    const r = Math.hypot(closed.x - from.x, closed.y - from.y);
+    // shut, the leaf lies along the chord from its hinge; open, square to it
+    return { hinge: h, shut: { x: h.x + (closed.x - from.x), y: h.y + (closed.y - from.y) }, open: { x: h.x + nx * r, y: h.y + ny * r }, r };
+  });
+}
+
+/** The floor a door leaf sweeps, as a polygon: its hinge and the arc from open to shut. */
+function leafSweep(leaf: DoorLeaf): Pt[] {
+  const a0 = Math.atan2(leaf.open.y - leaf.hinge.y, leaf.open.x - leaf.hinge.x);
+  const a1 = Math.atan2(leaf.shut.y - leaf.hinge.y, leaf.shut.x - leaf.hinge.x);
+  const turn = Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0));
+  const n = Math.max(2, Math.ceil(Math.abs(turn) / ((ARC_TESSELLATION.maxAngle * Math.PI) / 180)));
+  const pts: Pt[] = [leaf.hinge];
+  for (let i = 0; i <= n; i++) {
+    const a = a0 + (turn * i) / n;
+    pts.push({ x: leaf.hinge.x + leaf.r * Math.cos(a), y: leaf.hinge.y + leaf.r * Math.sin(a) });
+  }
+  return pts;
+}
+
 /** Clamp an opening's t so the whole vano stays inside the wall. Returns null if the wall is too short. */
 export function clampOpeningT(wall: Wall, width: number, t: number): number | null {
-  const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
+  const len = wallLength(wall);
   if (width > len - 0.02) return null;
   const half = width / 2 / len;
   const lo = half;
   const hi = 1 - half;
   return Math.min(hi, Math.max(lo, t));
+}
+
+/**
+ * Why an opening `width` wide cannot sit on this wall's arc, or null: a door's leaf and a
+ * window's pane are straight, across the vano's chord, and that chord must stay inside the wall
+ * (its sag off the arc under half the thickness). Always null on a straight wall.
+ */
+export function openingArcError(wall: Wall, width: number, kind: OpeningKind): string | null {
+  const sag = openingSag(wall, width);
+  if (sag <= wall.thickness / 2 + 1e-9) return null;
+  return `A ${width.toFixed(2)} m ${kind} is too wide for the bend of curved wall ${wall.id}: its straight ${kind === "door" ? "leaf" : "pane"} would stand ${(sag * 100).toFixed(1)} cm off the arc, past the wall's half thickness (${((wall.thickness / 2) * 100).toFixed(1)} cm). Make it narrower, the wall thicker, or the bend gentler.`;
 }
 
 // ---------------------------------------------------------------------------- context
@@ -68,9 +153,13 @@ export interface WallShape {
   readonly wall: Wall;
   readonly a: Pt;
   readonly b: Pt;
-  /** bounds of the centreline segment */
+  /** its centreline, straight or an arc */
+  readonly edge: Edge;
+  /** bounds of the centreline */
   readonly segBox: Box;
-  /** bounds of the wall as a thick rectangle */
+  /** the wall as thick rectangles: one for a straight wall, one per piece of a curved one */
+  readonly pieces: readonly ORect[];
+  /** bounds of the wall's thickness */
   readonly box: Box;
 }
 
@@ -127,7 +216,10 @@ function clearanceOf(wall: Wall, o: Opening, center: Pt): ORect {
     cy: center.y,
     hw: o.width / 2 + DOOR_CLEAR,
     hd: wall.thickness / 2 + (o.kind === "door" ? 0.8 : 0.4),
-    rot: Math.atan2(wall.by - wall.ay, wall.bx - wall.ax),
+    rot: (() => {
+      const u = wallTangentAt(wall, o.t);
+      return Math.atan2(u.y, u.x);
+    })(),
   };
 }
 
@@ -143,15 +235,9 @@ export function checkContext(model: PlanModel, plan: PlanModel = model, levelId:
   const wallById = new Map(model.walls.map((w) => [w.id, w]));
   const catalog = catalogOf(model);
   const walls = model.walls.map((wall): WallShape => {
-    const a = wA(wall);
-    const b = wB(wall);
-    return {
-      wall,
-      a,
-      b,
-      segBox: boxOf([a, b]),
-      box: boxOf(rectCorners(wallAsRect(wall.ax, wall.ay, wall.bx, wall.by, wall.thickness))),
-    };
+    const edge = wallEdge(wall);
+    const pieces = wallPieces(wall);
+    return { wall, a: edge.a, b: edge.b, edge, segBox: edgeBox(edge), pieces, box: boxOf(pieces.flatMap(rectCorners)) };
   });
   const hosted: HostedOpening[] = [];
   const hostedOn = new Map<string, HostedOpening[]>();
@@ -184,13 +270,14 @@ export function checkContext(model: PlanModel, plan: PlanModel = model, levelId:
   return { model, plan, level, above, stairs, wells, wallById, catalog, walls, hosted, hostedOn, placed };
 }
 
-/** The four edges of a room, clockwise from its top-left corner. */
-const roomEdges = (r: Room): [Pt, Pt][] => [
-  [{ x: r.x, y: r.y }, { x: r.x + r.w, y: r.y }],
-  [{ x: r.x + r.w, y: r.y }, { x: r.x + r.w, y: r.y + r.h }],
-  [{ x: r.x + r.w, y: r.y + r.h }, { x: r.x, y: r.y + r.h }],
-  [{ x: r.x, y: r.y + r.h }, { x: r.x, y: r.y }],
-];
+/** The edges of a room's outline, straight or arcs. */
+const roomEdges = (r: Room): Edge[] => outlineEdges(r.points);
+
+/** Is p in the room, or within `tol` of its edge? */
+const inRoomNear = (r: Room, p: Pt, tol: number): boolean => pointInOutline(p, r.points) || outlineDistance(p, r.points) <= tol;
+
+/** Do the wall's thick pieces overlap the oriented rectangle (touching within `eps` does not count)? */
+const wallHits = (s: WallShape, rect: ORect, eps: number): boolean => s.pieces.some((piece) => satRectRect(rect, piece, eps));
 
 // ---------------------------------------------------------------------------- walls
 
@@ -219,6 +306,11 @@ export const wallIntersections: Rule = ({ walls }) => {
       if (boxesApart(sa.segBox, sb.segBox)) continue;
       const a = sa.wall;
       const b = sb.wall;
+      if (isCurved(a) || isCurved(b)) {
+        const crossing = curvedCrossing(sa, sb);
+        if (crossing) issues.push(crossing);
+        continue;
+      }
       const ov = collinearOverlap(sa.a, sa.b, sb.a, sb.b);
       if (ov > 0.01) {
         issues.push({
@@ -240,6 +332,25 @@ export const wallIntersections: Rule = ({ walls }) => {
   return issues;
 };
 
+/** Two walls at least one of which is curved: one running along the other, or crossing it away from every end. */
+function curvedCrossing(sa: WallShape, sb: WallShape): Issue | null {
+  const a = sa.wall;
+  const b = sb.wall;
+  if (edgesOverlap(sa.edge, sb.edge, 0.01)) {
+    return { severity: "error", code: "walls_overlap_collinear", message: `Walls ${a.id} and ${b.id} run along each other.`, refs: [a.id, b.id] };
+  }
+  const ends = [sa.a, sa.b, sb.a, sb.b];
+  const crossing = edgeIntersections(sa.edge, sb.edge).some(({ p }) => ends.every((e) => dist(e, p) >= ENDPOINT_SNAP));
+  return crossing ? { severity: "error", code: "walls_cross", message: `Walls ${a.id} and ${b.id} cross mid-span.`, refs: [a.id, b.id] } : null;
+}
+
+/** A curved wall bent tighter than its thickness allows, or past a half circle. */
+export const wallArcTooTight: Rule = ({ model }) =>
+  model.walls.flatMap((w): Issue[] => {
+    const why = wallArcError(w);
+    return why ? [{ severity: "error", code: "wall_arc_too_tight", message: why, refs: [w.id] }] : [];
+  });
+
 /** An endpoint that touches nothing (T-junctions count as connected). */
 export const wallLooseEnds: Rule = ({ walls }) => {
   if (walls.length <= 1) return [];
@@ -251,7 +362,7 @@ export const wallLooseEnds: Rule = ({ walls }) => {
           other.wall.id !== w.id &&
           (dist(end, other.a) < ENDPOINT_SNAP ||
             dist(end, other.b) < ENDPOINT_SNAP ||
-            pointOnSeg(end, other.a, other.b, ENDPOINT_SNAP)),
+            wallDistance(end, other.wall) <= ENDPOINT_SNAP),
       );
       if (!connected) {
         issues.push({
@@ -287,10 +398,12 @@ export const openingFit: Rule = ({ hosted }) =>
       issues.push({
         severity: "error",
         code: "opening_overflow",
-        message: `${o.kind} ${o.id} extends past the end of wall ${wall.id}.`,
+        message: `${o.kind} ${o.id} extends past the end of ${isCurved(wall) ? "curved " : ""}wall ${wall.id}.`,
         refs: [o.id, wall.id],
       });
     }
+    const tight = openingArcError(wall, o.width, o.kind);
+    if (tight) issues.push({ severity: "error", code: "opening_too_wide_for_arc", message: tight, refs: [o.id, wall.id] });
     if (o.sill + o.height > wall.height + 1e-6) {
       issues.push({
         severity: "error",
@@ -326,15 +439,14 @@ export const openingsOverlap: Rule = ({ hosted, hostedOn }) => {
 export const wallEndsInOpening: Rule = ({ model: { walls }, hosted }) => {
   const issues: Issue[] = [];
   for (const { opening: o, wall, span: [t0, t1] } of hosted) {
-    const len = segLen(wall.ax, wall.ay, wall.bx, wall.by) || 1;
-    const dx = wall.bx - wall.ax;
-    const dy = wall.by - wall.ay;
+    const host = wallEdge(wall);
     for (const other of walls) {
       if (other.id === wall.id) continue;
       for (const end of [wA(other), wB(other)] as const) {
-        if (!pointOnSeg(end, wA(wall), wB(wall), 0.02)) continue;
         // param of the endpoint along the host wall
-        const t = ((end.x - wall.ax) * dx + (end.y - wall.ay) * dy) / (len * len);
+        const near = closestOnEdge(host, end);
+        if (near.distance > 0.02) continue;
+        const t = near.t;
         if (t > t0 + 0.01 && t < t1 - 0.01) {
           issues.push({
             severity: "error",
@@ -351,26 +463,47 @@ export const wallEndsInOpening: Rule = ({ model: { walls }, hosted }) => {
 
 // ---------------------------------------------------------------------------- rooms
 
+/** A room too small to be one: under ROOM_SHAPE.minArea, or narrower anywhere than ROOM_SIZE.min. */
 export const roomTooSmall: Rule = ({ model }) =>
   model.rooms
-    .filter((r) => r.w < ROOM_SIZE.min || r.h < ROOM_SIZE.min)
+    .filter((r) => {
+      if (r.points.length < 3) return false;
+      const area = Math.abs(outlineArea(r.points));
+      return area < ROOM_SHAPE.minArea - 1e-9 || outlineAnchor(r.points).clearance * 2 < ROOM_SIZE.min - ROOM_SHAPE.anchorPrecision;
+    })
     .map((r): Issue => ({
       severity: "error",
       code: "room_too_small",
-      message: `Room "${r.label}" is smaller than ${ROOM_SIZE.min} × ${ROOM_SIZE.min} m.`,
+      message: `Room "${r.label}" is smaller than ${ROOM_SIZE.min} × ${ROOM_SIZE.min} m: it must hold at least ${ROOM_SHAPE.minArea} m² and be ${ROOM_SIZE.min} m wide everywhere.`,
       refs: [r.id],
     }));
 
+/** A room's outline as an outline: enough corners, edges bent no further than a half circle, none too short, none crossing another. */
+export const roomOutline: Rule = ({ model }) =>
+  model.rooms.flatMap((r): Issue[] => {
+    const { vertices, minEdge } = ROOM_SHAPE;
+    if (r.points.length < vertices.min || r.points.length > vertices.max || r.points.some((p) => p.bulge !== undefined && !(Math.abs(p.bulge) <= BULGE.max))) {
+      return [{ severity: "error", code: "room_outline_invalid", message: `Room "${r.label}" has ${r.points.length} corners or an edge bent past a half circle (allowed ${vertices.min}-${vertices.max} corners, each edge at most a half circle).`, refs: [r.id] }];
+    }
+    const issues: Issue[] = [];
+    const crossing = outlineSelfIntersection(r.points);
+    if (crossing) {
+      issues.push({ severity: "error", code: "room_self_intersecting", message: `Room "${r.label}" crosses itself: edges ${crossing[0]} and ${crossing[1]} of its outline cross or touch.`, refs: [r.id] });
+    }
+    roomEdges(r).forEach((e, i) => {
+      const len = edgeLength(e);
+      if (len < minEdge - 1e-9) {
+        issues.push({ severity: "error", code: "room_edge_too_short", message: `Edge ${i} of room "${r.label}" is ${(len * 100).toFixed(1)} cm long (min ${(minEdge * 100).toFixed(0)} cm).`, refs: [r.id] });
+      }
+    });
+    return issues;
+  });
+
 /** No wall near any corner of the room. */
-export const roomFloating: Rule = ({ model: { rooms, walls } }) => {
+export const roomFloating: Rule = ({ model: { rooms }, walls }) => {
   if (walls.length === 0) return [];
   return rooms
-    .filter(
-      (r) =>
-        !roomEdges(r).some(([e0, e1]) =>
-          walls.some((w) => pointSegDist(e0, wA(w), wB(w)) < 0.25 || pointSegDist(e1, wA(w), wB(w)) < 0.25),
-        ),
-    )
+    .filter((r) => !r.points.some((p) => walls.some((s) => wallDistance(p, s.wall) < 0.25)))
     .map((r): Issue => ({
       severity: "warning",
       code: "room_floating",
@@ -386,7 +519,7 @@ export const roomNoDoor: Rule = ({ model: { rooms, openings }, hosted }) => {
   return rooms
     .filter((r) => {
       const edges = roomEdges(r);
-      return !doorCenters.some((c) => edges.some(([e0, e1]) => pointSegDist(c, e0, e1) < 0.3));
+      return !doorCenters.some((c) => edges.some((e) => closestOnEdge(e, c).distance < 0.3));
     })
     .map((r): Issue => ({
       severity: "warning",
@@ -396,16 +529,22 @@ export const roomNoDoor: Rule = ({ model: { rooms, openings }, hosted }) => {
     }));
 };
 
+/** Two rooms whose outlines share more than ROOM_SHAPE.overlap of floor (sharing an edge is not overlapping). */
 export const roomsOverlap: Rule = ({ model: { rooms } }) => {
   const issues: Issue[] = [];
-  for (let i = 0; i < rooms.length; i++) {
-    for (let j = i + 1; j < rooms.length; j++) {
-      if (aabbOverlap(rooms[i], rooms[j])) {
+  const shapes = rooms.map((r) => ({ r, box: outlineBox(r.points), poly: tessellateOutline(r.points) }));
+  for (let i = 0; i < shapes.length; i++) {
+    for (let j = i + 1; j < shapes.length; j++) {
+      const a = shapes[i];
+      const b = shapes[j];
+      if (boxesApart(a.box, b.box)) continue;
+      const shared = sharedArea(a.poly, b.poly);
+      if (shared > ROOM_SHAPE.overlap) {
         issues.push({
           severity: "error",
           code: "rooms_overlap",
-          message: `Rooms "${rooms[i].label}" and "${rooms[j].label}" overlap.`,
-          refs: [rooms[i].id, rooms[j].id],
+          message: `Rooms "${a.r.label}" and "${b.r.label}" overlap (${shared.toFixed(2)} m² shared).`,
+          refs: [a.r.id, b.r.id],
         });
       }
     }
@@ -432,7 +571,7 @@ export const itemThroughWall: Rule = ({ walls, placed }) =>
   placed.flatMap(({ item, def, rect, box }) =>
     walls
       // tolerance 0.02: penetration up to 2 cm still counts as "leaning"
-      .filter((s) => !boxesApart(box, s.box) && satRectWall(rect, s.wall, 0.02))
+      .filter((s) => !boxesApart(box, s.box) && wallHits(s, rect, 0.02))
       .map(({ wall: w }): Issue => ({
         severity: "error",
         code: "item_through_wall",
@@ -467,6 +606,35 @@ export const itemBlocksOpening: Rule = ({ hosted, placed }) => {
   return issues;
 };
 
+/**
+ * Two doors whose leaves sweep the same floor: opened together they hit each other. Each pair is
+ * reported once; a pair of leaves of one door meets in its middle by design and is not tested.
+ */
+export const doorsSwingTogether: Rule = ({ hosted }) => {
+  const doors = hosted
+    .filter(({ opening: o }) => o.kind === "door")
+    .map(({ opening, wall }) => {
+      const sweeps = doorLeaves(wall, opening).map(leafSweep);
+      return { opening, sweeps, box: boxOf(sweeps.flat()) };
+    });
+  const issues: Issue[] = [];
+  for (let i = 0; i < doors.length; i++) {
+    for (let j = i + 1; j < doors.length; j++) {
+      const a = doors[i];
+      const b = doors[j];
+      if (boxesApart(a.box, b.box)) continue;
+      if (!a.sweeps.some((p) => b.sweeps.some((q) => sharedArea(p, q) > DOOR_SWINGS_TOUCH))) continue;
+      issues.push({
+        severity: "warning",
+        code: "doors_swing_together",
+        message: `Door ${a.opening.id} and door ${b.opening.id} swing into each other.`,
+        refs: [a.opening.id, b.opening.id],
+      });
+    }
+  }
+  return issues;
+};
+
 /** Two pieces of furniture on top of each other (rugs exempt). Each pair is reported once. */
 export const itemsOverlap: Rule = ({ placed }) => {
   const issues: Issue[] = [];
@@ -491,10 +659,7 @@ export const itemsOverlap: Rule = ({ placed }) => {
 export const itemOutsideRooms: Rule = ({ model: { rooms }, placed }) => {
   if (rooms.length === 0) return [];
   return placed
-    .filter(
-      ({ item: it }) =>
-        !rooms.some((rm) => it.x >= rm.x - 0.05 && it.x <= rm.x + rm.w + 0.05 && it.y >= rm.y - 0.05 && it.y <= rm.y + rm.h + 0.05),
-    )
+    .filter(({ item: it }) => !rooms.some((rm) => inRoomNear(rm, it, 0.05)))
     .map(({ item, def }): Issue => ({
       severity: "warning",
       code: "item_outside_rooms",
@@ -515,7 +680,7 @@ const anyOverlap = (rects: readonly ORect[], other: ORect, eps = 1e-9): boolean 
 
 /** Does wall `s` cross any of `rects`? A wall merely touching (2 cm) is a wall the stair stands against. */
 const wallCrosses = (s: WallShape, rects: readonly ORect[], box: Box): boolean =>
-  !boxesApart(s.box, box) && rects.some((r) => satRectWall(r, s.wall, 0.02));
+  !boxesApart(s.box, box) && rects.some((r) => wallHits(s, r, 0.02));
 
 /** A stair on the top level climbs to nothing. */
 export const stairNoUpperLevel: Rule = ({ stairs, above }) =>
@@ -628,7 +793,7 @@ export const stairwellOutsideRoom: Rule = ({ wells, model: { rooms } }) => {
   return wells
     .filter(({ geometry: g }) => {
       const corners = g.footprint.flatMap(rectCorners);
-      return !rooms.some((r) => corners.every((p) => p.x >= r.x - tol && p.x <= r.x + r.w + tol && p.y >= r.y - tol && p.y <= r.y + r.h + tol));
+      return !rooms.some((r) => corners.every((p) => inRoomNear(r, p, tol)));
     })
     .map(({ stair }): Issue => ({
       severity: "warning",
@@ -723,12 +888,14 @@ export const wallSlabFit: Rule = ({ model, level, above }) => {
 /** Every rule the checker runs, in the order their issues are reported. */
 export const RULES: readonly Rule[] = Object.freeze([
   wallTooShort,
+  wallArcTooTight,
   wallIntersections,
   wallLooseEnds,
   openingOrphan,
   openingFit,
   openingsOverlap,
   wallEndsInOpening,
+  roomOutline,
   roomTooSmall,
   roomFloating,
   roomNoDoor,
@@ -736,6 +903,7 @@ export const RULES: readonly Rule[] = Object.freeze([
   itemUnknown,
   itemThroughWall,
   itemBlocksOpening,
+  doorsSwingTogether,
   itemsOverlap,
   itemOutsideRooms,
   wallSlabFit,

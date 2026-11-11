@@ -10,9 +10,10 @@
  */
 
 import type { PlanModel } from "./types";
-import { rectCorners, wallAsRect } from "./geometry";
+import { rectCorners } from "./geometry";
 import { stairwellsOf } from "./levels";
-import { jointExtensions } from "./joints";
+import { wallFootprint } from "./joints";
+import { tessellateOutline } from "./shapes";
 import type { Poly } from "./region";
 
 /** The openings the stairs from the level below need in level `levelId`'s floor. */
@@ -21,23 +22,12 @@ export function stairwellPolys(model: PlanModel, levelId: string): Poly[] {
 }
 
 /**
- * What a level's slab covers: its rooms, and its walls to their joints. `slice` is the level's
+ * What a level's slab covers: its rooms' outlines, and its walls' footprints, mitred at their
+ * joints (joints.ts), arcs cut into pieces (limits.ts ARC_TESSELLATION). `slice` is the level's
  * slice (levels.ts levelSlice).
  */
 export function slabOutline(slice: Pick<PlanModel, "rooms" | "walls">): Poly[] {
-  const rooms = slice.rooms.map((r): Poly => [
-    { x: r.x, y: r.y },
-    { x: r.x + r.w, y: r.y },
-    { x: r.x + r.w, y: r.y + r.h },
-    { x: r.x, y: r.y + r.h },
-  ]);
-  const walls = slice.walls.flatMap((w): Poly[] => {
-    const len = Math.hypot(w.bx - w.ax, w.by - w.ay);
-    if (len === 0) return [];
-    const [extA, extB] = jointExtensions(w, slice.walls);
-    const ux = (w.bx - w.ax) / len;
-    const uy = (w.by - w.ay) / len;
-    return [rectCorners(wallAsRect(w.ax - ux * extA, w.ay - uy * extA, w.bx + ux * extB, w.by + uy * extB, w.thickness))];
-  });
+  const rooms = slice.rooms.map((r): Poly => tessellateOutline(r.points));
+  const walls = slice.walls.flatMap((w): Poly[] => (Math.hypot(w.bx - w.ax, w.by - w.ay) === 0 ? [] : [tessellateOutline(wallFootprint(w, slice.walls).outline)]));
   return [...rooms, ...walls];
 }

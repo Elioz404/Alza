@@ -25,8 +25,10 @@ export function HintBar() {
   const spacePan = useCanvas((s) => s.spacePan);
   const openingFits = useCanvas((s) => s.openingFits);
   const stairRotation = useCanvas((s) => s.stairRotation);
+  const roomDraft = useCanvas((s) => s.roomDraft);
+  const roomCursor = useCanvas((s) => s.roomCursor);
   if (editor.view !== "2d") return null;
-  const hint = hintFor({ editor, model, levelId, tool, spacePan, openingFits, stairRotation });
+  const hint = hintFor({ editor, model, levelId, tool, spacePan, openingFits, stairRotation, roomDraft, roomCursor });
 
   return (
     <div className="hint" role="status" aria-live="polite">

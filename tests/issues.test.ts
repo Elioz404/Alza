@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { checkModel, clampOpeningT } from "../src/model/issues";
 import { emptyModel, type PlanModel } from "../src/model/types";
 import { seedLoft } from "../src/model/seed";
+import { rectOutline } from "../src/model/shapes";
 
 const base = (): PlanModel => emptyModel();
 
@@ -94,8 +95,8 @@ describe("room rules", () => {
   it("flags overlapping rooms", () => {
     const m = base();
     m.rooms.push(
-      { id: "r1", levelId: "level_ground", x: 0, y: 0, w: 3, h: 3, label: "A", floor: "oak" },
-      { id: "r2", levelId: "level_ground", x: 2, y: 2, w: 3, h: 3, label: "B", floor: "oak" },
+      { id: "r1", levelId: "level_ground", points: rectOutline(0, 0, 3, 3), label: "A", floor: "oak" },
+      { id: "r2", levelId: "level_ground", points: rectOutline(2, 2, 3, 3), label: "B", floor: "oak" },
     );
     expect(checkModel(m).some((i) => i.code === "rooms_overlap")).toBe(true);
   });
@@ -103,7 +104,7 @@ describe("room rules", () => {
   it("flags floating rooms", () => {
     const m = base();
     m.walls.push({ id: "w1", levelId: "level_ground", ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.15, height: 2.7 });
-    m.rooms.push({ id: "r1", levelId: "level_ground", x: 10, y: 10, w: 3, h: 3, label: "Far", floor: "oak" });
+    m.rooms.push({ id: "r1", levelId: "level_ground", points: rectOutline(10, 10, 3, 3), label: "Far", floor: "oak" });
     expect(checkModel(m).some((i) => i.code === "room_floating")).toBe(true);
   });
 });
@@ -127,6 +128,34 @@ describe("furniture rules", () => {
     m.openings.push({ id: "o1", kind: "door", wallId: "w1", t: 0.5, width: 0.9, sill: 0, height: 2.1 });
     m.items.push({ id: "i1", levelId: "level_ground", kind: "sofa", x: 2, y: 0.6, rotation: 0 });
     expect(checkModel(m).some((i) => i.code === "item_blocks_door")).toBe(true);
+  });
+
+  it("flags two doors whose leaves swing into each other, and not two that clear each other or a pair's own leaves", () => {
+    // an L of walls: a door near the corner on each, both swinging into the corner
+    const m = base();
+    m.walls.push(
+      { id: "w1", levelId: "level_ground", ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.1, height: 2.7 },
+      { id: "w2", levelId: "level_ground", ax: 0, ay: 0, bx: 0, by: 4, thickness: 0.1, height: 2.7 },
+    );
+    // w1's door hinges at x 0.6 and swings +y; w2's hinges at y 0.6 and swings +x (to the left of A→B)
+    m.openings.push(
+      { id: "d1", kind: "door", wallId: "w1", t: 1.05 / 4, width: 0.9, sill: 0, height: 2.1, hinge: "a", side: "right" },
+      { id: "d2", kind: "door", wallId: "w2", t: 1.05 / 4, width: 0.9, sill: 0, height: 2.1, hinge: "a", side: "left" },
+    );
+    const found = checkModel(m).filter((i) => i.code === "doors_swing_together");
+    expect(found).toHaveLength(1);
+    expect(found[0].refs).toEqual(["d1", "d2"]);
+    // moved along, its swing clears the other's
+    m.openings[1] = { ...m.openings[1], t: 2.2 / 4 };
+    expect(checkModel(m).some((i) => i.code === "doors_swing_together")).toBe(false);
+    // swinging the other way, out of the corner, they clear too
+    m.openings[1] = { ...m.openings[1], t: 1.05 / 4, side: "right" };
+    expect(checkModel(m).some((i) => i.code === "doors_swing_together")).toBe(false);
+    // a pair of leaves meets in its own middle by design
+    const pair = base();
+    pair.walls.push({ id: "w1", levelId: "level_ground", ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.1, height: 2.7 });
+    pair.openings.push({ id: "d1", kind: "door", wallId: "w1", t: 0.5, width: 1.6, sill: 0, height: 2.1 });
+    expect(checkModel(pair).some((i) => i.code === "doors_swing_together")).toBe(false);
   });
 
   it("rugs are exempt from furniture overlap", () => {

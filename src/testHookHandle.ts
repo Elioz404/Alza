@@ -17,6 +17,8 @@ export const testHookHandle = () => ({
   presence,
   actions,
   runTool: (name: string, input: unknown) => runTool(name, input, "agent"),
+  /** The free-shapes demo plan, fetched as the plan menu fetches it (model/demoCrescent.ts). */
+  seedCrescent: () => import("./model/demoCrescent").then((m) => m.seedCrescent()),
   /**
    * Hold an image given as a data: URL and return the asset id an underlay refers to it by.
    * The hook holds it until releaseImage; from then on the plans that name it keep it.

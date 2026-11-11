@@ -5,6 +5,7 @@
  * plan, shared by the inspector and the issues list so both call a thing by the same name.
  */
 
+import { outlineDistance, pointInOutline, roomArea, wallLength as alongWall, wallPointAt } from "../../model/shapes";
 import { catalogOf } from "../../model/catalog";
 import { activeLevelId, pageActions, store } from "../../model/store";
 import { EVENTS } from "../../model/sceneBus";
@@ -33,7 +34,11 @@ export const degrees = (deg: number): string => `${Number(deg.toFixed(1))}°`;
 
 // ---------------------------------------------------------------------------- walls
 
-export const wallLength = (w: Wall): number => Math.hypot(w.bx - w.ax, w.by - w.ay);
+/** A wall's length along it: a curved wall's arc, what its openings are placed and sized along. */
+export const wallLength = (w: Wall): number => alongWall(w);
+
+/** The straight distance between a wall's ends: its length when it is straight, its chord when it is curved. */
+export const wallChord = (w: Wall): number => Math.hypot(w.bx - w.ax, w.by - w.ay);
 
 /**
  * The wall's direction from its start to its end, in degrees counterclockwise from east as
@@ -54,21 +59,18 @@ export function wallEndFor(w: Wall, length: number, angle: number): { bx: number
 export const wallName = (model: Pick<PlanModel, "walls">, w: Wall): string => `Wall ${model.walls.indexOf(w) + 1}`;
 
 /** How far a point is from a room's outline (0 on it, positive inside or outside). */
-function distanceToOutline(r: Room, x: number, y: number): number {
-  const inside = x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
-  if (inside) return Math.min(x - r.x, r.x + r.w - x, y - r.y, r.y + r.h - y);
-  const dx = Math.max(r.x - x, 0, x - (r.x + r.w));
-  const dy = Math.max(r.y - y, 0, y - (r.y + r.h));
-  return Math.hypot(dx, dy);
-}
+const distanceToOutline = (r: Room, x: number, y: number): number => outlineDistance({ x, y }, r.points);
 
-/** The rooms whose outline this wall runs along, by its midpoint, named in plan order. */
+/**
+ * The rooms of the wall's own level whose outline it runs along, by its middle (along its arc, on
+ * a curved wall), named in plan order: a room straight above or below on another storey is not
+ * along it.
+ */
 export function roomsAlong(model: Pick<PlanModel, "rooms">, w: Wall): Room[] {
-  const mx = (w.ax + w.bx) / 2;
-  const my = (w.ay + w.by) / 2;
+  const { x: mx, y: my } = wallPointAt(w, 0.5);
   // half the wall's thickness either side of the outline, plus a hand's width of drawing slack
   const reach = w.thickness / 2 + w.thickness;
-  return model.rooms.filter((r) => distanceToOutline(r, mx, my) <= reach);
+  return model.rooms.filter((r) => r.levelId === w.levelId && distanceToOutline(r, mx, my) <= reach);
 }
 
 /** "Between Bedroom and Bathroom", "Along Bedroom", or null when it bounds no room. */
@@ -96,12 +98,12 @@ export const openingTFor = (wall: Wall, o: Opening, offset: number): number => (
 
 // ---------------------------------------------------------------------------- rooms and items
 
-export const roomArea = (r: Room): number => r.w * r.h;
+export { roomArea };
 
-/** The smallest room the point lies in, if any. */
+/** The smallest room the point lies in (or on the edge of), if any. */
 export function roomAt(model: Pick<PlanModel, "rooms">, x: number, y: number): Room | undefined {
   return model.rooms
-    .filter((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h)
+    .filter((r) => pointInOutline({ x, y }, r.points) || outlineDistance({ x, y }, r.points) < 1e-9)
     .sort((a, b) => roomArea(a) - roomArea(b))[0];
 }
 

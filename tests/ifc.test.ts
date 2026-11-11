@@ -14,14 +14,16 @@ import { migratePlan } from "../src/model/planFormat";
 import { stairGeometry } from "../src/model/stairs";
 import { piecesArea, regionPieces, type Poly } from "../src/model/region";
 import { slabOutline } from "../src/model/floors";
-import { FLOOR_FINISH_DEPTH, GROUND_LEVEL_ID, SLAB_THICKNESS, SUPPLIER, TEXT } from "../src/model/limits";
-import { slabUnderside } from "../src/model/levels";
+import { FLOOR_FINISH_DEPTH, GROUND_LEVEL_ID, SLAB_THICKNESS, STRAIGHT_SAGITTA, SUPPLIER, TEXT } from "../src/model/limits";
+import { elevationOf, slabUnderside } from "../src/model/levels";
 import { supplierKind } from "../src/model/catalog";
 import type { Opening, PlanModel } from "../src/model/types";
-import { checkIfc, decodeStepString, readStep, type IfcCheck, type StepEntity, type StepValue } from "./support/ifcCheck";
+import { checkIfc, curveMeasure, curvePoints, decodeStepString, readStep, type IfcCheck, type StepEntity, type StepValue } from "./support/ifcCheck";
 import { store, pageActions } from "../src/model/store";
 import { runTool } from "../src/mcp/tools";
 import { resetStore, flush } from "./support/store";
+import { isCurved, outlineAnchor, outlineBounds, outlinePerimeter, outlineRect, rectOutline, roomArea, wallArc, wallLength, wallPointAt } from "../src/model/shapes";
+import { seedCrescent, CRESCENT_FIRST_LEVEL_ID } from "../src/model/demoCrescent";
 
 /** a moment in local time: the header writes the local date and time */
 const NOW = new Date(2026, 10, 10, 9, 30, 0);
@@ -117,7 +119,8 @@ interface Solid {
   z0: number;
   z1: number;
 }
-function solidsOf(c: IfcCheck, product: StepEntity): Solid[] {
+/** `step`: the angle an arc of an indexed curve is cut at, radians (curvePoints). */
+function solidsOf(c: IfcCheck, product: StepEntity, step?: number): Solid[] {
   const frame = frameOf(c, product);
   const shape = c.deref(c.attr(product, "Representation"));
   if (!shape) return [];
@@ -138,8 +141,8 @@ function solidsOf(c: IfcCheck, product: StepEntity): Solid[] {
       const hy = (get(c, profile, "YDim") as number) / 2;
       local = [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]].map(([x, y]) => [cx + x * Math.cos(a) - y * Math.sin(a), cy + x * Math.sin(a) + y * Math.cos(a)]);
     } else {
-      const curve = c.deref(c.attr(profile, "OuterCurve"))!;
-      local = refs(curve.attrs[0]).map((p) => numbers(c, p) as [number, number]).slice(0, -1);
+      // a polyline, or an indexed curve with arcs (cut into degrees by the checker)
+      local = curvePoints(c, c.deref(c.attr(profile, "OuterCurve"))!, step);
     }
     const outline = local.map(([x, y]) => {
       const w = compose(at, x, y, 0, 0);
@@ -638,8 +641,10 @@ describe("IFC export of what plans can hold", () => {
       ["wall thickness -0.1", (p) => (p.walls[0] = { ...p.walls[0], thickness: -0.1 }), /wall wall_n: thickness/],
       ["wall height 0", (p) => (p.walls[0] = { ...p.walls[0], height: 0 }), /wall wall_n: height/],
       ["opening width 0", (p) => (p.openings[0] = { ...p.openings[0], width: 0 }), /door door_main: width/],
-      ["room width 0", (p) => (p.rooms[0] = { ...p.rooms[0], w: 0 }), /room room_living: w /],
-      ["room width -3", (p) => (p.rooms[0] = { ...p.rooms[0], w: -3 }), /room room_living: w /],
+      ["room width 0", (p) => (p.rooms[0] = { ...p.rooms[0], points: rectOutline(0, 0, 0, 3) }), /room room_living: width /],
+      ["a room corner at 1e22", (p) => (p.rooms[0] = { ...p.rooms[0], points: rectOutline(0, 0, 1e22, 3) }), /room room_living: points\.1\.x /],
+      ["a room edge bent past a half circle", (p) => (p.rooms[0] = { ...p.rooms[0], points: [{ x: 0, y: 0, bulge: 2 }, { x: 3, y: 0 }, { x: 3, y: 3 }] }), /room room_living: points\.0\.bulge /],
+      ["a wall bent past a half circle", (p) => (p.walls[0] = { ...p.walls[0], bulge: -1.5 }), /wall wall_n: bulge /],
       ["level height 0.1", (p) => (p.levels[0] = { ...p.levels[0], height: 0.1 }), /level level_ground: height/],
       ["a coordinate of 1e22", (p) => (p.walls[0] = { ...p.walls[0], bx: 1e22 }), /wall wall_n: bx/],
     ];
@@ -671,7 +676,7 @@ describe("IFC export of what plans can hold", () => {
       delete copy.levelId;
       return copy;
     };
-    const v1 = { name: loft.name, walls: loft.walls.map(unlevelled), openings: loft.openings, rooms: loft.rooms.map(unlevelled), items: loft.items.map(unlevelled), kinds: [], underlay: null };
+    const v1 = { name: loft.name, walls: loft.walls.map(unlevelled), openings: loft.openings, rooms: loft.rooms.map(({ points, ...r }) => unlevelled({ ...r, ...outlineBounds(points) })), items: loft.items.map(unlevelled), kinds: [], underlay: null };
     const migrated = migratePlan(v1);
     expect(migrated.ok).toBe(true);
     if (!migrated.ok) return;
@@ -749,6 +754,218 @@ describe("IFC export of what plans can hold", () => {
   });
 });
 
+// ---------------------------------------------------------------------------- free shapes
+
+describe("IFC export of free shapes: the Crescent House", () => {
+  const house = seedCrescent();
+  const c = exported(house);
+  const curved = house.walls.filter((w) => isCurved(w));
+  /** a representation of a product, by identifier */
+  const representation = (e: StepEntity, id: string): StepEntity | undefined => {
+    const shape = c.deref(c.attr(e, "Representation"));
+    return shape ? refs(shape.attrs[2]).map((r) => c.deref(r)!).find((rep) => get(c, rep, "RepresentationIdentifier") === id) : undefined;
+  };
+  /** the curve a representation holds, or the outer curve of the profile its one solid rises from */
+  const curveOf = (rep: StepEntity): StepEntity => {
+    const item = c.deref(refs(c.attr(rep, "Items"))[0])!;
+    return item.type === "IFCEXTRUDEDAREASOLID" ? c.deref(c.attr(c.deref(c.attr(item, "SweptArea"))!, "OuterCurve"))! : item;
+  };
+  const arcsIn = (curve: StepEntity) => (curve.type === "IFCINDEXEDPOLYCURVE" ? refs(curve.attrs[1]).filter((s) => s.t === "typed" && s.type === "IFCARCINDEX").length : 0);
+  /** whether plan point p is inside an outline (even-odd: any outline, convex or not) */
+  const within = (outline: Poly, x: number, y: number) => {
+    let inside = false;
+    for (let i = 0, j = outline.length - 1; i < outline.length; j = i++) {
+      const a = outline[j];
+      const b = outline[i];
+      if (b.y > y !== a.y > y && x < ((a.x - b.x) * (y - b.y)) / (a.y - b.y) + b.x) inside = !inside;
+    }
+    return inside;
+  };
+
+  it("writes the curves the export may write, well formed: the checker finds nothing", () => {
+    // exported() has checked it; the curves are there, and a broken one is caught
+    expect(all(c, "IFCINDEXEDPOLYCURVE").length).toBeGreaterThan(0);
+    expect(all(c, "IFCCARTESIANPOINTLIST2D")).toHaveLength(all(c, "IFCINDEXEDPOLYCURVE").length);
+    const text = writeIfc(house, { now: NOW }).text;
+    expect(checkIfc(text.replace(/IFCARCINDEX\(\((\d+),(\d+),(\d+)\)\)/, "IFCARCINDEX(($1,$2))")).errors.join()).toMatch(/IFCARCINDEX of 2 points/);
+    expect(checkIfc(text.replace(/IFCLINEINDEX\(\((\d+),(\d+)\)\)/, "IFCLINEINDEX(($1,999))")).errors.join()).toMatch(/indexes past/);
+  });
+
+  it("gives each curved wall its arc as its Axis, as long as the wall along its centreline", () => {
+    expect(curved.length).toBeGreaterThan(0);
+    for (const w of curved) {
+      const e = byTag(c, "IFCWALL", w.id);
+      const axis = curveOf(representation(e, "Axis")!);
+      expect(axis.type, w.id).toBe("IFCINDEXEDPOLYCURVE");
+      expect(arcsIn(axis), w.id).toBe(1);
+      expect(curveMeasure(c, axis).length, w.id).toBeCloseTo(wallLength(w), 6);
+      // the arc in the world passes through the wall's two ends and its middle
+      const pts = curvePoints(c, axis);
+      const frame = frameOf(c, e);
+      const world = (q: [number, number]) => {
+        const p = compose(frame, q[0], q[1], 0, 0);
+        return onPlan(p.x, p.y);
+      };
+      const [x0, y0] = world(pts[0]);
+      const [x1, y1] = world(pts[pts.length - 1]);
+      expect([x0, y0, x1, y1].map((v) => Math.round(v * 1e6) / 1e6), w.id).toEqual([w.ax, w.ay, w.bx, w.by]);
+      const mid = wallPointAt(w, 0.5);
+      expect(pts.some((q) => Math.hypot(world(q)[0] - mid.x, world(q)[1] - mid.y) < 1e-6), w.id).toBe(true);
+    }
+  });
+
+  it("extrudes each curved wall from its curved outline: its faces concentric arcs, its area its thickness by its length", () => {
+    for (const w of curved) {
+      const e = byTag(c, "IFCWALL", w.id);
+      const profile = curveOf(representation(e, "Body")!);
+      expect(arcsIn(profile), w.id).toBe(2);
+      const q = propertiesOf(c, e, "Qto_WallBaseQuantities")!;
+      const { area } = curveMeasure(c, profile);
+      // an annular sector is its width times its centreline's length; its ends, cut along the faces they meet,
+      // add or take a sliver no wider than the wall
+      expect(Math.abs(area - w.thickness * (q.Length as number)), w.id).toBeLessThan(w.thickness * w.thickness);
+      expect(q.GrossFootprintArea as number, w.id).toBeCloseTo(area, 6);
+      expect(q.GrossVolume as number, w.id).toBeCloseTo(area * w.height, 5);
+      // the faces stand half the thickness either side of the arc at its middle
+      const [solid] = solidsOf(c, e);
+      const arc = wallArc(w)!;
+      const m = wallPointAt(w, 0.5);
+      const out = { x: (m.x - arc.center.x) / arc.radius, y: (m.y - arc.center.y) / arc.radius };
+      for (const [d, inside] of [
+        [0, true],
+        [w.thickness / 2 - 0.005, true],
+        [-(w.thickness / 2 - 0.005), true],
+        [w.thickness / 2 + 0.005, false],
+        [-(w.thickness / 2 + 0.005), false],
+      ] as const) {
+        expect(within(solid.outline, m.x + out.x * d, m.y + out.y * d), `${w.id} at ${d}`).toBe(inside);
+      }
+    }
+  });
+
+  // a heavy check: every pair of walls' bodies intersected, their arcs read to a tenth of a degree
+  it("butt-joints curved and straight walls alike, at any angle: corners filled, no two bodies overlapping", () => {
+    const level = (id: string) => all(c, "IFCWALL").filter((e) => house.walls.find((w) => w.id === get(c, e, "Tag"))!.levelId === id);
+    for (const levelId of [GROUND_LEVEL_ID, CRESCENT_FIRST_LEVEL_ID]) {
+      const walls = level(levelId);
+      // arcs read finely (a tenth of a degree): where an arc cap meets an arc face, the slivers between their chords are far under a square millimetre
+      const outlines = walls.map((w) => solidsOf(c, w, Math.PI / 1800)[0].outline);
+      const boxes = outlines.map((o) => [Math.min(...o.map((p) => p.x)), Math.max(...o.map((p) => p.x)), Math.min(...o.map((p) => p.y)), Math.max(...o.map((p) => p.y))]);
+      const apart = (i: number, j: number) => boxes[i][0] > boxes[j][1] || boxes[j][0] > boxes[i][1] || boxes[i][2] > boxes[j][3] || boxes[j][2] > boxes[i][3];
+      for (let i = 0; i < walls.length; i++)
+        for (let j = i + 1; j < walls.length; j++) {
+          if (apart(i, j)) continue;
+          expect(overlap(outlines[i], outlines[j]), `${get(c, walls[i], "Tag")} × ${get(c, walls[j], "Tag")}`).toBeLessThan(1e-6);
+        }
+    }
+    // the curved facade's two ends, and the 60° and 120° corners of the guest wing, are each filled
+    const W_ = house.walls;
+    const end = (id: string, e: "a" | "b") => {
+      const w = W_.find((x) => x.id === id)!;
+      return e === "a" ? [w.ax, w.ay] : [w.bx, w.by];
+    };
+    for (const [id, e] of [["g_facade", "a"], ["g_facade", "b"], ["g_wing_n", "a"], ["g_wing_s", "b"], ["g_wing_end", "a"]] as const) {
+      const [x, y] = end(id, e);
+      expect(all(c, "IFCWALL").filter((wall) => solidsOf(c, wall).some((sd) => within(sd.outline, x, y))).length, `${id}.${e}`).toBeGreaterThanOrEqual(1);
+    }
+  }, 30_000);
+
+  it("butt-joints straight walls meeting at 30, 45 and 60 degrees: each end cut along the face it meets, exactly", () => {
+    for (const angle of [30, 45, 60]) {
+      const r = (angle * Math.PI) / 180;
+      const plan = seedLoft();
+      const wall = (id: string, ax: number, ay: number, bx: number, by: number) => ({ id, levelId: GROUND_LEVEL_ID, ax, ay, bx, by, thickness: 0.2, height: 2.7 });
+      // an L at the angle, and a stem meeting the long wall mid-span at the angle (a T)
+      plan.walls = [wall("long", 0, 0, 6, 0), wall("leg", 0, 0, 4 * Math.cos(r), 4 * Math.sin(r)), wall("stem", 3, 0, 3 + 3 * Math.cos(r), 3 * Math.sin(r))];
+      plan.openings = [];
+      plan.rooms = [];
+      plan.items = [];
+      const k = exported(plan);
+      const walls = all(k, "IFCWALL");
+      const outlines = walls.map((w) => solidsOf(k, w)[0].outline);
+      for (let i = 0; i < walls.length; i++)
+        for (let j = i + 1; j < walls.length; j++) expect(overlap(outlines[i], outlines[j]), `${angle}°: ${get(k, walls[i], "Tag")} × ${get(k, walls[j], "Tag")}`).toBeLessThan(1e-6);
+      // the L's outer corner, where the two outer faces meet, is filled; the stem's two faces end on the long wall's face
+      const outer = { x: -0.1 / Math.tan(r / 2), y: -0.1 };
+      const probe = { x: outer.x + Math.cos(r / 2) * 0.01, y: outer.y + Math.sin(r / 2) * 0.01 };
+      expect(walls.filter((w) => solidsOf(k, w).some((s) => inside(s, probe.x, probe.y, 1))).length, `${angle}°`).toBe(1);
+      const stem = outlines[walls.findIndex((w) => get(k, w, "Tag") === "stem")];
+      expect(stem.filter((p) => Math.abs(p.y - 0.1) < 1e-6).length, `${angle}°`).toBe(2);
+    }
+  });
+
+  it("puts every opening in a curved wall on its arc: across its chord, its void between the two radial cuts", () => {
+    const onArcs = house.openings.filter((o) => curved.some((w) => w.id === o.wallId));
+    expect(onArcs.some((o) => o.kind === "door")).toBe(true);
+    for (const o of onArcs) {
+      const w = house.walls.find((x) => x.id === o.wallId)!;
+      const half = o.width / 2 / wallLength(w);
+      const a = wallPointAt(w, o.t - half);
+      const b = wallPointAt(w, o.t + half);
+      const chord = Math.hypot(b.x - a.x, b.y - a.y);
+      const fill = byTag(c, o.kind === "door" ? "IFCDOOR" : "IFCWINDOW", o.id);
+      expect(get(c, fill, "OverallWidth") as number, o.id).toBeCloseTo(chord, 6);
+      // the void's frame stands on the chord's middle, its x axis along the chord
+      const v = byTag(c, "IFCOPENINGELEMENT", o.id);
+      const f = frameOf(c, v);
+      const [px, py] = onPlan(f.x, f.y);
+      expect(Math.hypot(px - (a.x + b.x) / 2, py - (a.y + b.y) / 2), o.id).toBeLessThan(1e-6);
+      expect(Math.abs(Math.sin(f.angle - Math.atan2(-(b.y - a.y), b.x - a.x))), o.id).toBeLessThan(1e-6);
+      expect(f.z, o.id).toBeCloseTo(elevationOf(house, w.levelId) + o.sill, 9);
+      // it cuts right through the wall at the arc's middle, and stops at the radial cuts
+      const [solid] = solidsOf(c, v);
+      const arc = wallArc(w)!;
+      const radial = (t: number, d: number) => {
+        const p = wallPointAt(w, t);
+        return [p.x + ((p.x - arc.center.x) / arc.radius) * d, p.y + ((p.y - arc.center.y) / arc.radius) * d] as const;
+      };
+      for (const d of [0, w.thickness / 2 + 0.01, -(w.thickness / 2 + 0.01)]) expect(within(solid.outline, ...radial(o.t, d)), `${o.id} across at ${d}`).toBe(true);
+      const outside = 0.01 / wallLength(w);
+      expect(within(solid.outline, ...radial(o.t - half - outside, 0)), `${o.id} before its cut`).toBe(false);
+      expect(within(solid.outline, ...radial(o.t + half + outside, 0)), `${o.id} past its cut`).toBe(false);
+      expect(within(solid.outline, ...radial(o.t - half + outside, 0)), `${o.id} inside its cut`).toBe(true);
+    }
+  });
+
+  it("draws every room's space from its outline, arcs and all: its area and perimeter are the plan's", () => {
+    const shaped = house.rooms.filter((r) => !outlineRect(r.points));
+    expect(shaped.some((r) => r.points.some((p) => p.bulge))).toBe(true);
+    for (const r of house.rooms) {
+      const space = all(c, "IFCSPACE").find((s) => get(c, s, "Name") === r.id)!;
+      const foot = curveOf(representation(space, "FootPrint")!);
+      const body = curveOf(representation(space, "Body")!);
+      const curvedRoom = r.points.some((p) => p.bulge);
+      expect(foot.type, r.id).toBe(curvedRoom ? "IFCINDEXEDPOLYCURVE" : "IFCPOLYLINE");
+      expect(curveMeasure(c, foot).area, r.id).toBeCloseTo(roomArea(r), 6);
+      expect(curveMeasure(c, foot).length, r.id).toBeCloseTo(outlinePerimeter(r.points), 6);
+      expect(curveMeasure(c, body).area, r.id).toBeCloseTo(roomArea(r), 6);
+      const q = propertiesOf(c, space, "Qto_SpaceBaseQuantities")!;
+      expect(q.GrossFloorArea as number, r.id).toBeCloseTo(roomArea(r), 6);
+      expect(q.GrossPerimeter as number, r.id).toBeCloseTo(outlinePerimeter(r.points), 6);
+      // its finish covers it, from its own outline where no stairwell crosses it
+      const finish = byTag(c, "IFCCOVERING", r.id);
+      const cover = propertiesOf(c, finish, "Qto_CoveringBaseQuantities")!;
+      expect(cover.GrossArea as number, r.id).toBeCloseTo(roomArea(r), 6);
+      // the anchor its label goes at is inside its body
+      const anchor = outlineAnchor(r.points);
+      expect(solidsOf(c, space).some((s) => within(s.outline, anchor.x, anchor.y)), r.id).toBe(true);
+    }
+  });
+
+  it("lays each storey's slab under its shaped rooms and walls: the 3D view's floor", () => {
+    for (const levelId of [GROUND_LEVEL_ID, CRESCENT_FIRST_LEVEL_ID]) {
+      const slab = byTag(c, "IFCSLAB", levelId);
+      const q = propertiesOf(c, slab, "Qto_SlabBaseQuantities")!;
+      const slice = { rooms: house.rooms.filter((r) => r.levelId === levelId), walls: house.walls.filter((w) => w.levelId === levelId) };
+      expect(q.GrossArea as number, levelId).toBeCloseTo(piecesArea(regionPieces(slabOutline(slice))), 6);
+      // under the curved facade's middle, where it bows furthest out
+      const facade = slice.walls.find((w) => isCurved(w))!;
+      const m = wallPointAt(facade, 0.5);
+      expect(solidsAt(c, ["IFCSLAB"], m.x, m.y, -SLAB_THICKNESS / 2).length, levelId).toBe(1);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------- the tool
 
 describe("export_ifc", () => {
@@ -822,5 +1039,30 @@ describe("export_ifc", () => {
     expect(r.ok).toBe(false);
     expect(store.getState().approvals).toHaveLength(0);
     expect(downloads).toHaveLength(0);
+  });
+});
+
+describe("bows too slight to be arcs", () => {
+  // a bow given as its sagitta on the loft's first wall and its first room's first edge
+  const bowed = (sagitta: number): PlanModel => {
+    const loft = seedLoft();
+    const room = loft.rooms[0];
+    const bulgeOn = (a: { x: number; y: number }, b: { x: number; y: number }) => (2 * sagitta) / Math.hypot(b.x - a.x, b.y - a.y);
+    return {
+      ...loft,
+      walls: loft.walls.map((w, i) => (i === 0 ? { ...w, bulge: bulgeOn({ x: w.ax, y: w.ay }, { x: w.bx, y: w.by }) } : w)),
+      rooms: loft.rooms.map((r) => (r === room ? { ...r, points: r.points.map((p, i) => (i === 0 ? { ...p, bulge: bulgeOn(p, r.points[1]) } : p)) } : r)),
+    };
+  };
+
+  it("writes a wall and a room edge bowed under the file's precision as straight: lines, not arcs through three points on one line", () => {
+    for (const sagitta of [3e-8, 1e-7, 1e-6, STRAIGHT_SAGITTA * 0.9]) {
+      const { text } = exported(bowed(sagitta));
+      expect(text, `sagitta ${sagitta}`).not.toMatch(/IFCARCINDEX/);
+    }
+  });
+
+  it("writes a bow at the file's precision and past it as arcs the checker accepts", () => {
+    for (const sagitta of [STRAIGHT_SAGITTA * 1.1, 1e-4, 1e-3]) expect(exported(bowed(sagitta)).text, `sagitta ${sagitta}`).toMatch(/IFCARCINDEX/);
   });
 });

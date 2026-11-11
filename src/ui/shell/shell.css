@@ -145,8 +145,13 @@
   .canvas__slot--levels { top: var(--spacing-4); left: var(--spacing-4); max-height: calc(100% - 2 * var(--spacing-4) - var(--size-control) * 3); display: flex; }
   .canvas__slot--center { inset: 0; display: grid; place-items: center; }
   .canvas__slot--center:empty { display: none; }
-  .canvas__slot--zoom { left: var(--spacing-4); bottom: var(--spacing-4); }
-  .canvas__slot--hint { left: 50%; bottom: var(--spacing-4); translate: -50% 0; max-width: calc(100% - 2 * var(--spacing-4)); }
+  /* the bottom row: the zoom dock at its left, the hint centred in what is left beside it (never
+     over it); the row itself, and the hint's room, let the plan under them take the pointer */
+  .canvas__slot--bottom { left: var(--spacing-4); right: var(--spacing-4); bottom: var(--spacing-4); display: flex; align-items: flex-end; gap: var(--spacing-4); pointer-events: none; }
+  .canvas__slot--bottom > * { pointer-events: none; }
+  .canvas__zoom { flex: none; }
+  .canvas__hint { flex: 1; min-width: 0; display: flex; justify-content: center; }
+  .canvas__hint > * { pointer-events: auto; }
 
   .scene3d-wrap { position: absolute; inset: 0; }
   .scene3d { width: 100%; height: 100%; }

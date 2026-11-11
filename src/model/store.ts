@@ -24,6 +24,7 @@ import type {
   PendingApproval,
   PlanModel,
   Room,
+  RoomVertex,
   Stair,
   Underlay,
   Wall,
@@ -31,8 +32,28 @@ import type {
 import { emptyModel } from "./types";
 import { uid } from "./ids";
 import { imageAssetError, letGoOfAsset, releaseUnreferencedAssets, type AssetId } from "./assets";
-import { clampOpeningT } from "./issues";
+import { clampOpeningT, openingArcError } from "./issues";
 import { segLen, snap } from "./geometry";
+import {
+  closestOnEdge,
+  curveBulge,
+  edgeArc,
+  edgeBulge,
+  isStraight,
+  normalizeOutline,
+  outlineArea,
+  outlineBounds,
+  outlineEdges,
+  outlineError,
+  outlineRect,
+  rectOutline,
+  stretchOutline,
+  subEdge,
+  translateOutline,
+  wallArcError,
+  wallLength,
+  type CurveInput,
+} from "./shapes";
 import {
   catalogOf,
   customKindCount,
@@ -78,9 +99,12 @@ import {
   OPENING_SILL,
   OPENING_T,
   OPENING_WIDTH,
+  BULGE,
+  ROOM_SHAPE,
   ROOM_SIZE,
   ROTATION,
   SCENE_STYLE_DEFAULTS,
+  SIGNED_LENGTH,
   STAIR,
   STAIR_DEFAULTS,
   STAIR_SHAPES,
@@ -354,10 +378,58 @@ function underlayError(u: Underlay): string | null {
 
 /** Patchable fields, listed once: a patch is built from these keys and nothing else. */
 const WALL_PATCH_KEYS = ["ax", "ay", "bx", "by", "thickness", "height"] as const;
-const ROOM_PATCH_KEYS = ["x", "y", "w", "h", "label", "floor"] as const;
-/** `levelId` (an id or a level's name) moves the entity to that level, keeping where it is on the plan. */
-export type WallPatch = Partial<Pick<Wall, (typeof WALL_PATCH_KEYS)[number]>> & { levelId?: string };
-export type RoomPatch = Partial<Pick<Room, (typeof ROOM_PATCH_KEYS)[number]>> & { levelId?: string };
+/**
+ * `levelId` (an id or a level's name) moves the entity to that level, keeping where it is on the
+ * plan. A wall's `curve` bends it (or straightens it: a sagitta or bulge of 0), measured on its
+ * endpoints as the patch leaves them; moving an endpoint of a curved wall keeps its bulge.
+ */
+export type WallPatch = Partial<Pick<Wall, (typeof WALL_PATCH_KEYS)[number]>> & { levelId?: string; curve?: CurveInput };
+/**
+ * A room's patch. Its shape changes in this order, each step on the last one's result: `points`
+ * replaces the outline; `w`, `h` stretch it from its bounds' top-left corner to that size; `x`,
+ * `y` move that corner there. On a rectangle they are its corner and size, as they always were.
+ * (Fitting a room to its walls is an outline worked out before the change, by enclose.ts.)
+ */
+export interface RoomPatch {
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  points?: RoomVertex[];
+  label?: string;
+  floor?: string;
+  levelId?: string;
+}
+
+/**
+ * A room as add_room describes it: one of a rectangle (x, y, w, h) or an outline (`points`, in
+ * either winding, each corner with the bulge of the edge it starts). The space the walls close
+ * off round a point (enclose.ts) is such an outline, worked out before the change.
+ */
+export interface RoomSpec {
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  points?: RoomVertex[];
+  label: string;
+  floor?: string;
+  level?: string;
+}
+
+/** One change to a room's outline, as the plan's handles make it. */
+export type RoomReshape =
+  /** move corner `index` to (x, y) */
+  | { op: "move_vertex"; index: number; x: number; y: number }
+  /** a new corner at (x, y) on edge `edge` (from corner `edge` to the next): an arc edge splits into two arcs */
+  | { op: "insert_vertex"; edge: number; x: number; y: number }
+  /** remove corner `index`; the edge that replaces its two is straight */
+  | { op: "remove_vertex"; index: number }
+  /** bend edge `edge` (a positive sagitta or bulge bows it out of the room), or straighten it with 0 */
+  | { op: "bend_edge"; edge: number; curve: CurveInput };
+
+/** How near an arc edge a new corner must be to split the arc rather than two straight edges, metres. */
+const ON_ARC = ROOM_SHAPE.onArc;
 
 /** A piece of furniture as define_item_kind describes it, before it is checked and frozen. */
 export interface ItemKindSpec {
@@ -475,6 +547,142 @@ function stairFacts(model: PlanModel, stair: Stair): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// Shapes: curved walls and room outlines
+// ---------------------------------------------------------------------------
+
+const round3 = (v: number): number => Number(v.toFixed(3));
+
+/** Why a curve as given cannot be read, or null. */
+function curveInputError(curve: CurveInput | undefined): string | null {
+  if (curve === undefined) return null;
+  if (typeof curve !== "object" || curve === null) return "curve must be { bulge }, { sagitta } or { through: { x, y } }.";
+  if ("bulge" in curve) return rangeError("bulge", curve.bulge, BULGE);
+  if ("sagitta" in curve) return rangeError("sagitta", curve.sagitta, SIGNED_LENGTH);
+  if ("through" in curve) return numbersError(["through.x", curve.through?.x, COORD], ["through.y", curve.through?.y, COORD]) ?? (curve.through ? null : "curve.through must be a point.");
+  return "curve must be { bulge }, { sagitta } or { through: { x, y } }.";
+}
+
+/** The wall bent as `curve` asks, measured on its endpoints; or why it cannot bend so. */
+function bend(wall: Wall, curve: CurveInput | undefined): Wall | string {
+  if (curve === undefined) return wall;
+  const bulge = curveBulge({ x: wall.ax, y: wall.ay }, { x: wall.bx, y: wall.by }, curve);
+  if (bulge === null) return "the point the wall should pass through is one of its ends.";
+  const range = rangeError("the bend's bulge", bulge, BULGE);
+  if (range) return `${range} A wall bends at most to a half circle.`;
+  const next: Wall = { ...wall, bulge };
+  // a bow under STRAIGHT_SAGITTA is a straight wall, stored so
+  if (edgeBulge({ x: wall.ax, y: wall.ay }, { x: wall.bx, y: wall.by }, bulge) === 0) delete next.bulge;
+  return wallArcError(next) ?? next;
+}
+
+const snapVertex = (p: RoomVertex): RoomVertex => (isStraight(p.bulge) ? { x: snap(p.x), y: snap(p.y) } : { x: snap(p.x), y: snap(p.y), bulge: p.bulge });
+
+/** Why an outline as given cannot be read (its numbers, its size), or null; its shape is judged after. */
+function outlineInputError(points: unknown): string | null {
+  if (!Array.isArray(points)) return "points must be a list of corners.";
+  const { min, max } = ROOM_SHAPE.vertices;
+  if (points.length < min || points.length > max) return `A room's outline has from ${min} to ${max} corners (got ${points.length}).`;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i] as Partial<RoomVertex> | null;
+    const bad = numbersError([`points.${i}.x`, p?.x, COORD], [`points.${i}.y`, p?.y, COORD], [`points.${i}.bulge`, p?.bulge, BULGE]);
+    if (bad || !p || p.x === undefined || p.y === undefined) return bad ?? `points.${i} must be a corner { x, y }.`;
+  }
+  return null;
+}
+
+/** The outline a room spec asks for, checked; or why there is none. */
+function roomShape(spec: RoomSpec): RoomVertex[] | string {
+  const rect = [spec.x, spec.y, spec.w, spec.h];
+  const forms = [rect.some((v) => v !== undefined), spec.points !== undefined].filter(Boolean).length;
+  if (forms !== 1) return "Give a room exactly one shape: a rectangle (x, y, w, h) or an outline (points).";
+  let points: RoomVertex[];
+  if (spec.points !== undefined) {
+    const bad = outlineInputError(spec.points);
+    if (bad) return bad;
+    points = normalizeOutline(spec.points.map(snapVertex));
+  } else {
+    // The size is judged as given, the same rule the add_room schema and updateRoom apply;
+    // snapping cannot then take it under the minimum (see ROOM_SIZE).
+    const bad = firstError(
+      numbersError(["x", spec.x, COORD], ["y", spec.y, COORD], ["w", spec.w, ROOM_SIZE], ["h", spec.h, ROOM_SIZE]),
+      rect.every((v) => v !== undefined) ? null : "A rectangle needs all four of x, y, w and h.",
+    );
+    if (bad) return bad;
+    points = rectOutline(snap(spec.x as number), snap(spec.y as number), snap(spec.w as number), snap(spec.h as number));
+  }
+  return outlineError(points, ROOM_SIZE.min) ?? points;
+}
+
+/** "4.85 × 5.85 m" for a rectangle, "12.40 m², 6 corners" for any other outline. */
+function roomSize(points: readonly RoomVertex[]): string {
+  const r = outlineRect(points);
+  return r ? `${r.w.toFixed(2)} × ${r.h.toFixed(2)} m` : `${outlineArea(points).toFixed(2)} m², ${points.length} corners`;
+}
+
+/** What each reshape did, for its summary. */
+const RESHAPED: Record<RoomReshape["op"], string> = {
+  move_vertex: "a corner moved",
+  insert_vertex: "a corner added",
+  remove_vertex: "a corner removed",
+  bend_edge: "an edge bent",
+};
+
+/** The outline with one reshape made (not yet normalised or judged), or why it cannot be made. */
+function reshaped_(points: readonly RoomVertex[], change: RoomReshape): RoomVertex[] | string {
+  const n = points.length;
+  const index = (name: string, i: unknown): string | null => (Number.isInteger(i) && (i as number) >= 0 && (i as number) < n ? null : `${name} must be a whole number from 0 to ${n - 1}.`);
+  switch (change?.op) {
+    case "move_vertex": {
+      const bad = firstError(index("index", change.index), numbersError(["x", change.x, COORD], ["y", change.y, COORD]));
+      if (bad) return bad;
+      return points.map((p, i) => (i === change.index ? { ...p, x: snap(change.x), y: snap(change.y) } : p));
+    }
+    case "insert_vertex": {
+      const bad = firstError(index("edge", change.edge), numbersError(["x", change.x, COORD], ["y", change.y, COORD]));
+      if (bad) return bad;
+      if (n >= ROOM_SHAPE.vertices.max) return `A room's outline has at most ${ROOM_SHAPE.vertices.max} corners.`;
+      const edge = outlineEdges(points)[change.edge];
+      const at = { x: change.x, y: change.y };
+      const near = closestOnEdge(edge, at);
+      const p = points[change.edge];
+      let first: RoomVertex;
+      let added: RoomVertex;
+      if (edgeArc(edge) && near.distance <= ON_ARC && near.t > 0 && near.t < 1) {
+        // on the arc: the arc splits into two of the same circle, at the point of it nearest
+        const head = subEdge(edge, 0, near.t);
+        const tail = subEdge(edge, near.t, 1);
+        first = { x: p.x, y: p.y, bulge: head.bulge };
+        added = { x: near.point.x, y: near.point.y, bulge: tail.bulge };
+      } else {
+        first = { x: p.x, y: p.y };
+        added = { x: snap(change.x), y: snap(change.y) };
+      }
+      return [...points.slice(0, change.edge), first, added, ...points.slice(change.edge + 1)];
+    }
+    case "remove_vertex": {
+      const bad = index("index", change.index);
+      if (bad) return bad;
+      if (n <= ROOM_SHAPE.vertices.min) return `A room's outline has at least ${ROOM_SHAPE.vertices.min} corners.`;
+      const before = (change.index - 1 + n) % n;
+      return points.flatMap((p, i) => (i === change.index ? [] : i === before ? [{ x: p.x, y: p.y }] : [p]));
+    }
+    case "bend_edge": {
+      const bad = firstError(index("edge", change.edge), curveInputError(change.curve) ?? (change.curve ? null : "curve is required."));
+      if (bad) return bad;
+      const a = points[change.edge];
+      const b = points[(change.edge + 1) % n];
+      const bulge = curveBulge(a, b, change.curve);
+      if (bulge === null) return "the point the edge should pass through is one of its ends.";
+      const range = rangeError("the bend's bulge", bulge, BULGE);
+      if (range) return `${range} An edge bends at most to a half circle.`;
+      return points.map((p, i) => (i === change.edge ? (edgeBulge(a, b, bulge) === 0 ? { x: p.x, y: p.y } : { x: p.x, y: p.y, bulge }) : p));
+    }
+    default:
+      return "op must be one of move_vertex | insert_vertex | remove_vertex | bend_edge.";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Plan actions — what dispatch() runs, for either actor
 // ---------------------------------------------------------------------------
 
@@ -488,10 +696,14 @@ const planActions = {
     thickness: number = WALL_DEFAULTS.thickness,
     height: number = WALL_DEFAULTS.height,
     level?: string,
+    curve?: CurveInput,
   ): ActionResult {
-    const bad = numbersError(
-      ["ax", ax, COORD], ["ay", ay, COORD], ["bx", bx, COORD], ["by", by, COORD],
-      ["thickness", thickness, WALL_THICKNESS], ["height", height, WALL_HEIGHT],
+    const bad = firstError(
+      numbersError(
+        ["ax", ax, COORD], ["ay", ay, COORD], ["bx", bx, COORD], ["by", by, COORD],
+        ["thickness", thickness, WALL_THICKNESS], ["height", height, WALL_HEIGHT],
+      ),
+      curveInputError(curve),
     );
     if (bad) return fail(bad);
     const on = levelFor(level);
@@ -502,10 +714,13 @@ const planActions = {
       return fail(`Wall too short (${(len * 100).toFixed(0)} cm, min ${(WALL_MIN_LENGTH * 100).toFixed(0)} cm).`);
     }
     const wall: Wall = { id: uid("wall"), levelId: on.entity.id, ax, ay, bx, by, thickness, height };
+    const bent = bend(wall, curve);
+    if (typeof bent === "string") return fail(bent);
     pushUndo();
     const model = store.getState().model;
-    setModel({ ...model, walls: [...model.walls, wall] });
-    return ok(`Wall added (${len.toFixed(2)} m)${onLevel(model, wall.levelId)}.`, { id: wall.id, length: len, levelId: wall.levelId });
+    setModel({ ...model, walls: [...model.walls, bent] });
+    const along = wallLength(bent);
+    return ok(`Wall added (${along.toFixed(2)} m${isStraight(bent.bulge) ? "" : " along its arc"})${onLevel(model, bent.levelId)}.`, { id: bent.id, length: along, levelId: bent.levelId });
   },
 
   editWall(id: string, patch: WallPatch): ActionResult {
@@ -515,6 +730,7 @@ const planActions = {
         ["ax", patch.ax, COORD], ["ay", patch.ay, COORD], ["bx", patch.bx, COORD], ["by", patch.by, COORD],
         ["thickness", patch.thickness, WALL_THICKNESS], ["height", patch.height, WALL_HEIGHT],
       ),
+      curveInputError(patch.curve),
     );
     if (bad) return fail(bad);
     const found = lookupWall(store.getState().model, id);
@@ -532,10 +748,12 @@ const planActions = {
     if (segLen(next.ax, next.ay, next.bx, next.by) < WALL_MIN_LENGTH) {
       return fail(`Edit rejected: wall would be shorter than ${(WALL_MIN_LENGTH * 100).toFixed(0)} cm.`);
     }
+    const bent = bend(next, patch.curve);
+    if (typeof bent === "string") return fail(`Edit rejected: ${bent}`);
     pushUndo();
     setModel({
       ...store.getState().model,
-      walls: store.getState().model.walls.map((w) => (w.id === wall.id ? next : w)),
+      walls: store.getState().model.walls.map((w) => (w.id === wall.id ? bent : w)),
     });
     const moved = next.levelId !== wall.levelId ? ` and moved, with its openings, to ${on?.ok ? on.entity.name : next.levelId}` : "";
     return ok(`Wall ${wall.id} updated${moved}.`, { id: wall.id, levelId: next.levelId });
@@ -584,9 +802,11 @@ const planActions = {
     const wall = found.entity;
     const clamped = clampOpeningT(wall, w, t);
     if (clamped === null) {
-      const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
+      const len = wallLength(wall);
       return fail(`Wall ${wall.id} is ${len.toFixed(2)} m long — a ${w.toFixed(2)} m ${kind} does not fit.`);
     }
+    const tight = openingArcError(wall, w, kind);
+    if (tight) return fail(tight);
     if (s + h > wall.height) return fail(`${kind} (sill ${s} + height ${h}) exceeds wall height ${wall.height} m.`);
     const opening: Opening = { id: uid(kind), kind, wallId: wall.id, t: clamped, width: w, sill: s, height: h };
     if (kind === "door") {
@@ -651,23 +871,19 @@ const planActions = {
   },
 
   // ---- rooms ----
-  addRoom(x: number, y: number, w: number, h: number, label: string, floor: string = DEFAULT_FLOOR, level?: string): ActionResult {
-    // The size is judged as given, the same rule the add_room schema and updateRoom apply;
-    // snapping cannot then take it under the minimum (see ROOM_SIZE).
-    const bad = firstError(
-      numbersError(["x", x, COORD], ["y", y, COORD], ["w", w, ROOM_SIZE], ["h", h, ROOM_SIZE]),
-      textError("label", label, TEXT.label),
-    );
+  addRoom(spec: RoomSpec): ActionResult {
+    const { label, floor = DEFAULT_FLOOR, level } = spec;
+    const bad = firstError(textError("label", label, TEXT.label), oneOfError("floor", floor, FLOOR_FINISHES));
     if (bad) return fail(bad);
-    if (!isOneOf(floor, FLOOR_FINISHES)) return fail(notOneOf("floor", FLOOR_FINISHES));
     const on = levelFor(level);
     if (!on.ok) return lookupFailed(on);
-    x = snap(x); y = snap(y); w = snap(w); h = snap(h);
-    const room: Room = { id: uid("room"), levelId: on.entity.id, x, y, w, h, label, floor };
+    const shape = roomShape(spec);
+    if (typeof shape === "string") return fail(shape);
+    const room: Room = { id: uid("room"), levelId: on.entity.id, points: shape, label, floor: floor as Room["floor"] };
     pushUndo();
     const model = store.getState().model;
     setModel({ ...model, rooms: [...model.rooms, room] });
-    return ok(`Room "${label}" added (${w.toFixed(2)} × ${h.toFixed(2)} m)${onLevel(model, room.levelId)}.`, { id: room.id, levelId: room.levelId });
+    return ok(`Room "${label}" added (${roomSize(room.points)})${onLevel(model, room.levelId)}.`, { id: room.id, levelId: room.levelId, area: round3(outlineArea(room.points)) });
   },
 
   updateRoom(idOrLabel: string, patch: RoomPatch): ActionResult {
@@ -683,20 +899,59 @@ const planActions = {
     const room = found.entity;
     const on = patch.levelId === undefined ? null : levelFor(patch.levelId);
     if (on && !on.ok) return lookupFailed(on);
-    // Only the patchable fields are copied. Spreading the whole patch let the lookup key in
+    const levelId = on ? on.entity.id : room.levelId;
+    // Only the room's own fields are copied. Spreading the whole patch let the lookup key in
     // it replace the room's real id: update_room { id: "bedroom" } renamed the id to "bedroom".
-    const next: Room = { ...room, levelId: on ? on.entity.id : room.levelId };
-    for (const k of ROOM_PATCH_KEYS) {
-      const v = patch[k];
-      if (v !== undefined) (next as Record<(typeof ROOM_PATCH_KEYS)[number], unknown>)[k] = v;
+    let points = room.points;
+    if (patch.points !== undefined) {
+      const given = outlineInputError(patch.points);
+      if (given) return fail(given);
+      points = normalizeOutline(patch.points.map(snapVertex));
     }
+    if (patch.w !== undefined || patch.h !== undefined) {
+      const box = outlineBounds(points);
+      points = stretchOutline(points, patch.w ?? box.w, patch.h ?? box.h);
+    }
+    if (patch.x !== undefined || patch.y !== undefined) {
+      const box = outlineBounds(points);
+      points = translateOutline(points, (patch.x ?? box.x) - box.x, (patch.y ?? box.y) - box.y);
+    }
+    if (points !== room.points) {
+      const wrong = outlineError(points, ROOM_SIZE.min);
+      if (wrong) return fail(`Room "${room.label}" was not reshaped: ${wrong}`);
+    }
+    const next: Room = {
+      ...room,
+      levelId,
+      points,
+      label: patch.label ?? room.label,
+      floor: (patch.floor as Room["floor"] | undefined) ?? room.floor,
+    };
     pushUndo();
     setModel({
       ...store.getState().model,
       rooms: store.getState().model.rooms.map((r) => (r.id === room.id ? next : r)),
     });
     const moved = next.levelId !== room.levelId && on?.ok ? ` and moved to ${on.entity.name}` : "";
-    return ok(`Room "${next.label}" updated${moved}.`, { id: room.id, levelId: next.levelId });
+    return ok(`Room "${next.label}" updated${moved}.`, { id: room.id, levelId: next.levelId, area: round3(outlineArea(next.points)) });
+  },
+
+  /** Move, add or remove one corner of a room, or bend or straighten one of its edges. */
+  reshapeRoom(idOrLabel: string, change: RoomReshape): ActionResult {
+    const bad = textError("id", idOrLabel, TEXT.ref);
+    if (bad) return fail(bad);
+    const found = lookupRoom(store.getState().model, idOrLabel);
+    if (!found.ok) return lookupFailed(found);
+    const room = found.entity;
+    const reshaped = reshaped_(room.points, change);
+    if (typeof reshaped === "string") return fail(reshaped);
+    const points = normalizeOutline(reshaped);
+    const wrong = outlineError(points, ROOM_SIZE.min);
+    if (wrong) return fail(`Room "${room.label}" was not reshaped: ${wrong}`);
+    pushUndo();
+    const model = store.getState().model;
+    setModel({ ...model, rooms: model.rooms.map((r) => (r.id === room.id ? { ...r, points } : r)) });
+    return ok(`Room "${room.label}" reshaped: ${RESHAPED[change.op]} (${roomSize(points)}).`, { id: room.id, area: round3(outlineArea(points)), corners: points.length });
   },
 
   removeRoom(idOrLabel: string): ActionResult {

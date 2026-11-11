@@ -408,7 +408,8 @@ const scratch = {
 export function projectSurfaceUVs(root: THREE.Object3D): void {
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || Array.isArray(mesh.material)) return;
+    // a mesh whose builder gave it its own coordinates in metres (a wall's prism) keeps them
+    if (!mesh.isMesh || Array.isArray(mesh.material) || mesh.userData?.ownUVs) return;
     const metres = (mesh.material as THREE.Material | undefined)?.userData?.metres as readonly [number, number] | undefined;
     if (!metres) return;
     const geometry = mesh.geometry;

@@ -14,6 +14,7 @@ import { PATTERN_NAMES } from "../src/three/surfaces";
 import { BUILT_IN_KINDS } from "../src/model/catalog";
 import { seedLoft } from "../src/model/seed";
 import { emptyModel, type Item, type PlanModel } from "../src/model/types";
+import { rectOutline } from "../src/model/shapes";
 
 // No canvas is needed either: the surfaces' patterns are computed texel by texel (surfaces.ts),
 // so the textures (and what is and is not disposed) are real here.
@@ -190,7 +191,7 @@ describe("GPU resources", () => {
 
   it("frees a removed floor's geometries and its shared material, never the shared pattern", () => {
     const scene = new PlanScene();
-    const room = { id: "r", levelId: "level_ground", x: 0, y: 0, w: 3, h: 3, label: "R", floor: "oak" as const };
+    const room = { id: "r", levelId: "level_ground", points: rectOutline(0, 0, 3, 3), label: "R", floor: "oak" as const };
     scene.update({ ...emptyModel(), rooms: [room] });
     const floor = scene.objects.find((o) => (o as THREE.Mesh).isMesh && o.name !== "ground") as THREE.Mesh;
     const material = floor.material as THREE.MeshStandardMaterial;

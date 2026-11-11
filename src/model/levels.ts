@@ -13,6 +13,7 @@
 import type { Item, Level, Opening, PlanModel, Room, Stair, Wall } from "./types";
 import { LEVEL_NAMES, SLAB_THICKNESS, WALL_SLAB_TOLERANCE } from "./limits";
 import { stairGeometry, type StairGeometry } from "./stairs";
+import { roomArea } from "./shapes";
 
 /** A level with where it sits in the stack. */
 export interface LevelInfo {
@@ -251,6 +252,6 @@ export function levelStats(model: PlanModel, levelId: string): LevelStats {
     rooms: c.rooms.length,
     items: c.items.length,
     stairs: c.stairs.length,
-    area: c.rooms.reduce((sum, r) => sum + r.w * r.h, 0),
+    area: c.rooms.reduce((sum, r) => sum + roomArea(r), 0),
   };
 }

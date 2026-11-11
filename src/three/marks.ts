@@ -31,20 +31,29 @@
  * boxes), and their materials and hatch texture are static.
  */
 
+import { edgeBox, isCurved, outlineAnchor, outlineBox, outlineRect, tessellateOutline, wallEdge, wallPointAt } from "../model/shapes";
+import { wallFootprint } from "../model/joints";
 import * as THREE from "three";
 import { ScreenLineMaterial, screenLines } from "./screenLines";
 import type { ApprovalTarget, PlanModel } from "../model/types";
 import { catalogOf } from "../model/catalog";
 import { elevationOf, levelSlice, levelIdOf, stairGeometryIn } from "../model/levels";
-import { segLen } from "../model/geometry";
+import { segLen, type Pt } from "../model/geometry";
 import { openingSpan } from "../model/issues";
 import { keepStatic } from "./materials";
 import { riseOf } from "./furnitureStyle";
-import { FLOOR_TOP, MARKS } from "./config";
+import { FLOOR_TOP, MARKS, WALL_SOLID } from "./config";
 import { ceilingOf } from "./build";
+import { triangulate } from "./triangulate";
 import { SCENE_MARK } from "../ui/theme/sceneTokens";
 
-/** What a mark is drawn around: a box on the plan, turned `ry` radians, from `y0` up to `y1`. */
+/**
+ * What a mark is drawn around: a box on the plan, turned `ry` radians, from `y0` up to `y1`; or,
+ * with `ring`, the outline it has on the plan (a room's polygon, a curved wall's footprint), its
+ * points relative to (cx, cz) as {x, y: z}, inside the box's w by d bounds and never turned; and
+ * `at`, a point of the entity itself on the plan (a shaped room's most interior point, the middle of
+ * a curved wall's arc), where the middle of its bounds may well not be.
+ */
 export interface MarkBox {
   cx: number;
   cz: number;
@@ -53,6 +62,18 @@ export interface MarkBox {
   y0: number;
   y1: number;
   ry: number;
+  ring?: readonly Pt[];
+  at?: Pt;
+}
+
+/** A plan outline as a mark's box: its bounds, the outline itself relative to their middle. */
+function ringBox(pts: readonly Pt[], y0: number, y1: number, at: Pt): MarkBox {
+  const xs = pts.map((p) => p.x);
+  const zs = pts.map((p) => p.y);
+  const [x0, x1, z0, z1] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
+  const cx = (x0 + x1) / 2;
+  const cz = (z0 + z1) / 2;
+  return { cx, cz, w: x1 - x0, d: z1 - z0, y0, y1, ry: 0, ring: pts.map((p) => ({ x: p.x - cx, y: p.y - cz })), at: { x: at.x, y: at.y } };
 }
 
 /** Something the agent is touching (the shared session): any entity that stands on the plan. */
@@ -74,8 +95,10 @@ const lifted = (b: MarkBox, by: number): MarkBox => (by === 0 ? b : { ...b, y0: 
 
 /** The extent of walls, rooms and pieces on the plan, and the tallest wall: a "plan" or a "level" box. */
 function extentBox(model: PlanModel): MarkBox | null {
-  const xs = [...model.walls.flatMap((w) => [w.ax, w.bx]), ...model.rooms.flatMap((r) => [r.x, r.x + r.w]), ...model.items.map((i) => i.x)];
-  const zs = [...model.walls.flatMap((w) => [w.ay, w.by]), ...model.rooms.flatMap((r) => [r.y, r.y + r.h]), ...model.items.map((i) => i.y)];
+  // a curved wall reaches as far as its arc bows
+  const boxes = [...model.rooms.map((r) => outlineBox(r.points)), ...model.walls.map((w) => edgeBox(wallEdge(w)))];
+  const xs = [...boxes.flatMap((b) => [b.minX, b.maxX]), ...model.items.map((i) => i.x)];
+  const zs = [...boxes.flatMap((b) => [b.minY, b.maxY]), ...model.items.map((i) => i.y)];
   if (xs.length === 0) return null;
   const [x0, x1, z0, z1] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
   const height = Math.max(FLOOR_TOP, ...model.walls.map((w) => w.height));
@@ -116,6 +139,8 @@ function flatBox(type: ApprovalTarget["type"], id: string, model: PlanModel): Ma
     case "wall": {
       const w = model.walls.find((x) => x.id === id);
       if (!w) return null;
+      // a curved wall: its footprint, mitred against the walls of its level as the model builds it
+      if (isCurved(w)) return ringBox(tessellateOutline(wallFootprint(w, model.walls.filter((x) => x.levelId === w.levelId)).outline, WALL_SOLID.tessellation), 0, w.height, wallPointAt(w, 0.5));
       return {
         cx: (w.ax + w.bx) / 2,
         cz: (w.ay + w.by) / 2,
@@ -131,22 +156,27 @@ function flatBox(type: ApprovalTarget["type"], id: string, model: PlanModel): Ma
       const o = model.openings.find((x) => x.id === id);
       const w = o && model.walls.find((x) => x.id === o.wallId);
       if (!o || !w) return null;
+      // across its chord, from one cut to the other (on a straight wall, its span along the wall)
       const [t0, t1] = openingSpan(w, o);
-      const tm = (t0 + t1) / 2;
+      const a = wallPointAt(w, t0);
+      const b = wallPointAt(w, t1);
       return {
-        cx: w.ax + (w.bx - w.ax) * tm,
-        cz: w.ay + (w.by - w.ay) * tm,
-        w: (t1 - t0) * segLen(w.ax, w.ay, w.bx, w.by),
+        cx: (a.x + b.x) / 2,
+        cz: (a.y + b.y) / 2,
+        w: segLen(a.x, a.y, b.x, b.y),
         d: w.thickness,
         y0: o.sill,
         y1: o.sill + o.height,
-        ry: -Math.atan2(w.by - w.ay, w.bx - w.ax),
+        ry: -Math.atan2(b.y - a.y, b.x - a.x),
       };
     }
     case "room": {
       const r = model.rooms.find((x) => x.id === id);
       if (!r) return null;
-      return { cx: r.x + r.w / 2, cz: r.y + r.h / 2, w: r.w, d: r.h, y0: FLOOR_TOP, y1: FLOOR_TOP, ry: 0 };
+      const b = outlineRect(r.points);
+      if (b) return { cx: b.x + b.w / 2, cz: b.y + b.h / 2, w: b.w, d: b.h, y0: FLOOR_TOP, y1: FLOOR_TOP, ry: 0 };
+      // any other outline is marked as it is drawn
+      return ringBox(tessellateOutline(r.points, WALL_SOLID.tessellation), FLOOR_TOP, FLOOR_TOP, outlineAnchor(r.points));
     }
     case "item": {
       const it = model.items.find((x) => x.id === id);
@@ -295,8 +325,60 @@ export function hatch(): { seen: THREE.MeshBasicMaterial; over: THREE.MeshBasicM
 
 const flat = (b: MarkBox) => b.y1 - b.y0 < 1e-6;
 
+/** A ring's signed area. */
+const ringArea = (pts: readonly Pt[]): number => pts.reduce((sum, p, i) => sum + p.x * pts[(i + 1) % pts.length].y - pts[(i + 1) % pts.length].x * p.y, 0) / 2;
+
+/**
+ * A ring grown by `by` on every side: each corner moved out along its mitre, so every edge stands
+ * `by` off the one it grows from (a corner sharper than MARKS.mitreLimit allows is held there).
+ */
+export function grownRing(pts: readonly Pt[], by: number): Pt[] {
+  const n = pts.length;
+  const sign = ringArea(pts) >= 0 ? 1 : -1;
+  const normal = (p: Pt, q: Pt): Pt => {
+    const len = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+    return { x: (sign * (q.y - p.y)) / len, y: (-sign * (q.x - p.x)) / len };
+  };
+  return pts.map((p, i) => {
+    const n0 = normal(pts[(i - 1 + n) % n], p);
+    const n1 = normal(p, pts[(i + 1) % n]);
+    // the mitre: the corner's bisector, as long as it takes to stand `by` off both edges
+    const k = Math.min(MARKS.mitreLimit, 2 / Math.max(1e-9, 1 + n0.x * n1.x + n0.y * n1.y));
+    return { x: p.x + ((n0.x + n1.x) / 2) * k * by, y: p.y + ((n0.y + n1.y) / 2) * k * by };
+  });
+}
+
+/** Whether a ring turns at its point i by more than MARKS.ringCorner degrees: a corner its outline draws an upright line at. */
+function cornerAt(pts: readonly Pt[], i: number): boolean {
+  const n = pts.length;
+  const a = pts[(i - 1 + n) % n];
+  const p = pts[i];
+  const b = pts[(i + 1) % n];
+  const turn = Math.abs(Math.atan2((p.x - a.x) * (b.y - p.y) - (p.y - a.y) * (b.x - p.x), (p.x - a.x) * (b.x - p.x) + (p.y - a.y) * (b.y - p.y)));
+  return turn > (MARKS.ringCorner * Math.PI) / 180;
+}
+
 /** A box's outline, `pad` off it on every side (a flat box: its rectangle), as segment end points. */
 export function outlinePositions(b: MarkBox, pad: number): number[] {
+  if (b.ring) {
+    const ring = grownRing(b.ring, pad);
+    const positions: number[] = [];
+    const loop = (y: number) =>
+      ring.forEach((p, i) => {
+        const q = ring[(i + 1) % ring.length];
+        positions.push(p.x, y, p.y, q.x, y, q.y);
+      });
+    if (flat(b)) {
+      loop(b.y0 + MARKS.lift);
+      return positions;
+    }
+    loop(b.y0 - pad);
+    loop(b.y1 + pad);
+    ring.forEach((p, i) => {
+      if (cornerAt(ring, i)) positions.push(p.x, b.y0 - pad, p.y, p.x, b.y1 + pad, p.y);
+    });
+    return positions;
+  }
   const hw = b.w / 2 + pad;
   const hd = b.d / 2 + pad;
   if (flat(b)) {
@@ -330,6 +412,7 @@ export function outlinePositions(b: MarkBox, pad: number): number[] {
  * target.
  */
 export function hatchGeometry(b: MarkBox, pad: number): THREE.BufferGeometry {
+  if (b.ring) return ringHatch(b.ring, b, pad);
   const w = b.w + 2 * pad;
   const d = b.d + 2 * pad;
   const p = MARKS.hatchPeriod;
@@ -354,6 +437,46 @@ export function hatchGeometry(b: MarkBox, pad: number): THREE.BufferGeometry {
   ];
   scaleUVs(box, (vertex) => faceSize[Math.floor(vertex / 4)].map((s) => s / p) as [number, number]);
   return box;
+}
+
+/** A ring's hatched skin, `pad` off it: its top (a flat ring: itself) and, standing, its sides, in hatch periods. */
+function ringHatch(outline: readonly Pt[], b: MarkBox, pad: number): THREE.BufferGeometry {
+  const ring = grownRing(outline, pad);
+  const p = MARKS.hatchPeriod;
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const top = flat(b) ? b.y0 + MARKS.lift : b.y1 + pad;
+  for (const tri of triangulate(ring)) {
+    for (const k of tri) {
+      positions.push(ring[k].x, top, ring[k].y);
+      uvs.push(ring[k].x / p, ring[k].y / p);
+    }
+  }
+  if (!flat(b)) {
+    const y0 = b.y0 - pad;
+    let around = 0;
+    ring.forEach((a, i) => {
+      const c = ring[(i + 1) % ring.length];
+      const len = Math.hypot(c.x - a.x, c.y - a.y);
+      const quad: [Pt, number, number][] = [
+        [a, y0, around],
+        [c, y0, around + len],
+        [c, top, around + len],
+        [a, y0, around],
+        [c, top, around + len],
+        [a, top, around],
+      ];
+      for (const [q, y, u] of quad) {
+        positions.push(q.x, y, q.y);
+        uvs.push(u / p, y / p);
+      }
+      around += len;
+    });
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  return geometry;
 }
 
 function scaleUVs(geometry: THREE.BufferGeometry, scale: (vertex: number) => [number, number]): void {

@@ -1,9 +1,10 @@
 /**
  * Flat regions with holes, as the floors between storeys need them: an upper level's slab is
  * the union of its rooms and walls with each stairwell from the level below cut out of it, and
- * a room whose floor a stairwell crosses is its rectangle with that opening. Every outline here
- * is a convex polygon on the plan (a room, a wall, a flight of stairs, its landing), turned any
- * way, so the region is cut into pieces without a general polygon library:
+ * a room whose floor a stairwell crosses is its outline with that opening. Every outline here
+ * is a simple polygon on the plan (a room, cut along its arcs; a wall to its mitred joints; a
+ * flight of stairs, its landing), convex or not, turned any way, so the region is cut into
+ * pieces without a general polygon library:
  *
  *  - regionPieces() cuts it into vertical strips at every corner and every crossing of two
  *    outlines. Inside one strip no two edges cross, so the region there is a stack of
@@ -20,7 +21,7 @@
 import type { Pt } from "./geometry";
 import { REGION } from "./limits";
 
-/** A convex outline on the plan, its corners in order (either way round). */
+/** A simple outline on the plan (no edge crossing another), its corners in order (either way round). */
 export type Poly = readonly Pt[];
 
 /** One trapezoid of a region: from x0 to x1, between lo and hi (lo ≤ hi), measured at each side. */
@@ -52,15 +53,20 @@ function edgesOf(poly: Poly): [Pt, Pt][] {
   return poly.map((p, i) => [p, poly[(i + 1) % poly.length]] as [Pt, Pt]);
 }
 
-/** Where a vertical line at x crosses a convex outline: its lower and upper edge there, or null. */
-function crossing(poly: Poly, x: number): [Bound, Bound] | null {
+/**
+ * Where a vertical line at x runs inside an outline: between its 1st and 2nd crossings of the
+ * outline's edges, its 3rd and 4th, and so on (one stretch for a convex outline, more where a
+ * non-convex one folds back across the line).
+ */
+function crossing(poly: Poly, x: number): Interval[] {
   const found: Bound[] = [];
   for (const [a, b] of edgesOf(poly)) {
     if (Math.min(a.x, b.x) < x && Math.max(a.x, b.x) > x) found.push(lineThrough(a, b));
   }
-  if (found.length < 2) return null;
   found.sort((p, q) => p(x) - q(x));
-  return [found[0], found[found.length - 1]];
+  const out: Interval[] = [];
+  for (let i = 0; i + 1 < found.length; i += 2) out.push({ lo: found[i], hi: found[i + 1] });
+  return out;
 }
 
 /** Where two segments meet, as x; null when they do not (or run along each other). */
@@ -140,11 +146,7 @@ export function regionPieces(include: readonly Poly[], exclude: readonly Poly[] 
     const x1 = cuts[i + 1];
     if (x1 - x0 < EPS) continue;
     const xm = (x0 + x1) / 2;
-    const at = (polys: readonly Poly[]) =>
-      polys.flatMap((p): Interval[] => {
-        const c = crossing(p, xm);
-        return c ? [{ lo: c[0], hi: c[1] }] : [];
-      });
+    const at = (polys: readonly Poly[]) => polys.flatMap((p) => crossing(p, xm));
     let region = subtract(union(at(include), xm), union(at(exclude), xm), xm);
     if (splits.length > 0) {
       const lines = splits.map((y): Interval => ({ lo: () => y, hi: () => y }));
@@ -159,17 +161,20 @@ export function regionPieces(include: readonly Poly[], exclude: readonly Poly[] 
   return pieces;
 }
 
-/** Is p strictly inside the convex outline? */
+/** Is p strictly inside the outline (on an edge is not)? Even-odd, so convex or not alike. */
 export function insidePoly(p: Pt, poly: Poly): boolean {
-  let sign = 0;
+  let inside = false;
   for (const [a, b] of edgesOf(poly)) {
-    const cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
-    if (Math.abs(cross) < EPS * Math.hypot(b.x - a.x, b.y - a.y)) return false;
-    const s = Math.sign(cross);
-    if (sign === 0) sign = s;
-    else if (s !== sign) return false;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < EPS) continue;
+    // on an edge (within the tolerance) is on the rim, not inside
+    const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (len * len);
+    if (t >= 0 && t <= 1 && Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / len < EPS) return false;
+    if (a.y > p.y !== b.y > p.y && p.x < (dx * (p.y - a.y)) / dy + a.x) inside = !inside;
   }
-  return true;
+  return inside;
 }
 
 /** Is p in the region: inside one of `include` and none of `exclude`? */
@@ -227,6 +232,14 @@ export function regionRim(include: readonly Poly[], exclude: readonly Poly[] = [
     }
   }
   return out;
+}
+
+/**
+ * The area two outlines share, square metres: what each covers, less what they cover together.
+ * Two rooms side by side share an edge and no area; one laid over another shares the overlap.
+ */
+export function sharedArea(a: Poly, b: Poly): number {
+  return Math.max(0, piecesArea(regionPieces([a])) + piecesArea(regionPieces([b])) - piecesArea(regionPieces([a, b])));
 }
 
 /** The area the pieces cover, square metres. */

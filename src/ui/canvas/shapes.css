@@ -1,0 +1,34 @@
+/*
+ * The walls' footprints (src/editor/WallPoche.tsx) and the handles and measures a selected shape is
+ * edited by (src/editor/ShapeHandles.tsx), which
+ * brings this sheet with it after the first paint. Tokens only (src/ui/theme/tokens.ts): pens
+ * --pen-*, dashes --dash-*, colours --plan-*; one SVG unit is one screen pixel (canvas.css).
+ */
+@layer alza-surfaces {
+  /* each wall's mitred footprint (WallPoche.tsx), solid poché in the wall's tone */
+  .pl-wall-fill { fill: var(--plan-ink); stroke: var(--plan-ink); stroke-width: var(--pen-hair); stroke-linejoin: miter; }
+  .pl-wall-fill.pl-wall--hover { fill: var(--plan-line); stroke: var(--plan-line); }
+  .pl-wall-fill.pl-wall--selected { fill: var(--plan-selection); stroke: var(--plan-selection); }
+  /* a wall below the plan's cut (a parapet) is under the section: seen in projection, its outline only */
+  .pl-wall-fill.pl-wall-fill--below-cut { fill: none; stroke: var(--plan-line); stroke-width: var(--pen-firm); }
+  .pl-wall-fill.pl-wall-fill--below-cut.pl-wall--selected { stroke: var(--plan-selection); }
+
+  .editor-svg[data-tool="select"] .pl-corner-handle { cursor: move; }
+  .editor-svg[data-tool="select"] .pl-edge-handle { cursor: grab; }
+  .pl-corner-handle,
+  .pl-edge-handle { touch-action: none; }
+  .pl-mid-handle { fill: var(--plan-selection); stroke: var(--color-background-card); stroke-width: var(--pen-firm); }
+  .pl-edge-handle:hover .pl-mid-handle,
+  .pl-corner-handle:hover .pl-handle { stroke-width: var(--pen-bold); }
+  .pl-edge-dim {
+    fill: var(--plan-dim);
+    font-family: var(--font-family-drawing);
+    font-size: var(--font-size-sm);
+    font-variant-numeric: tabular-nums;
+    text-anchor: middle;
+    pointer-events: none;
+  }
+  .pl-radius { pointer-events: none; }
+  .pl-radius-line { fill: none; stroke: var(--plan-dim); stroke-width: var(--pen-fine); stroke-dasharray: var(--dash-ghost); }
+  .pl-radius-centre { fill: var(--plan-dim); }
+}

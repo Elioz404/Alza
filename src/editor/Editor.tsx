@@ -26,8 +26,9 @@ import { stairGeometry, type StairGeometry } from "../model/stairs";
 import { useAppStore } from "../ui/useAppStore";
 import { dispatch, type Command } from "../model/commands";
 import type { ApprovalTarget, Item, Opening, PlanModel, Room, Stair, Wall } from "../model/types";
-import { rectCorners, snap, segLen, segPoint, pointSegDist, type Pt } from "../model/geometry";
-import { clampOpeningT, openingSpan } from "../model/issues";
+import { rectCorners, snap, segLen, segPoint, type Pt } from "../model/geometry";
+import { clampOpeningT, doorLeaves, openingArcError, openingSpan } from "../model/issues";
+import { closestOnEdge, outlineAnchor, outlineBounds, outlinePath, outlineRect, roomArea, wallArc, wallEdge, wallLength, wallPointAt } from "../model/shapes";
 import { catalogOf } from "../model/catalog";
 import { assetUrl } from "../model/assets";
 import { agentMarks, provenance } from "../model/provenance";
@@ -39,7 +40,6 @@ import { setHover, setPointer as sharePointer } from "../model/presence";
 import {
   DEFAULT_FLOOR,
   DOOR_DEFAULTS,
-  DOUBLE_DOOR_CLEAR,
   LEVEL_DEFAULTS,
   ROOM_SIZE,
   SNAP,
@@ -86,12 +86,20 @@ import {
   deltaPath,
   footprintCorners,
   metres,
+  bandPath,
+  belowCut,
   openingCorners,
   pixelBox,
   polygonPoints,
   textWidth,
   wallCorners,
+  wallOffsetAt,
+  wallPathD,
+  wallTone,
 } from "./drawing";
+import type { WallPocheProps } from "./WallPoche";
+import type { ShapeHandlesProps } from "./ShapeHandles";
+import { addDraftCorner, cancelRoomDraft, closeRoomDraft, draftError, draftOutline, moveRoomCursor, removeLastCorner } from "./roomDraft";
 
 /** Canvas size assumed until the SVG has been laid out and measured. */
 const UNMEASURED_CANVAS = { w: 1200, h: 800 } as const;
@@ -114,6 +122,27 @@ const StairDrawing = deferred<StairDrawingProps>(
 const PlanPresence = deferred<{ S: number; levelId: string }>(
   "the session's plan layer",
   () => import("./PlanPresence").then((m) => m.PlanPresence),
+  () => null,
+);
+
+/**
+ * The walls' mitred footprints (WallPoche.tsx), fetched after the first paint with the joints
+ * they are worked out by; until then each wall is its centreline stroked to its thickness.
+ */
+const WallPoche = deferred<WallPocheProps>(
+  "the walls' footprints",
+  () => import("./WallPoche").then((m) => m.WallPoche),
+  (props) => <WallStrokes {...props} />,
+);
+
+/**
+ * A selected room's corner and edge handles, a selected wall's bend handle, and their measures
+ * (ShapeHandles.tsx): fetched after the first paint. Until they are here a room still moves by
+ * dragging it, and a wall's ends by theirs.
+ */
+const ShapeHandles = deferred<ShapeHandlesProps>(
+  "the shape handles",
+  () => import("./ShapeHandles").then((m) => m.ShapeHandles),
   () => null,
 );
 
@@ -161,7 +190,10 @@ const nudgeCommand = (dx: number, dy: number): Command | null => {
   }
   if (editor.selectedRoomId) {
     const r = model.rooms.find((i) => i.id === editor.selectedRoomId);
-    return r ? { type: "update_room", id: r.id, patch: { x: snap(r.x + dx), y: snap(r.y + dy) } } : null;
+    if (!r) return null;
+    // the outline moves by a step of the grid, so corners on the grid stay on it
+    const b = outlineBounds(r.points);
+    return { type: "update_room", id: r.id, patch: { x: b.x + snap(dx), y: b.y + snap(dy) } };
   }
   if (editor.selectedWallId) {
     const w = model.walls.find((i) => i.id === editor.selectedWallId);
@@ -183,6 +215,33 @@ const placeInView = (): boolean => {
   const c = viewCentre();
   return placeHeldPieceAt(c.x, c.y);
 };
+
+/**
+ * The room tool's keys (roomDraft.ts): the arrows move the keyboard's cross a snap step (ten
+ * with Shift), C puts a corner down at it, Enter closes the outline under way, Backspace takes its
+ * last corner back. True when the key was the tool's.
+ */
+function handleRoomKey(e: KeyboardEvent): boolean {
+  const draft = canvasStore.getState().roomDraft;
+  if (e.key === "Backspace" && draft) return removeLastCorner();
+  if (e.key === "Enter" && draft) {
+    closeRoomDraft();
+    return true;
+  }
+  const arrow = ARROWS[e.key];
+  if (arrow) {
+    const step = SNAP * (e.shiftKey ? NUDGE_SHIFT_FACTOR : 1);
+    moveRoomCursor(arrow.x * step, arrow.y * step, viewCentre());
+    return true;
+  }
+  if (e.key.toLowerCase() === "c" && !e.repeat) {
+    const at = canvasStore.getState().roomCursor ?? viewCentre();
+    canvasStore.setState({ roomCursor: at });
+    addDraftCorner(at);
+    return true;
+  }
+  return false;
+}
 
 /** The stair the stair tool would add with its bottom riser at `at`, on a level `rise` metres high. */
 const aimedStair = (at: Pt, rotation: number, levelId: string, rise: number): StairGeometry =>
@@ -207,11 +266,13 @@ export function Editor() {
   const spacePan = useCanvas((s) => s.spacePan);
   const showAgentMarks = useCanvas((s) => s.showAgentMarks);
   const stairRotation = useCanvas((s) => s.stairRotation);
+  const roomDraft = useCanvas((s) => s.roomDraft);
+  const roomCursor = useCanvas((s) => s.roomCursor);
 
   const [pointer, setPointer] = useState<Pointer | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [dragItem, setDragItem] = useState<{ id: string; dx: number; dy: number } | null>(null);
-  const [dragRoom, setDragRoom] = useState<{ id: string; dx: number; dy: number } | null>(null);
+  const [dragRoom, setDragRoom] = useState<{ id: string; dx: number; dy: number; x0: number; y0: number } | null>(null);
   const [dragEnd, setDragEnd] = useState<{ id: string; end: "a" | "b" } | null>(null);
   const [dragStair, setDragStair] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [roomStart, setRoomStart] = useState<Pt | null>(null);
@@ -272,6 +333,16 @@ export function Editor() {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || isTypingTarget(e.target) || isInsideOverlay(e.target)) return;
       const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+      const roomTool = store.getState().editor.drawMode === "room" && !canvasStore.getState().tool;
+      if (e.key === "Escape" && roomTool && canvasStore.getState().roomDraft) {
+        // Esc drops the outline under way; another goes back to Select
+        cancelRoomDraft();
+        return;
+      }
+      if (roomTool && plain && !isControlTarget(e.target) && handleRoomKey(e)) {
+        e.preventDefault();
+        return;
+      }
       if (e.key === "Escape") {
         const { drawMode, pendingWallStart } = store.getState().editor;
         const hadTool = canvasStore.getState().tool;
@@ -397,6 +468,14 @@ export function Editor() {
     const reach = MARK.snapReach / S;
     let best: Snapped | null = null;
     let bestD = reach;
+    // the corners of an outline being drawn (its first closes it), then the walls' ends
+    for (const q of roomDraft ?? []) {
+      const d = Math.hypot(q.x - p.x, q.y - p.y);
+      if (d <= bestD) {
+        bestD = d;
+        best = { x: q.x, y: q.y, to: "end" };
+      }
+    }
     for (const w of model.walls) {
       for (const end of ["a", "b"] as const) {
         if (skip && skip.id === w.id && skip.end === end) continue;
@@ -421,19 +500,24 @@ export function Editor() {
     if (tool$ !== "door" && tool$ !== "window") return null;
     let best: Wall | null = null;
     let bestD = Infinity;
+    let bestT = 0;
     for (const w of model.walls) {
-      const d = pointSegDist(p, { x: w.ax, y: w.ay }, { x: w.bx, y: w.by });
-      if (d < bestD && d <= w.thickness / 2 + MARK.hitReach / S) {
+      const near = closestOnEdge(wallEdge(w), p);
+      if (near.distance < bestD && near.distance <= w.thickness / 2 + MARK.hitReach / S) {
         best = w;
-        bestD = d;
+        bestD = near.distance;
+        bestT = near.t;
       }
     }
     if (!best) return null;
-    const len = segLen(best.ax, best.ay, best.bx, best.by);
-    const along = ((p.x - best.ax) * (best.bx - best.ax) + (p.y - best.ay) * (best.by - best.ay)) / len;
-    const rawT = Math.min(1, Math.max(0, snap(along) / len));
-    const width = tool$ === "door" ? DOOR_DEFAULTS.width : WINDOW_DEFAULTS.width;
-    return { wall: best, t: clampOpeningT(best, width, rawT), rawT };
+    // along the centreline (an arc's length on a curved wall), snapped to the grid's step
+    const len = wallLength(best);
+    const rawT = Math.min(1, Math.max(0, snap(bestT * len) / len));
+    const kind = tool$ === "door" ? "door" : "window";
+    const width = kind === "door" ? DOOR_DEFAULTS.width : WINDOW_DEFAULTS.width;
+    // a straight leaf or pane that would stand out of a tight bend does not fit either
+    const fits = openingArcError(best, width, kind) === null;
+    return { wall: best, t: fits ? clampOpeningT(best, width, rawT) : null, rawT };
   };
 
   const aim = pointer ? aimOpening(pointer.raw) : null;
@@ -466,7 +550,11 @@ export function Editor() {
     if (stairStart && Math.hypot(raw.x - stairStart.x, raw.y - stairStart.y) * S >= MARK.stairAim) setStairRotation(aimRotation(stairStart, raw));
     if (dragStair) drag.update({ type: "move_stair", id: dragStair.id, x: snap(raw.x - dragStair.dx), y: snap(raw.y - dragStair.dy) });
     if (dragItem) drag.update({ type: "move_item", id: dragItem.id, x: snap(raw.x - dragItem.dx), y: snap(raw.y - dragItem.dy) });
-    if (dragRoom) drag.update({ type: "update_room", id: dragRoom.id, patch: { x: snap(raw.x - dragRoom.dx), y: snap(raw.y - dragRoom.dy) } });
+    if (dragRoom) {
+      // moved by whole grid steps from where it was picked up, so corners on the grid stay on it
+      const patch = { x: dragRoom.x0 + snap(raw.x - dragRoom.dx - dragRoom.x0), y: dragRoom.y0 + snap(raw.y - dragRoom.dy - dragRoom.y0) };
+      drag.update({ type: "update_room", id: dragRoom.id, patch });
+    }
     if (dragEnd) {
       const patch = dragEnd.end === "a" ? { ax: at.x, ay: at.y } : { bx: at.x, by: at.y };
       drag.update({ type: "edit_wall", id: dragEnd.id, patch });
@@ -500,8 +588,13 @@ export function Editor() {
     }
     if (editor.drawMode === "room") {
       const sp = snapPoint(raw);
-      setRoomStart({ x: sp.x, y: sp.y });
-      capture(e);
+      // an outline under way takes each click as its next corner; otherwise the press may be
+      // the start of a rectangle's drag, or (let go where it went down) an outline's first corner
+      if (roomDraft) addDraftCorner({ x: sp.x, y: sp.y });
+      else {
+        setRoomStart({ x: sp.x, y: sp.y });
+        capture(e);
+      }
       return;
     }
     if (editor.drawMode === "place" && editor.placingKind) {
@@ -547,6 +640,9 @@ export function Editor() {
       const h = Math.abs(sp.y - roomStart.y);
       if (w >= ROOM_SIZE.min && h >= ROOM_SIZE.min) {
         dispatch({ type: "add_room", x, y, w, h, label: `Room ${model.rooms.length + 1}`, floor: DEFAULT_FLOOR }, { actor: "human" });
+      } else if (sp.x === roomStart.x && sp.y === roomStart.y) {
+        // a click, not a drag: the first corner of an outline drawn corner by corner
+        addDraftCorner(roomStart);
       }
       setRoomStart(null);
     }
@@ -591,7 +687,8 @@ export function Editor() {
     pageActions.selectRoom(id);
     const p = toWorld(e.clientX, e.clientY);
     const room = model.rooms.find((r) => r.id === id)!;
-    setDragRoom({ id, dx: p.x - room.x, dy: p.y - room.y });
+    const b = outlineBounds(room.points);
+    setDragRoom({ id, dx: p.x - b.x, dy: p.y - b.y, x0: b.x, y0: b.y });
     capture(e);
   };
 
@@ -657,6 +754,10 @@ export function Editor() {
         setPointer(null);
         setOpeningFits(null);
       }}
+      onDoubleClick={() => {
+        // the room tool: a double-click puts the last corner down (its first click did) and closes the outline
+        if (editor.drawMode === "room" && roomDraft) closeRoomDraft();
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         setPlanTool(null);
@@ -684,8 +785,8 @@ export function Editor() {
       {/* rooms: the floor */}
       {model.rooms.map((r) => (
         <g key={r.id} className="pl-room" data-selected={editor.selectedRoomId === r.id || undefined} onPointerDown={(e) => onRoomDown(r.id, e)} {...hover(r.id)}>
-          <rect className={`pl-floor pl-floor--${r.floor}`} x={r.x * S} y={r.y * S} width={r.w * S} height={r.h * S} fill={floorFill(r, ref)} />
-          {pending.has(r.id) ? <rect className="pl-pending" x={r.x * S} y={r.y * S} width={r.w * S} height={r.h * S} fill={`url(#${ref("hatch")})`} /> : null}
+          <path className={`pl-floor pl-floor--${r.floor}`} d={outlinePath(r.points, S)} fill={floorFill(r, ref)} />
+          {pending.has(r.id) ? <path className="pl-pending" d={outlinePath(r.points, S)} fill={`url(#${ref("hatch")})`} /> : null}
         </g>
       ))}
 
@@ -728,17 +829,10 @@ export function Editor() {
       })}
 
       {/* walls: solid poché, the selected one in the selection colour, on top */}
+      <WallPoche walls={model.walls} S={S} selectedId={editor.selectedWallId} hoverId={selecting ? hoverId : null} />
       {model.walls.map((w) => (
-        <g key={w.id} className="pl-wall-hit" onPointerDown={(e) => onWallDown(w, e)} {...hover(w.id)}>
-          <line
-            className={editor.selectedWallId === w.id ? "pl-wall pl-wall--selected" : hoverId === w.id && selecting ? "pl-wall pl-wall--hover" : "pl-wall"}
-            x1={w.ax * S}
-            y1={w.ay * S}
-            x2={w.bx * S}
-            y2={w.by * S}
-            strokeWidth={Math.max(MARK.minWall, w.thickness * S)}
-          />
-          <line className="pl-hit" x1={w.ax * S} y1={w.ay * S} x2={w.bx * S} y2={w.by * S} strokeWidth={Math.max(2 * MARK.hitReach, w.thickness * S)} />
+        <g key={w.id} className="pl-wall-hit" data-wall={w.id} onPointerDown={(e) => onWallDown(w, e)} {...hover(w.id)}>
+          <path className="pl-hit" d={wallPathD(w, S)} strokeWidth={Math.max(2 * MARK.hitReach, w.thickness * S)} />
         </g>
       ))}
 
@@ -764,7 +858,7 @@ export function Editor() {
       </g>
 
       {/* selection */}
-      {selectedRoom ? <rect className="pl-sel-outline" x={selectedRoom.x * S - MARK.outline} y={selectedRoom.y * S - MARK.outline} width={selectedRoom.w * S + 2 * MARK.outline} height={selectedRoom.h * S + 2 * MARK.outline} /> : null}
+      {selectedRoom ? <path className="pl-sel-outline" d={outlinePath(selectedRoom.points, S)} /> : null}
       {selectedItem && catalog.get(selectedItem.kind) ? (
         <ItemOutline item={selectedItem} w={catalog.get(selectedItem.kind)!.w} d={catalog.get(selectedItem.kind)!.d} S={S} className="pl-sel-outline" />
       ) : null}
@@ -777,10 +871,13 @@ export function Editor() {
         : null}
       {selectedStairGeometry ? <StairOutline geometry={selectedStairGeometry} S={S} className="pl-sel-outline" /> : null}
       {hoveredStairGeometry ? <StairOutline geometry={hoveredStairGeometry} S={S} className="pl-hover-outline" /> : null}
-      {hoveredWall ? <LengthPill a={{ x: hoveredWall.ax, y: hoveredWall.ay }} b={{ x: hoveredWall.bx, y: hoveredWall.by }} S={S} tone="quiet" /> : null}
+      {hoveredWall ? <WallPill wall={hoveredWall} S={S} tone="quiet" /> : null}
+      {selecting && (selectedRoom || selectedWall) ? (
+        <ShapeHandles room={selectedRoom} wall={selectedWall} S={S} toWorld={toWorld} snapPoint={(p) => snapPoint(p)} />
+      ) : null}
       {selectedWall ? (
         <g className="pl-selection">
-          <LengthPill a={{ x: selectedWall.ax, y: selectedWall.ay }} b={{ x: selectedWall.bx, y: selectedWall.by }} S={S} tone="selection" />
+          <WallPill wall={selectedWall} S={S} tone="selection" />
           {(["a", "b"] as const).map((end) => {
             const x = (end === "a" ? selectedWall.ax : selectedWall.bx) * S;
             const y = (end === "a" ? selectedWall.ay : selectedWall.by) * S;
@@ -828,6 +925,8 @@ export function Editor() {
         </g>
       ) : null}
       {roomStart && pointer ? <RoomPreview a={roomStart} b={pointer.at} S={S} /> : null}
+      {roomDraft && tool$ === "room" ? <DraftPreview corners={roomDraft} next={pointer?.at ?? roomCursor} S={S} /> : null}
+      {tool$ === "room" && roomCursor && !pointer ? <SnapCursor at={{ ...roomCursor, to: "grid" }} S={S} /> : null}
       {aim ? <OpeningGhost aim={aim} kind={tool$ === "door" ? "door" : "window"} S={S} /> : null}
       {aimed ? <StairDrawing geometry={aimed} side="lower" S={S} className="pl-stair pl-ghost-stair" /> : null}
       {placing && pointer && !dragItem ? (
@@ -853,7 +952,7 @@ export function Editor() {
 function planDescription(model: PlanModel, level: string | null): string {
   const of = `Plan of ${model.name}${level ? `, ${level}` : ""}`;
   if (model.walls.length === 0 && model.rooms.length === 0 && model.items.length === 0 && model.stairs.length === 0) return `${of}, empty`;
-  const rooms = model.rooms.map((r) => `${r.label} ${(r.w * r.h).toFixed(1)} square metres`).join(", ");
+  const rooms = model.rooms.map((r) => `${r.label} ${roomArea(r).toFixed(1)} square metres`).join(", ");
   const stairs = model.stairs.length > 0 ? `, ${model.stairs.length} ${model.stairs.length === 1 ? "stair" : "stairs"}` : "";
   const counts = `${model.walls.length} walls, ${model.openings.length} doors and windows, ${model.items.length} pieces of furniture${stairs}`;
   return `${of}: ${counts}${rooms ? `. Rooms: ${rooms}` : ""}`;
@@ -896,53 +995,48 @@ function PlanPatterns({ refOf, S }: { refOf: (name: string) => string; S: number
 
 /** A door or a window, cut through its wall, in the wall's own frame (A end to the left). */
 function OpeningSymbol({ wall, opening: o, S }: { wall: Wall; opening: Opening; S: number }) {
+  // the vano runs along the centreline, from t0 to t1 (an arc's length on a curved wall); the
+  // cut is that stretch of the wall's band, its jambs square to the wall at each end
   const [t0, t1] = openingSpan(wall, o);
-  const a = { x: wall.ax, y: wall.ay };
-  const b = { x: wall.bx, y: wall.by };
-  const c = segPoint(a, b, (t0 + t1) / 2);
-  const angle = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
-  const hw = (segLen(a.x, a.y, b.x, b.y) * (t1 - t0) * S) / 2;
-  const ht = Math.max(MARK.minWall, wall.thickness * S) / 2;
+  const ht = Math.max(MARK.minWall, wall.thickness * S) / 2 / S;
+  // the cut runs half a pixel past each face, so the poché's own pen does not show through it
+  const gap = bandPath(wall, t0, t1, ht + 0.5 / S, S);
+  const jamb = (t: number) => {
+    const p = wallOffsetAt(wall, t, ht);
+    const q = wallOffsetAt(wall, t, -ht);
+    return `M${p.x * S} ${p.y * S}L${q.x * S} ${q.y * S}`;
+  };
   const cut = (
     <>
-      <rect className="pl-gap" x={-hw} y={-ht - 0.5} width={2 * hw} height={2 * ht + 1} />
-      <path className="pl-jamb" d={`M${-hw} ${-ht}V${ht}M${hw} ${-ht}V${ht}`} />
+      <path className="pl-gap" d={gap} />
+      <path className="pl-jamb" d={jamb(t0) + jamb(t1)} />
     </>
   );
-  const transform = `translate(${c.x * S} ${c.y * S}) rotate(${angle})`;
+  const p0 = wallPointAt(wall, t0);
+  const p1 = wallPointAt(wall, t1);
   if (o.kind === "window") {
+    // the frame is the band; the pane is straight, across the vano's chord (inside the wall: openingArcError)
     return (
-      <g transform={transform}>
+      <g data-opening={o.id}>
         {cut}
-        <rect className="pl-window" x={-hw} y={-ht} width={2 * hw} height={2 * ht} />
-        <path className="pl-glass" d={`M${-hw} 0H${hw}`} />
+        <path className="pl-window" d={bandPath(wall, t0, t1, ht, S)} />
+        <path className="pl-glass" d={`M${p0.x * S} ${p0.y * S}L${p1.x * S} ${p1.y * S}`} />
       </g>
     );
   }
-  // walking from A to B, "right" is the +y side of this frame
-  const s = (o.side ?? "right") === "right" ? 1 : -1;
-  const face = s * ht;
-  const leaves: { hinge: number; to: number }[] =
-    (t1 - t0) * segLen(a.x, a.y, b.x, b.y) > DOUBLE_DOOR_CLEAR
-      ? [
-          { hinge: -hw, to: 0 },
-          { hinge: hw, to: 0 },
-        ]
-      : (o.hinge ?? "a") === "b"
-        ? [{ hinge: hw, to: -hw }]
-        : [{ hinge: -hw, to: hw }];
+  // the leaves as the checker tests them (issues.ts doorLeaves), hinged on the drawn face
   return (
-    <g transform={transform}>
+    <g data-opening={o.id}>
       {cut}
-      {leaves.map(({ hinge, to }, i) => {
-        const r = Math.abs(to - hinge);
-        const tip = face + s * r;
-        // sweep from the open leaf's tip to the closing jamb, the short way round
-        const sweep = -(s * r) * (to - hinge) > 0 ? 1 : 0;
+      {doorLeaves(wall, o, ht).map(({ hinge: h, shut, open: tip, r }, i) => {
+        // from the open leaf's tip to where it shuts, the short way round (SVG's sweep 1 turns
+        // the way the y-down sheet's angles grow)
+        const cross = (tip.x - h.x) * (shut.y - h.y) - (tip.y - h.y) * (shut.x - h.x);
+        const R = r * S;
         return (
           <g key={i}>
-            <path className="pl-swing" d={`M${hinge} ${tip}A${r} ${r} 0 0 ${sweep} ${to} ${face}`} />
-            <path className="pl-leaf" d={`M${hinge} ${face}V${tip}`} />
+            <path className="pl-swing" d={`M${tip.x * S} ${tip.y * S}A${R} ${R} 0 0 ${cross > 0 ? 1 : 0} ${shut.x * S} ${shut.y * S}`} />
+            <path className="pl-leaf" d={`M${h.x * S} ${h.y * S}L${tip.x * S} ${tip.y * S}`} />
           </g>
         );
       })}
@@ -950,13 +1044,17 @@ function OpeningSymbol({ wall, opening: o, S }: { wall: Wall; opening: Opening; 
   );
 }
 
-/** A room's name and area at its centre, when there is room for them. */
+/** A room's name and area at its anchor (its most interior point), when there is room for them. */
 function RoomLabel({ room: r, S, flag }: { room: Room; S: number; flag: string | null }) {
-  const cx = (r.x + r.w / 2) * S;
-  const cy = (r.y + r.h / 2) * S;
-  const area = `${(r.w * r.h).toFixed(2)} m²`;
-  const roomW = r.w * S - 2 * MARK.roomLabelPad;
-  const roomH = r.h * S - 2 * MARK.roomLabelPad;
+  const anchor = outlineAnchor(r.points);
+  const cx = anchor.x * S;
+  const cy = anchor.y * S;
+  const area = `${roomArea(r).toFixed(2)} m²`;
+  // a rectangle's lettering may run its whole width; any other outline's, the widest circle inside it
+  const rect = outlineRect(r.points);
+  const span = rect ?? { w: anchor.clearance * 2, h: anchor.clearance * 2 };
+  const roomW = span.w * S - 2 * MARK.roomLabelPad;
+  const roomH = span.h * S - 2 * MARK.roomLabelPad;
   if (roomW < textWidth(r.label, LETTER.name) || roomH < LETTER.name) return null;
   const withArea = roomW >= textWidth(area, LETTER.small) && roomH >= LETTER.name + LETTER.small * 2;
   const withFlag = flag !== null && roomH >= LETTER.name + LETTER.small * 4;
@@ -1022,6 +1120,68 @@ function LengthPill({ a, b, S, tone }: { a: Pt; b: Pt; S: number; tone: "selecti
       <text className="pl-pill-text" x={0} y={LETTER.small / 3}>
         {text}
       </text>
+    </g>
+  );
+}
+
+/**
+ * A wall's length along it (a curved wall's arc, with its radius) on a pill beside its middle,
+ * clear of the bend handle there.
+ */
+function WallPill({ wall, S, tone }: { wall: Wall; S: number; tone: "selection" | "quiet" }) {
+  const len = wallLength(wall);
+  if (len < SNAP) return null;
+  const arc = wallArc(wall);
+  const text = arc ? `${metres(len)} m · R ${metres(arc.radius)}` : `${metres(len)} m`;
+  const off = -(Math.max(MARK.minWall, wall.thickness * S) / 2 + MARK.pillH / 2 + MARK.outline) / S;
+  const at = wallOffsetAt(wall, 0.5, off);
+  const w = textWidth(text, LETTER.small) + 2 * MARK.pillPad;
+  return (
+    <g className={`pl-pill pl-pill--${tone}`} transform={`translate(${at.x * S} ${at.y * S})`}>
+      <rect className="pl-pill-box" x={-w / 2} y={-MARK.pillH / 2} width={w} height={MARK.pillH} rx={MARK.pillRadius} />
+      <text className="pl-pill-text" x={0} y={LETTER.small / 3}>
+        {text}
+      </text>
+    </g>
+  );
+}
+
+/** The walls until their footprints arrive (WallPoche.tsx): each centreline stroked to its thickness. */
+function WallStrokes({ walls, S, selectedId, hoverId }: WallPocheProps) {
+  return (
+    <g className="pl-poche" aria-hidden="true">
+      {walls.map((w) =>
+        // below the plan's cut (a parapet), seen in projection: its band's outline, as WallPoche draws it
+        belowCut(w) ? (
+          <path key={w.id} className={`pl-wall pl-wall--below-cut ${wallTone(w.id, selectedId, hoverId)}`} data-wall={w.id} d={bandPath(w, 0, 1, w.thickness / 2, S)} />
+        ) : (
+          <path key={w.id} className={`pl-wall ${wallTone(w.id, selectedId, hoverId)}`} data-wall={w.id} d={wallPathD(w, S)} strokeWidth={Math.max(MARK.minWall, w.thickness * S)} />
+        ),
+      )}
+    </g>
+  );
+}
+
+/**
+ * The outline the room tool is drawing: its corners so far, closed through `next` (where the
+ * pointer or the keyboard's cross is), refused in the quiet tone while the store would refuse it,
+ * with the first corner ringed (a click there closes it) and the edge being drawn measured.
+ */
+function DraftPreview({ corners, next, S }: { corners: readonly Pt[]; next: Pt | null; S: number }) {
+  const outline = draftOutline(corners, next);
+  const refused = outline.length >= 3 && draftError(outline) !== null;
+  const last = corners[corners.length - 1];
+  return (
+    <g className="pl-preview-room pl-preview-draft" data-refused={refused ? "" : undefined} data-corners={corners.length}>
+      {outline.length >= 2 ? <path className="pl-preview-area" d={outlinePath(outline, S)} /> : null}
+      {corners.map((c, i) =>
+        i === 0 ? (
+          <circle key={i} className="pl-draft-start" cx={c.x * S} cy={c.y * S} r={MARK.handle / 2} />
+        ) : (
+          <circle key={i} className="pl-draft-corner" cx={c.x * S} cy={c.y * S} r={MARK.cursorRing} />
+        ),
+      )}
+      {next ? <LengthPill a={last} b={next} S={S} tone="live" /> : null}
     </g>
   );
 }
@@ -1155,9 +1315,10 @@ function entityCorners(id: string, model: PlanModel, wallById: Map<string, Wall>
   if (wall) return wallCorners(wall);
   const room = model.rooms.find((r) => r.id === id);
   if (room) {
+    const b = outlineBounds(room.points);
     return [
-      { x: room.x, y: room.y },
-      { x: room.x + room.w, y: room.y + room.h },
+      { x: b.x, y: b.y },
+      { x: b.x + b.w, y: b.y + b.h },
     ];
   }
   const item = model.items.find((i) => i.id === id);
@@ -1202,7 +1363,7 @@ function PendingMark({
   if (target.type === "plan" || target.type === "level" || target.type === "stair" || target.type === "file") return null;
   if (target.type === "room") {
     const r = model.rooms.find((i) => i.id === target.id);
-    return r ? <rect className="pl-pending-outline" fill="none" x={r.x * S} y={r.y * S} width={r.w * S} height={r.h * S} /> : null;
+    return r ? <path className="pl-pending-outline" fill="none" d={outlinePath(r.points, S)} /> : null;
   }
   const corners = entityCorners(target.id, model, wallById, catalogOf(model));
   if (!corners) return null;
@@ -1211,7 +1372,13 @@ function PendingMark({
 
 /** A request to clear or replace the whole plan: the plan's extent, outlined in the error colour. */
 function PlanPendingMark({ model, S }: { model: PlanModel; S: number }) {
-  const pts = [...model.walls.flatMap(wallCorners), ...model.rooms.flatMap((r) => [{ x: r.x, y: r.y }, { x: r.x + r.w, y: r.y + r.h }])];
+  const pts = [
+    ...model.walls.flatMap(wallCorners),
+    ...model.rooms.flatMap((r) => {
+      const b = outlineBounds(r.points);
+      return [{ x: b.x, y: b.y }, { x: b.x + b.w, y: b.y + b.h }];
+    }),
+  ];
   if (pts.length === 0) return null;
   const box = pixelBox(pts, S, MARK.cloudPad * 2);
   return <rect className="pl-pending-outline pl-pending-outline--plan" x={box.x} y={box.y} width={box.w} height={box.h} rx={MARK.pillRadius} />;
@@ -1226,7 +1393,7 @@ function GhostLevel({ model, S }: { model: PlanModel; S: number }) {
   return (
     <g className="pl-ghost-level" aria-hidden="true">
       {model.rooms.map((r) => (
-        <rect key={r.id} className="pl-ghost-room" x={r.x * S} y={r.y * S} width={r.w * S} height={r.h * S} />
+        <path key={r.id} className="pl-ghost-room" d={outlinePath(r.points, S)} />
       ))}
       {model.walls.map((w) => (
         <polygon key={w.id} className="pl-ghost-wall" points={polygonPoints(wallCorners(w), S)} />

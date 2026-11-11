@@ -18,6 +18,7 @@ import { sceneFrameDrawn, sceneProbe } from "../src/model/sceneBus";
 import { markerOf, placeOf } from "../src/model/places";
 import { SESSION } from "../src/model/limits";
 import { resetStore } from "./support/store";
+import { outlineBounds } from "../src/model/shapes";
 
 const pristinePresence = presence.getState();
 let host: HTMLDivElement;
@@ -165,7 +166,7 @@ describe("the plan's session layer", () => {
 
   it("rings a room the agent points at in from its corner, clear of the name and area in its middle", async () => {
     const model = seedLoft();
-    const room = model.rooms.find((r) => r.id === "room_bed")!;
+    const room = outlineBounds(model.rooms.find((r) => r.id === "room_bed")!.points);
     presence.setState({ points: [{ id: "point_1", entityId: "room_bed", message: "This one?", seenIn: model, until: Date.now() + SESSION.pointMs }] });
     await render();
     const ring = host.querySelector<SVGGElement>('[data-session="point"]')!;

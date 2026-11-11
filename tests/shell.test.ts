@@ -116,6 +116,34 @@ describe("the rail's shortcuts", () => {
     expect(RAIL_TOOLS.filter((t) => t.view === "3d").map((t) => t.shortcut)).not.toContain("w");
   });
 
+  it("a rail tool that places from the plan's keys hands focus to the plan: the room tool too, as door, window and stair do", async () => {
+    const region = document.createElement("main");
+    region.id = "canvas";
+    region.tabIndex = -1;
+    document.body.append(region);
+    try {
+      for (const id of ["room", "door", "window", "stair"]) {
+        const button = document.createElement("button");
+        document.body.append(button);
+        button.focus();
+        RAIL_TOOLS.find((t) => t.id === id)!.run(fakeShell());
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+        expect(document.activeElement, id).toBe(region);
+        button.remove();
+      }
+      // Select and Draw walls keep focus where it is: their keys are the rail's
+      const button = document.createElement("button");
+      document.body.append(button);
+      button.focus();
+      RAIL_TOOLS.find((t) => t.id === "wall")!.run(fakeShell());
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      expect(document.activeElement).toBe(button);
+      button.remove();
+    } finally {
+      region.remove();
+    }
+  });
+
   it("the shortcut sheet lists every rail tool", () => {
     const listed = SHORTCUT_SHEET.flatMap((g) => g.rows.map((r) => r.does));
     for (const t of RAIL_TOOLS) expect(listed).toContain(t.label);

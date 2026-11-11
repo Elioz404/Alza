@@ -32,6 +32,7 @@ import { MATERIAL, SURFACE_TINT } from "../src/ui/theme/sceneTokens";
 import { BUILT_IN_KINDS } from "../src/model/catalog";
 import { PART_MATERIALS } from "../src/model/limits";
 import { emptyModel, type KindDef } from "../src/model/types";
+import { rectOutline } from "../src/model/shapes";
 
 const texel = (img: { width: number; data: Uint8Array }, x: number, y: number) => {
   const i = (y * img.width + x) * 4;
@@ -125,7 +126,7 @@ describe("pattern scale", () => {
   });
 
   it("a floor's texture coordinates are plan metres, so its pattern is anchored where the plan's is", () => {
-    const room = { id: "r", levelId: "level_ground", x: 2.4, y: 0.64, w: 2.4, h: 1.28, label: "R", floor: "oak" as const };
+    const room = { id: "r", levelId: "level_ground", points: rectOutline(2.4, 0.64, 2.4, 1.28), label: "R", floor: "oak" as const };
     const floor = buildFloor(room);
     const uv = floor.geometry.getAttribute("uv");
     const pos = floor.geometry.getAttribute("position");
@@ -136,14 +137,14 @@ describe("pattern scale", () => {
     }
     // the room's north-west corner is exactly one repeat in, each way
     const corner = [...Array(pos.count).keys()].find(
-      (i) => Math.abs(pos.getX(i) + floor.position.x - room.x) < 1e-5 && Math.abs(pos.getZ(i) + floor.position.z - room.y) < 1e-5,
+      (i) => Math.abs(pos.getX(i) + floor.position.x - room.points[0].x) < 1e-5 && Math.abs(pos.getZ(i) + floor.position.z - room.points[0].y) < 1e-5,
     )!;
     expect(uv.getX(corner)).toBeCloseTo(1, 6);
     expect(uv.getY(corner)).toBeCloseTo(1, 6);
   });
 
   it("a floor darkens toward its edges, where it meets the walls", () => {
-    const floor = buildFloor({ id: "r", levelId: "level_ground", x: 0, y: 0, w: 4, h: 3, label: "R", floor: "tile" });
+    const floor = buildFloor({ id: "r", levelId: "level_ground", points: rectOutline(0, 0, 4, 3), label: "R", floor: "tile" });
     const color = floor.geometry.getAttribute("color");
     const pos = floor.geometry.getAttribute("position");
     for (let i = 0; i < pos.count; i++) {

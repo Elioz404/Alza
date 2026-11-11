@@ -648,7 +648,8 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     const b = markBox(type, id, model);
     if (!b) return null;
     const cut = cutLevel();
-    projected.set(b.cx, cut === null ? b.y1 : Math.min(b.y1, cut), b.cz).project(cam);
+    // on the entity itself: a shaped room's or a curved wall's own point, else the middle of its box
+    projected.set(b.at?.x ?? b.cx, cut === null ? b.y1 : Math.min(b.y1, cut), b.at?.y ?? b.cz).project(cam);
     if (projected.z > 1) return null;
     return { x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height };
   };

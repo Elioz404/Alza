@@ -74,9 +74,12 @@ export function Button({
     </button>
   );
   // the reason describes the button through its own line above; the tooltip shows the same
-  // words, so it does not describe it again
-  return blocked ? (
-    <Tip content={disabledReason} describes={false}>
+  // words, so it does not describe it again. A button that can be blocked (its caller passes a
+  // reason, null while it can act) keeps its tooltip in the tree either way, only turned off:
+  // swapping the element round it would remount the button and drop the keyboard's focus the
+  // moment it became blocked or free
+  return disabledReason !== undefined ? (
+    <Tip content={disabledReason ?? ""} describes={false} isEnabled={blocked}>
       {button}
     </Tip>
   ) : (

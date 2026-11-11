@@ -85,11 +85,15 @@ export function CanvasRegion() {
         <div className="canvas__slot canvas__slot--center">
           <FirstRun />
         </div>
-        <div className="canvas__slot canvas__slot--zoom">
-          <ZoomControl />
-        </div>
-        <div className="canvas__slot canvas__slot--hint">
-          <HintBar />
+        {/* one bottom row: the zoom dock, and the hint centred in the room beside it, so a long
+            hint drops its last actions rather than covering the zoom controls */}
+        <div className="canvas__slot canvas__slot--bottom">
+          <div className="canvas__zoom">
+            <ZoomControl />
+          </div>
+          <div className="canvas__hint">
+            <HintBar />
+          </div>
         </div>
       </div>
     </main>

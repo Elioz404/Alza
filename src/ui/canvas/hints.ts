@@ -7,7 +7,8 @@
 import type { EditorState } from "../../model/store";
 import type { PlanModel } from "../../model/types";
 import { catalogOf } from "../../model/catalog";
-import { DOOR_DEFAULTS, SNAP, WINDOW_DEFAULTS } from "../../model/limits";
+import { DOOR_DEFAULTS, ROOM_SHAPE, SNAP, WINDOW_DEFAULTS } from "../../model/limits";
+import { draftError } from "../../editor/roomDraft";
 import { levelAbove, levelContents } from "../../model/levels";
 import type { PlanTool } from "../../editor/canvasState";
 import { climbWord } from "../../editor/drawing";
@@ -34,10 +35,26 @@ export interface HintInput {
   openingFits: boolean | null;
   /** with the stair tool: the way the next stair climbs (its rotation), as the arrows aim it */
   stairRotation?: number;
+  /** with the room tool: the corners of the outline being drawn, or null */
+  roomDraft?: readonly { x: number; y: number }[] | null;
+  /** with the room tool: the keyboard's cross, once the arrows have brought it, or null */
+  roomCursor?: { x: number; y: number } | null;
 }
 
 const centimetres = (m: number): string => `${Math.round(m * 100)} cm`;
 const metres = (m: number): string => `${m.toFixed(2)} m`;
+
+type At = { x: number; y: number };
+const lengthTo = (p: At, q: At): string => metres(Math.hypot(q.x - p.x, q.y - p.y));
+
+/** "Cross at X 3.40 m, Y 2.10 m", then the edge from the last corner to it and the one closing back to the first. */
+export function crossWords(cross: At, corners: readonly At[] | null): string {
+  const at = `Cross at X ${metres(cross.x)}, Y ${metres(cross.y)}`;
+  if (!corners || corners.length === 0) return at;
+  const last = corners[corners.length - 1];
+  const edge = `${at}: edge ${corners.length} would be ${lengthTo(last, cross)}`;
+  return corners.length < 2 ? edge : `${edge}, closing ${lengthTo(cross, corners[0])}`;
+}
 
 const NUDGE: readonly HintPart[] = [{ kbd: "left" }, { kbd: "right" }, { kbd: "up" }, { kbd: "down" }, `nudge ${centimetres(SNAP)}`];
 export const REMOVE: readonly HintPart[] = [{ kbd: "delete" }, "remove"];
@@ -64,7 +81,7 @@ export function selectionTitle(editor: Pick<EditorState, "selectedWallId" | "sel
   return null;
 }
 
-export function hintFor({ editor, model, levelId = model.levels[0]?.id, tool, spacePan, openingFits, stairRotation = 0 }: HintInput): Hint {
+export function hintFor({ editor, model, levelId = model.levels[0]?.id, tool, spacePan, openingFits, stairRotation = 0, roomDraft = null, roomCursor = null }: HintInput): Hint {
   if (spacePan) return { title: "Pan", segments: [["Drag to move the plan"], ["Let go of", { kbd: "space" }, "to go back"]] };
 
   switch (tool) {
@@ -99,8 +116,29 @@ export function hintFor({ editor, model, levelId = model.levels[0]?.id, tool, sp
             segments: [["Click the next corner"], [{ kbd: "shift" }, "keep it straight"], [{ kbd: "esc" }, "finish the run"]],
           }
         : { title: "Draw walls", segments: [["Click where the first corner goes"], ["Ends snap to other walls"], [{ kbd: "esc" }, "finish"]] };
-    case "room":
-      return { title: "Draw a room", segments: [["Drag a rectangle"], [`Sizes snap to ${centimetres(SNAP)}`], [{ kbd: "esc" }, "cancel"]] };
+    case "room": {
+      // the keyboard's cross, lettered: where it is and, with corners down, how long the edge to
+      // it and the edge closing back to the first corner would be. The bar is a live region, so
+      // each arrow step and each corner is read out
+      const cross: readonly HintPart[] | null = roomCursor ? [crossWords(roomCursor, roomDraft)] : null;
+      if (roomDraft && roomDraft.length > 0) {
+        const why = draftError(roomDraft);
+        const close: readonly HintPart[] =
+          why === null ? [{ kbd: "enter" }, "or click the first corner to close it"] : roomDraft.length < ROOM_SHAPE.vertices.min ? [why] : [`${why}: it cannot close yet`];
+        const next: readonly HintPart[] = cross ?? ["Click the next corner"];
+        const put: readonly (readonly HintPart[])[] = cross ? [[{ kbd: "c" }, "put a corner there"]] : [];
+        return {
+          title: `Draw a room, ${roomDraft.length} ${roomDraft.length === 1 ? "corner" : "corners"}`,
+          segments: [next, ...put, close, [{ kbd: "backspace" }, "take the last one back"], [{ kbd: "esc" }, "cancel"]],
+        };
+      }
+      if (cross) return { title: "Draw a room", segments: [cross, [{ kbd: "c" }, "put a corner there"], [{ kbd: "esc" }, "cancel"]] };
+      // the keys' whole path (arrows, C, Enter) is on the shortcut sheet; the first arrow brings the cross
+      return {
+        title: "Draw a room",
+        segments: [["Drag a rectangle, or click corner by corner"], [{ kbd: "up" }, "draw from the keys"], [{ kbd: "esc" }, "cancel"]],
+      };
+    }
     case "place": {
       const label = editor.placingKind ? (catalogOf(model).get(editor.placingKind)?.label ?? "furniture") : "furniture";
       return {
@@ -115,7 +153,15 @@ export function hintFor({ editor, model, levelId = model.levels[0]?.id, tool, sp
   const selected = selectionTitle(editor, model);
   if (selected) {
     const wall = model.walls.some((w) => w.id === editor.selectedWallId);
-    return { title: selected, segments: [[wall ? "Drag an end to move it" : "Drag to move"], NUDGE, REMOVE, DESELECT] };
+    const room = !wall && model.rooms.some((r) => r.id === editor.selectedRoomId);
+    if (wall) return { title: selected, segments: [["Drag an end to move it"], ["Drag the middle to bend it"], NUDGE, REMOVE, DESELECT] };
+    if (room) {
+      return {
+        title: selected,
+        segments: [["Drag to move, a corner to reshape"], ["Drag an edge's middle to bend it,", { kbd: "shift" }, "to add a corner"], ["Double-click a corner to remove it"], NUDGE, REMOVE, DESELECT],
+      };
+    }
+    return { title: selected, segments: [["Drag to move"], NUDGE, REMOVE, DESELECT] };
   }
 
   const levels: readonly HintPart[] = [{ kbd: "pageup" }, { kbd: "pagedown" }, "the level above or below"];

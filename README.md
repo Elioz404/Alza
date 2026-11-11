@@ -121,9 +121,9 @@ document.modelContext.registerTool({
 |---|---|
 | **Read** (readOnly) | `get_model` · `get_issues` · `get_item_catalog` · `get_editor_state` · `measure` · `get_underlay` |
 | **Blueprint** | `calibrate_underlay`, scales the uploaded plan image to real meters from one known dimension |
-| **Structure** | `add_wall` · `edit_wall` · `remove_wall` |
+| **Structure** | `add_wall` · `edit_wall` · `remove_wall`; a wall may be curved: `curve` takes a bulge, a sagitta (how far its middle stands off its chord) or a point it passes, and `edit_wall` bends or straightens it |
 | **Openings** | `add_door` · `add_window` · `move_opening` · `remove_opening` · `set_door_swing` (hinge side + swing direction) |
-| **Rooms** | `add_room` · `update_room` · `remove_room` |
+| **Rooms** | `add_room` · `update_room` · `remove_room`; a room is a rectangle (`x`, `y`, `w`, `h`), an outline of 3 to 100 `points` with `arcs` on any edge (by sagitta out of the room, or a point the arc passes), or `fit` (the outline the walls close off round a point, to their inner faces). An agent reshapes a room by giving `update_room` its whole outline |
 | **Furniture** | `place_item` · `move_item` · `remove_item` · `define_item_kind`, model a piece the catalogue lacks, from primitives |
 | **Levels & stairs** | `list_levels` · `add_level` · `update_level` (rename, floor-to-floor height — the walls that met the slab follow it unless `walls: "keep"` — or its place in the stack) · `remove_level` (needs approval) · `set_active_level` · `add_stair` (straight or L-shaped; risers and going derived from the storey height) · `update_stair` · `remove_stair` (needs approval) |
 | **Model & view** | `set_plan_name` · `clear_model` · `build_3d` · `set_camera` (orbit/top/walk) · `set_3d_style` (ink edges, dollhouse cutaway at a height) · `set_doors` (swing the leaves open/shut) |
@@ -201,7 +201,11 @@ Metric precision is the product. The checker validates:
 - **Openings:** vano fully inside its wall (creation-time clamping + detection), overlapping
   openings, sill + height above wall height, and **a wall ending inside another wall's
   opening**.
-- **Rooms:** floating, overlapping, doorless, too small.
+- **Rooms:** floating, overlapping (by their real outlines), doorless, too small, and an
+  outline that crosses itself, has an edge under 5 cm or bends past a half circle.
+- **Curved walls:** an arc tighter than the wall's thickness allows, and an opening too wide
+  for the straight leaf or pane across its chord to stay inside the wall.
+- **Doors:** two doors whose leaves swing into each other.
 - **Furniture:** oriented-rectangle **SAT** against walls (leaning is legal, crossing is an
   error), blocking door swing paths and window light (with a sill-height nuance),
   item-vs-item collisions (rugs exempt), items outside every room.
@@ -212,7 +216,9 @@ Metric precision is the product. The checker validates:
   a stairwell outside every room, furniture on a stair or over a stairwell, overlapping stairs.
 
 The bundled **Sunset Loft** demo is audited to **0 issues** and kept that way by a
-regression test.
+regression test, as is **Crescent House** (Plan menu), the free-shapes demo: two storeys with a
+curved facade on both, a wing turned off the house at an angle under a roof terrace, an
+L-shaped kitchen round a pantry, and a stair.
 
 ## Storeys, stairs and the plan format
 
@@ -225,9 +231,14 @@ stair stores only where it starts, which way it climbs, its width and shape; its
 going, landing and clear zones are worked out from the storey height, the same way for the
 plan, the model, the walker and the checker.
 
-Plans are saved in **format 2** (`version: 2`, `model/planFormat.ts`). A format-1 plan (one
-storey, no levels) loads as a single "Ground floor" holding everything; a plan from a newer
-format, or one that names a level it does not have, is refused and the current plan stays.
+Plans are saved in **format 3** (`version: 3`, `model/planFormat.ts`), where a room is its
+outline (`points`, each corner carrying the bulge of the edge it starts) and a wall may carry a
+`bulge` and be an arc. Older plans load losslessly: a format-2 room's rectangle becomes its four
+corners and every wall stays straight (no bulge), and a format-1 plan (one storey, no levels)
+first becomes a single "Ground floor" holding everything. A bow too slight to be an arc (its
+middle under 0.01 mm off its chord, the IFC export's precision) is stored straight. A plan from
+a newer format, or one that names a level it does not have, is refused and the current plan
+stays.
 Every plan has an `id` of its own, 128 random bits given when it is started (a demo loaded, a
 plan cleared); a plan saved without one is given one as it loads, and keeps it from then on.
 
@@ -244,9 +255,9 @@ the browser, and the writer is fetched the first time someone exports (a lazy ch
 |---|---|
 | the plan | `IfcProject` (metres, radians; a 3D *Model* context with *Body* and *Axis*, a 2D *Plan* context with *FootPrint*) › `IfcSite` › `IfcBuilding`, named after the plan |
 | each level | `IfcBuildingStorey`, with its name and elevation, standing on one `IfcSlab` `FLOOR` of plaster: under its rooms and its walls to their joints (the outline the 3D view builds its slab from, so there is no gap under any wall at a floor line), opened by an `IfcOpeningElement` wherever a stair from below rises through it; `Qto_SlabBaseQuantities` |
-| a wall | `IfcWall` (`STANDARD`): an *Axis* line and a *Body* extruded from its centreline, butt-jointed to the walls it meets (at a corner the wall whose id sorts first runs on to the other's outer face and the other stops at its inner face; a wall ending against another stops at its face; walls in line meet end to end), so no two bodies overlap; one `IfcMaterialLayerSetUsage` of plaster its thickness, `Pset_WallCommon.IsExternal` where the rooms tell (a room on one side only), `Qto_WallBaseQuantities` measured on the body |
-| a door / window | an `IfcOpeningElement` voiding its wall, reaching past every wall face it cuts (both sides, and the foot or top where it meets them), filled by an `IfcDoor` or `IfcWindow` with its overall width and height. A door's placement faces the side its leaf swings to (IFC opens a door towards its +Y) and its `OperationType` names the hinge side seen that way, so all four hinge/side combinations come out as the plan draws them |
-| a room | an `IfcSpace` under its storey (`LongName` = the room's name) with `Pset_SpaceCommon` and `Qto_SpaceBaseQuantities`, and its floor finish as an `IfcCovering` `FLOORING` laid on the slab (4 cm, less any stairwell), covering the space (`IfcRelCoversSpaces`), in the finish's `IfcMaterial`, with `Qto_CoveringBaseQuantities` |
+| a wall | `IfcWall` (`STANDARD`): an *Axis* (a line, or for a curved wall an `IfcIndexedPolyCurve` arc through its ends and middle) and a *Body* extruded from its outline (a rectangle, or its two faces as arcs concentric with the centreline), butt-jointed to the walls it meets at any angle, its ends cut along the face they meet, a curved face included (at a corner the wall whose id sorts first runs on to the other's outer face and the other stops at its inner face; a wall ending against another stops at its face; walls in line meet end to end), so no two bodies overlap; one `IfcMaterialLayerSetUsage` of plaster its thickness, `Pset_WallCommon.IsExternal` where the rooms tell (a room on one side only), `Qto_WallBaseQuantities` measured on the body |
+| a door / window | an `IfcOpeningElement` voiding its wall (on a curved wall, the stretch between two cuts square to the arc, placed on its chord's middle), reaching past every wall face it cuts (both sides, and the foot or top where it meets them), filled by an `IfcDoor` or `IfcWindow` with its overall width and height. A door's placement faces the side its leaf swings to (IFC opens a door towards its +Y) and its `OperationType` names the hinge side seen that way, so all four hinge/side combinations come out as the plan draws them |
+| a room | an `IfcSpace` under its storey (`LongName` = the room's name), its *FootPrint* and *Body* its real outline (an `IfcPolyline`, or an `IfcIndexedPolyCurve` of `IfcLineIndex` and `IfcArcIndex` segments where it has arcs), with `Pset_SpaceCommon` and `Qto_SpaceBaseQuantities`, and its floor finish as an `IfcCovering` `FLOORING` laid on the slab (4 cm, less any stairwell), covering the space (`IfcRelCoversSpaces`), in the finish's `IfcMaterial`, with `Qto_CoveringBaseQuantities` |
 | a stair | `IfcStair` (straight run or quarter turn) made of `IfcStairFlight`s with their risers, treads, riser height and going, and, for an L-shaped one, its landing as an `IfcSlab` `LANDING`; `Pset_StairCommon` |
 | a piece of furniture | `IfcFurniture` named from the catalogue, its kind in `ObjectType`, standing on the floor finish; a Nordika product carries its sku and vendor in `Alza_Product`, the plan's own property set (the `Pset_` and `Qto_` prefixes are buildingSMART's, for the sets IFC4 defines) |
 
@@ -317,8 +328,10 @@ The person and the agent work the same plan at the same time, and each sees the 
   ("Another tab"), a whole drag as one. Undo stays local: it takes back the tab's own changes,
   never another tab's, because each of its steps is rebased under the changes the other tabs
   make. Every message is checked against a zod schema, and anything malformed or foreign is
-  ignored. Each tab shows the others' pointers, named "Tab 2" and so on, in colours that follow
-  the light and dark themes.
+  ignored, and so is a message in another version of the format (`SESSION.protocol`, 2 since
+  rooms became outlines and walls arcs): a tab still running an older build does not exchange
+  changes with this one until it is reloaded. Each tab shows the others' pointers, named "Tab 2"
+  and so on, in colours that follow the light and dark themes.
 
 There is no server: the session lives in the browser. `src/session/transport.ts` is the seam
 where a network relay could carry the same messages between machines.
@@ -331,13 +344,17 @@ src/
             catalog.ts (32 built-in kinds + the plan's own kinds) · resolve.ts (id/name lookup)
             store.ts (shared actions, undo, activity) · commands.ts (dispatch: the one change path)
             assets.ts (underlay images, kept while the plan or its undo history names them)
-            sceneBus.ts · seed.ts · provenance.ts (what each change touched; its revision number)
+            sceneBus.ts · seed.ts · demoCrescent.ts (the free-shapes demo; loaded when chosen)
+            provenance.ts (what each change touched; its revision number)
             levels.ts (storeys: elevations, what stands on each, stairwells, level names)
             stairs.ts (a stair's whole shape — risers, treads, landing, walking line, clear
             zones, headroom, the guard round its stairwell — from the little the plan stores)
-            planFormat.ts (the save format, version 2, and the migration of format-1 plans)
-            joints.ts (how far a wall reaches into the walls it meets: the 3D view's joints, and
-            the IFC export's butt joints) · floors.ts (what a storey's slab covers, for the 3D view
+            planFormat.ts (the save format, version 3, and the migration of format-1 and -2 plans)
+            shapes.ts (arcs by their bulge and outlines with arc edges: length, point and
+            tangent at t, where curves meet, winding, self-crossing, the label's anchor)
+            enclose.ts (a room fitted to the walls round a point; loaded when asked for)
+            joints.ts (a wall's footprint mitred against the walls it meets at any angle, for the
+            plan's poché, the floors and the 3D view, and the IFC export's butt joints) · floors.ts (what a storey's slab covers, for the 3D view
             and IFC alike) · region.ts (flat regions with holes, cut into trapezoids)
             text.ts (plan text made a clean name) · planRanges.ts (every number held to its range,
             for what writes a plan out) · ids.ts (entity ids, and a plan's own random id)
@@ -356,8 +373,14 @@ src/
             drawing.ts · symbols.tsx · stairSymbol.ts (a stair's plan symbol: treads and
             edges below the cut, hidden past it, the break line, UP/DN, the stairwell's guard)
             StairDrawing.tsx (that symbol drawn; loaded after the first paint)
+            roomDraft.ts (the room tool's outline, corner by corner, from the pointer or the
+            keyboard's cross) · ShapeHandles.tsx (corner and edge handles, bending a wall) and
+            WallPoche.tsx (each wall's mitred footprint; a parapet below the cut in outline),
+            both loaded after the first paint
   three/    (loaded on demand: the 2D editor's first chunk has no three.js)
-            build.ts (extrusion with real openings, resolved joints, floors)
+            build.ts (extrusion with real openings, resolved joints, floors) · wallSolids.ts
+            (walls extruded from their footprints, cut square to the arc at their openings)
+            triangulate.ts (ear clipping for shaped floors and caps)
             furniture.ts (every built-in kind modelled to its catalogue box from soft cushions, turned
             and lathed parts and cut plates, baked to one mesh per surface and shared per kind;
             agent parts on the same surfaces; a tidy block-out for imported products)
@@ -387,6 +410,7 @@ src/
             activity (feed with linked names, Developer tools) · approvals (request card, queue,
             policy) · canvas (zoom, hint bar, legend, the level switcher) · firstRun
             inspector/LevelsSection.tsx and StairInspector.tsx (storeys and stairs in Properties)
+            inspector/RoomShape.tsx (a room's corners and edge bends, from the keyboard)
             SupplierBridge (the partner frame the postMessage transport uses) · useAppStore · useGesture
             useThumbnails
 tests/      domain: geometry, checker (incl. seed = 0 issues regression), rules, catalog,

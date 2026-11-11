@@ -16,7 +16,8 @@
     stroke-width: var(--pen-medium);
     stroke-linecap: round;
   }
-  line.ss-highlight { stroke: var(--plan-agent-muted); stroke-opacity: 0.85; }
+  /* a wall: its centreline stroked past its thickness (a line or an arc), never filled */
+  .ss-highlight--wall { fill: none; stroke: var(--plan-agent-muted); stroke-opacity: 0.85; }
   .ss-highlight--point { fill-opacity: 0.35; }
 
   .ss-agent,

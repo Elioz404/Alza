@@ -9,6 +9,7 @@
 import type { PlanModel } from "./types";
 import { groundLevel } from "./types";
 import { newPlanId } from "./ids";
+import { rectOutline } from "./shapes";
 import { GROUND_LEVEL_ID as G, LEVEL_DEFAULTS, LEVEL_NAMES, PLAN_FORMAT_VERSION } from "./limits";
 
 export const seedLoft = (): PlanModel => ({
@@ -45,9 +46,9 @@ export const seedLoft = (): PlanModel => ({
     { id: "win_bath", kind: "window", wallId: "wall_e", t: 0.75, width: 0.6, sill: 1.2, height: 0.9 },
   ],
   rooms: [
-    { id: "room_living", levelId: G, x: 0.075, y: 0.075, w: 4.85, h: 5.85, label: "Living & Kitchen", floor: "oak" },
-    { id: "room_bed", levelId: G, x: 5.075, y: 0.075, w: 2.85, h: 3.25, label: "Bedroom", floor: "carpet" },
-    { id: "room_bath", levelId: G, x: 5.075, y: 3.475, w: 2.85, h: 2.45, label: "Bathroom", floor: "tile" },
+    { id: "room_living", levelId: G, points: rectOutline(0.075, 0.075, 4.85, 5.85), label: "Living & Kitchen", floor: "oak" },
+    { id: "room_bed", levelId: G, points: rectOutline(5.075, 0.075, 2.85, 3.25), label: "Bedroom", floor: "carpet" },
+    { id: "room_bath", levelId: G, points: rectOutline(5.075, 3.475, 2.85, 2.45), label: "Bathroom", floor: "tile" },
   ],
   items: [
     // kitchen strip along the top wall (fronts face into the room)
@@ -114,9 +115,9 @@ export const seedTownhouse = (): PlanModel => ({
     { id: "f_win_bed", kind: "window", wallId: "f_wall_e", t: 0.4, width: 1.2, sill: 0.9, height: 1.2 },
   ],
   rooms: [
-    { id: "g_room_living", levelId: G, x: 0.075, y: 0.075, w: 7.85, h: 5.85, label: "Living", floor: "oak" },
-    { id: "f_room_hall", levelId: FIRST_LEVEL_ID, x: 0.075, y: 0.075, w: 2.375, h: 5.85, label: "Landing", floor: "oak" },
-    { id: "f_room_bed", levelId: FIRST_LEVEL_ID, x: 2.55, y: 0.075, w: 5.375, h: 5.85, label: "Bedroom", floor: "carpet" },
+    { id: "g_room_living", levelId: G, points: rectOutline(0.075, 0.075, 7.85, 5.85), label: "Living", floor: "oak" },
+    { id: "f_room_hall", levelId: FIRST_LEVEL_ID, points: rectOutline(0.075, 0.075, 2.375, 5.85), label: "Landing", floor: "oak" },
+    { id: "f_room_bed", levelId: FIRST_LEVEL_ID, points: rectOutline(2.55, 0.075, 5.375, 5.85), label: "Bedroom", floor: "carpet" },
   ],
   items: [
     { id: "g_item_sofa", levelId: G, kind: "sofa", x: 6, y: 5.475, rotation: 180 },

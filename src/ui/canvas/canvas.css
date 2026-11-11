@@ -44,7 +44,12 @@
   .pl-wall { stroke: var(--plan-ink); stroke-linecap: square; fill: none; }
   .pl-wall--hover { stroke: var(--plan-line); }
   .pl-wall--selected { stroke: var(--plan-selection); }
+  /* a wall below the plan's cut (a parapet), seen from above: its outline in a firm pen, not poché */
+  .pl-wall.pl-wall--below-cut { stroke: var(--plan-line); stroke-width: var(--pen-firm); stroke-linecap: butt; }
+  .pl-wall.pl-wall--below-cut.pl-wall--selected { stroke: var(--plan-selection); }
   .pl-hit { stroke: transparent; fill: none; pointer-events: stroke; }
+  /* the walls' poché (WallPoche.tsx; its fills are in shapes.css, which comes with it): the hit band above takes the clicks */
+  .pl-poche { pointer-events: none; }
 
   /* openings */
   .pl-openings { pointer-events: none; }
@@ -139,6 +144,8 @@
   .pl-preview-area { fill: var(--plan-selection-muted); stroke: var(--plan-preview); stroke-width: var(--pen-firm); stroke-dasharray: var(--dash-preview); }
   .pl-preview-room[data-refused] .pl-preview-area { stroke: var(--plan-line-soft); fill: none; }
   .pl-preview-room[data-refused] .pl-pill-box { fill: var(--plan-line-soft); }
+  .pl-draft-start { fill: var(--color-background-card); stroke: var(--plan-preview); stroke-width: var(--pen-firm); }
+  .pl-draft-corner { fill: var(--plan-preview); }
   .pl-ghost-outline { fill: var(--plan-selection-muted); fill-opacity: var(--opacity-quiet); stroke: var(--plan-preview); stroke-width: var(--pen-firm); stroke-dasharray: var(--dash-ghost); }
   .pl-ghost-opening[data-refused] .pl-ghost-outline { fill: var(--plan-destructive-muted); stroke: var(--plan-destructive); }
   .pl-ghost-opening[data-refused] .pl-leaf,
@@ -192,7 +199,7 @@
     align-items: flex-start;
     gap: var(--spacing-2);
   }
-  .canvas__slot--zoom > .zoom-dock { pointer-events: none; }
+  .canvas__zoom > .zoom-dock { pointer-events: none; }
   .zoom-dock .zoom { pointer-events: auto; }
 
   .scalebar { margin: 0; display: grid; gap: var(--spacing-0-5); justify-items: stretch; align-content: end; min-height: var(--size-scalebar); }

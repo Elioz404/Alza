@@ -22,20 +22,22 @@
  * key belongs to a text field instead — is decided in one place.
  */
 
+import { closestOnEdge, outlineAnchor, outlineRect, roomArea, tangentOnEdge, wallEdge, wallLength, type Edge } from "../model/shapes";
 import type { Opening, PlanModel } from "../model/types";
 import { catalogOf } from "../model/catalog";
 import { levelSlice, levelsOf, stairGeometryIn, stairwellsOf } from "../model/levels";
 import type { StairGeometry } from "../model/stairs";
-import { pointInORect, wallAsRect, type ORect } from "../model/geometry";
+import { pointInORect, type ORect } from "../model/geometry";
+import { slabOutline } from "../model/floors";
+import { insidePoly, type Poly } from "../model/region";
 import { openingsByWall } from "./build";
 import { DOORS, WALK, WALK_ENTRY } from "./config";
 import { isInsideOverlay, isTypingTarget } from "../ui/keys";
 
 interface WallBlocker {
-  ax: number;
-  ay: number;
-  ux: number;
-  uy: number;
+  /** its centreline: a segment, or an arc */
+  edge: Edge;
+  /** its length along the centreline */
   len: number;
   half: number;
   /** door spans along the wall, in metres from its A end */
@@ -64,14 +66,9 @@ export interface Blockers {
 export function blockersFor(model: PlanModel, byWall: ReadonlyMap<string, readonly Opening[]> = openingsByWall(model)): Blockers {
   const catalog = catalogOf(model);
   const walls = model.walls.map((w): WallBlocker => {
-    const dx = w.bx - w.ax;
-    const dy = w.by - w.ay;
-    const len = Math.hypot(dx, dy) || 1;
+    const len = wallLength(w) || 1;
     return {
-      ax: w.ax,
-      ay: w.ay,
-      ux: dx / len,
-      uy: dy / len,
+      edge: wallEdge(w),
       len,
       half: w.thickness / 2,
       gaps: (byWall.get(w.id) ?? [])
@@ -88,14 +85,26 @@ export function blockersFor(model: PlanModel, byWall: ReadonlyMap<string, readon
   return { walls, items };
 }
 
+/**
+ * Where a point is against a wall: how far along its centreline (metres from A, past either end
+ * along the end's tangent) and how far off it. Along an arc, off it is the distance to its circle.
+ */
+function againstWall(w: WallBlocker, x: number, z: number): { along: number; perp: number } {
+  const c = closestOnEdge(w.edge, { x, y: z });
+  if (c.t > 0 && c.t < 1) return { along: c.t * w.len, perp: c.distance };
+  // past an end: measured in the frame of the wall's tangent there
+  const end = c.t <= 0 ? w.edge.a : w.edge.b;
+  const u = tangentOnEdge(w.edge, c.t <= 0 ? 0 : 1);
+  const px = x - end.x;
+  const pz = z - end.y;
+  return { along: (c.t <= 0 ? 0 : w.len) + px * u.x + pz * u.y, perp: Math.abs(-px * u.y + pz * u.x) };
+}
+
 /** Would a walker standing at (x, z) be inside something? `openness` says how far each door is open, 0..1. */
 export function blocked(b: Blockers, x: number, z: number, openness: (doorId: string) => number): boolean {
   const r = WALK.personRadius;
   for (const w of b.walls) {
-    const px = x - w.ax;
-    const pz = z - w.ay;
-    const along = px * w.ux + pz * w.uy;
-    const perp = Math.abs(px * -w.uy + pz * w.ux);
+    const { along, perp } = againstWall(w, x, z);
     if (perp > w.half + r) continue;
     if (along < -r || along > w.len + r) continue;
     // inside the wall band — unless this is an open doorway
@@ -159,8 +168,12 @@ export interface WalkSpot {
  * without rooms, or one whose rooms are full.
  */
 export function walkEntry(model: PlanModel, b: Blockers, openness: (doorId: string) => number, free: (x: number, z: number) => boolean = () => true): WalkSpot | null {
-  const room = model.rooms.reduce<PlanModel["rooms"][number] | null>((best, r) => (!best || r.w * r.h > best.w * best.h ? r : best), null);
-  if (!room) return null;
+  const best = model.rooms.reduce<PlanModel["rooms"][number] | null>((b, r) => (!b || roomArea(r) > roomArea(b) ? r : b), null);
+  if (!best) return null;
+  // a rectangle's centre and size; any other room's most interior point, and the widest circle there
+  const rect = outlineRect(best.points);
+  const anchor = outlineAnchor(best.points);
+  const room = rect ?? { x: anchor.x - anchor.clearance, y: anchor.y - anchor.clearance, w: anchor.clearance * 2, h: anchor.clearance * 2 };
   const cx = room.x + room.w / 2;
   const cz = room.y + room.h / 2;
   // stand toward the south end of a deep room, the east end of a wide one, and look across it
@@ -251,8 +264,8 @@ interface WalkLevel {
   readonly id: string;
   readonly elevation: number;
   readonly blockers: Blockers;
-  /** where its floor is: anywhere on the ground level, over its rooms and walls above it */
-  readonly floor: readonly ORect[] | null;
+  /** where its floor is: anywhere on the ground level, over its rooms and walls above it (its slab's outlines) */
+  readonly floor: readonly Poly[] | null;
   /** where its floor is not: the stairwells from the level below, and its own stairs' footprints */
   readonly holes: readonly ORect[];
   readonly stairs: readonly StairGeometry[];
@@ -269,13 +282,8 @@ export function walkWorld(model: PlanModel): WalkWorld {
     levels: levelsOf(model).map((info): WalkLevel => {
       const slice = levelSlice(model, info.level.id);
       const stairs = slice.stairs.flatMap((s) => stairGeometryIn(model, s) ?? []);
-      const floor =
-        info.index === 0
-          ? null
-          : [
-              ...slice.rooms.map((r): ORect => ({ cx: r.x + r.w / 2, cy: r.y + r.h / 2, hw: r.w / 2, hd: r.h / 2, rot: 0 })),
-              ...slice.walls.map((w) => wallAsRect(w.ax, w.ay, w.bx, w.by, w.thickness)),
-            ];
+      // the slab the 3D view builds under the level (model/floors.ts): its rooms' outlines and its walls' footprints
+      const floor = info.index === 0 ? null : slabOutline(slice);
       return {
         id: info.level.id,
         elevation: info.elevation,
@@ -287,6 +295,21 @@ export function walkWorld(model: PlanModel): WalkWorld {
       };
     }),
   };
+}
+
+/** Whether p is inside an outline or on its rim (within SEAM): where a room meets a wall's footprint, the floor runs on. */
+function onOrIn(p: { x: number; y: number }, poly: Poly): boolean {
+  if (insidePoly(p, poly)) return true;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy;
+    const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+    if (Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t)) <= SEAM) return true;
+  }
+  return false;
 }
 
 /** A rectangle grown by `by` on every side (shrunk, for a negative `by`). */
@@ -319,7 +342,7 @@ export function surfaceAt(world: WalkWorld, x: number, z: number, from: number):
     if (best === null || Math.abs(h - from) < Math.abs(best - from)) best = h;
   };
   for (const level of world.levels) {
-    const onFloor = (level.floor === null || level.floor.some((r) => pointInORect(p, r))) && !level.holes.some((r) => pointInORect(p, r));
+    const onFloor = (level.floor === null || level.floor.some((poly) => onOrIn(p, poly))) && !level.holes.some((r) => pointInORect(p, r));
     if (onFloor) consider(level.elevation);
     for (const g of level.stairs) {
       const h = treadAt(g, p);

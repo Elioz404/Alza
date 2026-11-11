@@ -26,7 +26,7 @@ export type LocalPlacement = Ref<"IFCLOCALPLACEMENT">;
 export type Context = Ref<"IFCGEOMETRICREPRESENTATIONCONTEXT"> | Ref<"IFCGEOMETRICREPRESENTATIONSUBCONTEXT">;
 type Profile = Ref<"IFCRECTANGLEPROFILEDEF"> | Ref<"IFCARBITRARYCLOSEDPROFILEDEF">;
 type Solid = Ref<"IFCEXTRUDEDAREASOLID">;
-type Curve = Ref<"IFCPOLYLINE">;
+type Curve = Ref<"IFCPOLYLINE"> | Ref<"IFCINDEXEDPOLYCURVE">;
 type Representation = Ref<"IFCSHAPEREPRESENTATION">;
 export type ProductShape = Ref<"IFCPRODUCTDEFINITIONSHAPE">;
 type Property = Ref<"IFCPROPERTYSINGLEVALUE">;
@@ -61,6 +61,13 @@ const propertyValue = (p: PropertyValue): StepValue => {
 
 /** What every rooted entity starts with: GlobalId, OwnerHistory (unset), Name, Description. */
 const rooted = (guid: string, name: string | undefined, description?: string): StepValue[] => [str(guid), UNSET, opt(name, (n) => boundedText(n, "Name")), opt(description, str)];
+
+/**
+ * One segment of an indexed poly curve, by the 1-based indices of its points in the curve's
+ * point list: a straight line through two or more, or an arc through three (start, a point on
+ * it, end).
+ */
+export type CurveSegment = { readonly line: readonly number[] } | { readonly arc: readonly [number, number, number] };
 
 /** The attributes an IfcProduct adds after IfcRoot's: ObjectType, ObjectPlacement, Representation. */
 const product = (objectType: string | undefined, placement: LocalPlacement, shape: ProductShape | null): StepValue[] => [opt(objectType, (t) => boundedText(t, "ObjectType")), placement, shape ?? UNSET];
@@ -132,6 +139,26 @@ export class IfcEntities {
   /** IfcExtrudedAreaSolid: SweptArea, Position, ExtrudedDirection, Depth — straight up, from `base`. */
   extrusion(profile: Profile, depth: number, base: readonly [number, number, number] = [0, 0, 0]): Solid {
     return this.file.add("IFCEXTRUDEDAREASOLID", [profile, this.placement3(base), this.direction(0, 0, 1), positiveLength(depth, "Depth")]);
+  }
+
+  /**
+   * IfcIndexedPolyCurve (Points, Segments, SelfIntersect) over an IfcCartesianPointList2D
+   * (CoordList): the IFC4 curve whose segments may be arcs (IfcArcIndex) as well as lines
+   * (IfcLineIndex). A closed one ends its last segment at its first point.
+   */
+  indexedCurve(points: readonly (readonly [number, number])[], segments: readonly CurveSegment[]): Ref<"IFCINDEXEDPOLYCURVE"> {
+    const list2d = this.file.add("IFCCARTESIANPOINTLIST2D", [list(points.map((p) => list(p.map(real))))]);
+    const index = (i: number) => {
+      if (!Number.isInteger(i) || i < 1 || i > points.length) throw new Error(`A curve segment indexes point ${i} of ${points.length}.`);
+      return int(i);
+    };
+    const segs = segments.map((sg) => ("arc" in sg ? typed("IFCARCINDEX", list(sg.arc.map(index))) : typed("IFCLINEINDEX", list(sg.line.map(index)))));
+    return this.file.add("IFCINDEXEDPOLYCURVE", [list2d, list(segs), bool(false)]);
+  }
+
+  /** IfcArbitraryClosedProfileDef: ProfileType, ProfileName, OuterCurve: the area inside a closed curve (a polyline, or an indexed curve with arcs). */
+  closedProfile(curve: Curve): Profile {
+    return this.file.add("IFCARBITRARYCLOSEDPROFILEDEF", [enumv("AREA"), UNSET, curve]);
   }
 
   /** IfcPolyline: Points. */

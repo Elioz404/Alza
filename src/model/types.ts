@@ -27,6 +27,14 @@ export interface Wall {
   by: number;
   thickness: number; // meters, e.g. 0.15
   height: number; // meters, e.g. 2.7
+  /**
+   * A curved wall's bend: the bulge of its centreline arc from A to B (limits.ts, BULGE —
+   * tan of a quarter of the arc's included angle; positive bows to the wall's left walking A to
+   * B). Absent or 0, the wall is straight. Its faces are concentric arcs, thickness/2 to either
+   * side, with the same bulge; an opening's `t` and `width` are measured along the centreline
+   * arc (model/shapes.ts).
+   */
+  bulge?: number;
 }
 
 export type { OpeningKind } from "./limits";
@@ -49,13 +57,26 @@ export interface Opening {
   side?: SwingSide;
 }
 
+/**
+ * A corner of a room's outline, and the edge from it to the next corner: straight, or an arc of
+ * that bulge (limits.ts, BULGE). The outline is kept wound one way (positive shoelace area on the
+ * plan's coordinates, model/shapes.ts normalizeOutline), so a positive bulge always bows out of
+ * the room and a negative one into it.
+ */
+export interface RoomVertex {
+  x: number;
+  y: number;
+  bulge?: number;
+}
+
+/**
+ * A room: a simple polygon whose edges may be arcs (ROOM_SHAPE in limits.ts). A rectangle is
+ * its four corners, clockwise on the sheet from the top-left one (shapes.ts, rectOutline).
+ */
 export interface Room {
   id: string;
   levelId: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+  points: RoomVertex[];
   label: string;
   floor: FloorFinish;
 }

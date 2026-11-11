@@ -18,6 +18,7 @@ import {
 import { seedLoft } from "../src/model/seed";
 import { freezeKind } from "../src/model/catalog";
 import { emptyModel, type PlanModel } from "../src/model/types";
+import { rectOutline } from "../src/model/shapes";
 
 /** A plan with one problem of each kind the rules below look for. */
 const broken = (): PlanModel => ({
@@ -27,7 +28,7 @@ const broken = (): PlanModel => ({
     { id: "stub", levelId: "level_ground", ax: 6, ay: 6, bx: 6.1, by: 6, thickness: 0.15, height: 2.7 },
   ],
   openings: [{ id: "ghost_door", kind: "door", wallId: "missing", t: 0.5, width: 0.9, sill: 0, height: 2.1 }],
-  rooms: [{ id: "closet", levelId: "level_ground", x: 0, y: 1, w: 0.3, h: 2, label: "Closet", floor: "oak" }],
+  rooms: [{ id: "closet", levelId: "level_ground", points: rectOutline(0, 1, 0.3, 2), label: "Closet", floor: "oak" }],
   items: [
     { id: "a", levelId: "level_ground", kind: "sofa", x: 2, y: 0, rotation: 0 },
     { id: "b", levelId: "level_ground", kind: "sofa", x: 2.2, y: 0.1, rotation: 0 },

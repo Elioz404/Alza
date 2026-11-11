@@ -8,6 +8,7 @@
 
 import { z } from "zod";
 import {
+  BULGE,
   CALIBRATION_METERS,
   CAMERA_MODES,
   COORD,
@@ -29,6 +30,7 @@ import {
   PART_OFFSET,
   PART_MATERIALS,
   PART_SHAPES,
+  ROOM_SHAPE,
   ROOM_SIZE,
   ROTATION,
   SIGNED_LENGTH,
@@ -73,6 +75,25 @@ export const partOffset = inRange(PART_OFFSET);
 export const imageFraction = inRange(IMAGE_FRACTION);
 export const calibrationMeters = inRange(CALIBRATION_METERS);
 export const opacity = inRange(OPACITY);
+
+/** A point on the plan, as tools take one: [x, y] in metres. */
+export const planPoint = z.tuple([coord, coord]);
+/** An edge's bulge: tan of a quarter of its arc's angle, 0 straight, ±1 a half circle. */
+export const bulge = inRange(BULGE);
+/**
+ * How a wall bends: by its sagitta (how far the middle of its arc stands off the straight line
+ * between its ends, metres; positive to the wall's left walking from A to B, 0 straight) or by a
+ * point its arc passes through.
+ */
+export const wallCurve = z.union([z.strictObject({ sagitta: signedLength }), z.strictObject({ through: planPoint })]);
+/** An arc on one edge of a room's outline: by its sagitta (positive bows out of the room) or a point it passes through. */
+export const roomArc = z.union([
+  z.strictObject({ edge: z.int().min(0).max(ROOM_SHAPE.vertices.max - 1), sagitta: signedLength }),
+  z.strictObject({ edge: z.int().min(0).max(ROOM_SHAPE.vertices.max - 1), through: planPoint }),
+]);
+/** A room's corners, in order round it (either way). */
+export const roomPoints = z.array(planPoint).min(ROOM_SHAPE.vertices.min).max(ROOM_SHAPE.vertices.max);
+export const roomArcs = z.array(roomArc).max(ROOM_SHAPE.vertices.max);
 
 export const levelHeight = inRange(LEVEL_HEIGHT);
 /** A level's place in the stack: 0 is the ground level. */

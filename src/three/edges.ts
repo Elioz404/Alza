@@ -29,6 +29,20 @@ export const NO_INK = "noInk";
 export const INK_EDGE = "ink-edge";
 
 /**
+ * The key a wall prism's geometry carries its solid under (geometry.userData): its outline on its
+ * own (x, z) and the heights it stands between (wallSolids.ts). A prism is no box, so what lies
+ * inside it is read off that, not off its bounds.
+ */
+export const PRISM_SOLID = "prismSolid";
+
+/** A prism's solid: its outline on (x, z), as {x, y: z} points, and its heights. */
+export interface PrismSolid {
+  readonly ring: readonly { readonly x: number; readonly y: number }[];
+  readonly y0: number;
+  readonly y1: number;
+}
+
+/**
  * The ink is drawn a hair nearer the camera than the edge it lies on (EDGES.depthPull of its
  * distance, along the line of sight, so it stays exactly where it was on screen): a line on a
  * face then wins the depth test against that face, and is drawn whole, never broken into dashes
@@ -195,10 +209,13 @@ function edgesOf(geometry: THREE.BufferGeometry): THREE.BufferAttribute {
 
 /*
  * A `wall` is drawn in the ink the cutaway slices, and as the plan draws it, one solid: a wall
- * is built of boxes laid end to end and over each other (masonry, lintels, sills, the frames and
- * the skirting proud of it), all square to the wall, so an edge that lies inside or on another
- * of its boxes — or of a wall it runs into — is a seam between two of them, or hidden, and is
- * left out. addInkEdges returns how many line sets were added.
+ * is built of prisms laid end to end and over each other (masonry, lintels, sills, the skirting
+ * proud of it, the band on its top) and of boxes (its frames), so an edge that lies inside or on
+ * another of its parts is a seam between two of them, and is left out; so is one buried inside a
+ * wall it runs into. A prism's footprint is mitred against its neighbours', so walls that meet
+ * tile the joint, and an edge where they meet (a corner, either side of a T) is drawn. A box holds
+ * what lies in its bounds; a prism, what lies in its outline between its heights. addInkEdges
+ * returns how many line sets were added.
  */
 interface Part {
   mesh: THREE.Mesh;
@@ -207,6 +224,42 @@ interface Part {
   matrix: THREE.Matrix4;
   /** its bounds in its anchor's frame, a seam's width larger */
   box: THREE.Box3;
+  /** a prism's solid, in the mesh's own frame, and the way from the anchor's frame into it */
+  solid?: PrismSolid;
+  inverse?: THREE.Matrix4;
+}
+
+/** Whether (x, z) lies inside a ring (even-odd), and how far it is from the ring's nearest edge. */
+function ringPlace(ring: PrismSolid["ring"], x: number, z: number): { inside: boolean; distance: number } {
+  let inside = false;
+  let distance = Infinity;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[j];
+    const b = ring[i];
+    if (b.y > z !== a.y > z && x < ((a.x - b.x) * (z - b.y)) / (a.y - b.y) + b.x) inside = !inside;
+    const dx = b.x - a.x;
+    const dz = b.y - a.y;
+    const l2 = dx * dx + dz * dz;
+    const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.y) * dz) / l2));
+    distance = Math.min(distance, Math.hypot(x - (a.x + dx * t), z - (a.y + dz * t)));
+  }
+  return { inside, distance };
+}
+
+const inMesh = new THREE.Vector3();
+
+/**
+ * Whether a point (in the part's anchor frame) lies in a part: in its bounds and, for a prism, in
+ * its outline between its heights, `margin` metres in from its faces (negative: up to that far out of them).
+ */
+function holds(part: Part, p: THREE.Vector3, margin: number): boolean {
+  if (!part.box.containsPoint(p)) return false;
+  if (!part.solid) return true;
+  const q = inMesh.copy(p).applyMatrix4(part.inverse!);
+  const { ring, y0, y1 } = part.solid;
+  if (q.y < y0 + margin || q.y > y1 - margin) return false;
+  const at = ringPlace(ring, q.x, q.z);
+  return margin >= 0 ? at.inside && at.distance > margin : at.inside || at.distance <= -margin;
 }
 
 /** The parts a piece's edges are drawn from: its meshes, by the anchor each is lined under. */
@@ -221,7 +274,8 @@ function partsOf(root: THREE.Object3D): Part[] {
     const matrix = new THREE.Matrix4().multiplyMatrices(scratch.inverse, mesh.matrixWorld);
     if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
     const box = mesh.geometry.boundingBox!.clone().applyMatrix4(matrix).expandByScalar(EDGES.seamTolerance);
-    parts.push({ mesh, anchor, matrix, box });
+    const solid = mesh.geometry.userData?.[PRISM_SOLID] as PrismSolid | undefined;
+    parts.push(solid ? { mesh, anchor, matrix, box, solid, inverse: matrix.clone().invert() } : { mesh, anchor, matrix, box });
   });
   return parts;
 }
@@ -243,7 +297,7 @@ export function addInkEdges(root: THREE.Object3D, wall = false, neighbours: read
   const others = wall
     ? neighbours
         .filter((n) => n !== root)
-        .map((n) => ({ toLocal: new THREE.Matrix4().copy(n.matrixWorld).invert().multiply(root.matrixWorld), boxes: partsOf(n).filter((p) => p.anchor === n).map((p) => p.box) }))
+        .map((n) => ({ toLocal: new THREE.Matrix4().copy(n.matrixWorld).invert().multiply(root.matrixWorld), parts: partsOf(n).filter((p) => p.anchor === n) }))
     : [];
   const local = new THREE.Vector3();
   // an edge on a neighbour's face is hidden by it; one along a neighbour's own edge (the outer
@@ -259,7 +313,8 @@ export function addInkEdges(root: THREE.Object3D, wall = false, neighbours: read
   const hiddenByNeighbour = (p: THREE.Vector3) =>
     others.some((o) => {
       local.copy(p).applyMatrix4(o.toLocal);
-      return o.boxes.some((b) => buried(b, local));
+      // a neighbour's prism hides only what lies deep inside it: on its faces is where the two walls meet
+      return o.parts.some((q) => (q.solid ? holds(q, local, 2 * EDGES.seamTolerance) : buried(q.box, local)));
     });
   const groups = new Map<THREE.Object3D, number[]>();
   const a = new THREE.Vector3();
@@ -274,7 +329,7 @@ export function addInkEdges(root: THREE.Object3D, wall = false, neighbours: read
       b.fromBufferAttribute(lines, i + 1).applyMatrix4(part.matrix);
       if (wall) {
         mid.addVectors(a, b).multiplyScalar(0.5);
-        if (parts.some((p) => p !== part && p.anchor === part.anchor && p.box.containsPoint(mid))) continue;
+        if (parts.some((p) => p !== part && p.anchor === part.anchor && holds(p, mid, -EDGES.seamTolerance))) continue;
         if (part.anchor === root && hiddenByNeighbour(mid)) continue;
       }
       out.push(a.x, a.y, a.z, b.x, b.y, b.z);

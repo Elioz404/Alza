@@ -73,6 +73,10 @@ export const IFC4_ATTRIBUTES: Readonly<Record<string, readonly string[]>> = {
   IFCAXIS2PLACEMENT2D: ["Location:IFCCARTESIANPOINT", "RefDirection?:IFCDIRECTION"],
   // schema/ifcgeometryresource/lexical/ifcpolyline.htm
   IFCPOLYLINE: ["Points:IFCCARTESIANPOINT"],
+  // schema/ifcgeometryresource/lexical/ifccartesianpointlist2d.htm
+  IFCCARTESIANPOINTLIST2D: ["CoordList"],
+  // schema/ifcgeometryresource/lexical/ifcindexedpolycurve.htm (Segments: IfcSegmentIndexSelect, IfcLineIndex or IfcArcIndex)
+  IFCINDEXEDPOLYCURVE: ["Points:IFCCARTESIANPOINTLIST2D|IFCCARTESIANPOINTLIST3D", "Segments?", "SelfIntersect?"],
   // schema/ifcgeometricconstraintresource/lexical/ifclocalplacement.htm
   IFCLOCALPLACEMENT: [`PlacementRelTo?:${PLACEMENTS}`, `RelativePlacement:${AXIS2}`],
   // schema/ifcprofileresource/lexical/ifcrectangleprofiledef.htm
@@ -462,6 +466,145 @@ export interface IfcCheck {
   storeyOf: Map<number, number>;
 }
 
+// ---------------------------------------------------------------------------- curves
+
+/** An indexed curve's segments, as their kind and their 1-based point indices (unchecked). */
+function segmentsOf(curve: StepEntity): { kind: string; indices: number[] }[] {
+  const segs = curve.attrs[1];
+  if (segs.t !== "list") return [];
+  return segs.items.map((sg) => ({
+    kind: sg.t === "typed" ? sg.type : "",
+    indices: sg.t === "typed" && sg.value.t === "list" ? sg.value.items.map((i) => (i.t === "int" ? i.v : NaN)) : [],
+  }));
+}
+
+/** A 2D point list's points. */
+function pointsOf(file: StepFileRead, curve: StepEntity): [number, number][] {
+  const list = curve.attrs[0].t === "ref" ? file.entities.get(curve.attrs[0].id) : undefined;
+  const coords = list?.attrs[0];
+  if (!coords || coords.t !== "list") return [];
+  return coords.items.map((p) => (p.t === "list" ? [(p.items[0] as { v: number }).v, (p.items[1] as { v: number }).v] : [NaN, NaN]));
+}
+
+/** What is wrong with an indexed curve's segments, or null. */
+function indexedCurveProblem(file: StepFileRead, curve: StepEntity): string | null {
+  const pts = pointsOf(file, curve);
+  const segs = segmentsOf(curve);
+  if (segs.length === 0) return "an IfcIndexedPolyCurve without segments (the export always writes them)";
+  let end: number | null = null;
+  for (const sg of segs) {
+    if (sg.kind !== "IFCLINEINDEX" && sg.kind !== "IFCARCINDEX") return `a segment ${sg.kind || "untyped"} is neither IFCLINEINDEX nor IFCARCINDEX`;
+    if (sg.indices.some((i) => !Number.isInteger(i) || i < 1 || i > pts.length)) return `a segment indexes past the ${pts.length} points (${sg.indices.join(",")})`;
+    if (sg.kind === "IFCARCINDEX" && sg.indices.length !== 3) return `an IFCARCINDEX of ${sg.indices.length} points, not 3`;
+    if (sg.kind === "IFCLINEINDEX" && sg.indices.length < 2) return "an IFCLINEINDEX of fewer than 2 points";
+    if (end !== null && sg.indices[0] !== end) return `a segment starts at point ${sg.indices[0]}, not where the last ended (${end})`;
+    if (sg.kind === "IFCARCINDEX") {
+      const [a, m, b] = sg.indices.map((i) => pts[i - 1]);
+      const cross = (m[0] - a[0]) * (b[1] - a[1]) - (m[1] - a[1]) * (b[0] - a[0]);
+      if (Math.abs(cross) < 1e-12) return `an arc through three points on one line (${sg.indices.join(",")})`;
+    }
+    end = sg.indices[sg.indices.length - 1];
+  }
+  return null;
+}
+
+/** The circle through three points: its centre and radius. */
+function circleThrough(a: [number, number], m: [number, number], b: [number, number]): { cx: number; cy: number; r: number } {
+  const d = 2 * (a[0] * (m[1] - b[1]) + m[0] * (b[1] - a[1]) + b[0] * (a[1] - m[1]));
+  const sq = (p: [number, number]) => p[0] * p[0] + p[1] * p[1];
+  const cx = (sq(a) * (m[1] - b[1]) + sq(m) * (b[1] - a[1]) + sq(b) * (a[1] - m[1])) / d;
+  const cy = (sq(a) * (b[0] - m[0]) + sq(m) * (a[0] - b[0]) + sq(b) * (m[0] - a[0])) / d;
+  return { cx, cy, r: Math.hypot(a[0] - cx, a[1] - cy) };
+}
+
+/** The signed angle an arc from a through m to b turns, seen from its centre. */
+function arcSweep(a: [number, number], m: [number, number], b: [number, number]): { cx: number; cy: number; r: number; start: number; sweep: number } {
+  const c = circleThrough(a, m, b);
+  const ang = (p: [number, number]) => Math.atan2(p[1] - c.cy, p[0] - c.cx);
+  const norm = (x: number) => ((x % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  const start = ang(a);
+  const toM = norm(ang(m) - start);
+  const toB = norm(ang(b) - start);
+  // counter-clockwise from a, m comes before b; else the arc runs clockwise
+  const sweep = toM < toB ? toB : toB - 2 * Math.PI;
+  return { ...c, start, sweep };
+}
+
+/**
+ * The points along a curve the export writes (an IfcPolyline, or an IfcIndexedPolyCurve, its
+ * arcs cut every `step` radians or finer), in its own 2D frame, without repeating its first point
+ * at its end: what the tests measure a profile or an axis by.
+ */
+export function curvePoints(check: Pick<IfcCheck, "file">, curve: StepEntity, step = Math.PI / 180): [number, number][] {
+  const { file } = check;
+  if (curve.type === "IFCPOLYLINE") {
+    const pts = (curve.attrs[0] as { items: StepValue[] }).items.map((r) => {
+      const p = file.entities.get((r as { id: number }).id)!;
+      const c = p.attrs[0] as { items: { v: number }[] };
+      return [c.items[0].v, c.items[1].v] as [number, number];
+    });
+    const [f0, l0] = [pts[0], pts[pts.length - 1]];
+    return pts.length > 1 && f0[0] === l0[0] && f0[1] === l0[1] ? pts.slice(0, -1) : pts;
+  }
+  if (curve.type !== "IFCINDEXEDPOLYCURVE") throw new Error(`no points for a ${curve.type}`);
+  const pts = pointsOf(file, curve);
+  const out: [number, number][] = [];
+  for (const sg of segmentsOf(curve)) {
+    const idx = sg.indices.map((i) => pts[i - 1]);
+    if (sg.kind === "IFCLINEINDEX") {
+      for (const p of idx.slice(0, -1)) out.push(p);
+      continue;
+    }
+    const { cx, cy, r, start, sweep } = arcSweep(idx[0], idx[1], idx[2]);
+    const n = Math.max(1, Math.ceil(Math.abs(sweep) / step));
+    for (let k = 0; k < n; k++) {
+      const phi = start + (sweep * k) / n;
+      out.push([cx + r * Math.cos(phi), cy + r * Math.sin(phi)]);
+    }
+  }
+  const last = segmentsOf(curve).at(-1);
+  const end = last ? pts[last.indices[last.indices.length - 1] - 1] : undefined;
+  if (end && out.length > 0 && Math.hypot(end[0] - out[0][0], end[1] - out[0][1]) > 1e-9) out.push(end);
+  return out;
+}
+
+/**
+ * A closed curve's area and a curve's length, exact for its arcs (each arc's circular segment
+ * added to its chord's share of the polygon): what the tests compare with the plan's own.
+ */
+export function curveMeasure(check: Pick<IfcCheck, "file">, curve: StepEntity): { area: number; length: number } {
+  const { file } = check;
+  if (curve.type !== "IFCINDEXEDPOLYCURVE") {
+    const pts = curvePoints(check, curve);
+    let area = 0;
+    let length = 0;
+    pts.forEach((p, i) => {
+      const q = pts[(i + 1) % pts.length];
+      area += (p[0] * q[1] - q[0] * p[1]) / 2;
+      length += Math.hypot(q[0] - p[0], q[1] - p[1]);
+    });
+    return { area: Math.abs(area), length };
+  }
+  const pts = pointsOf(file, curve);
+  let area = 0;
+  let length = 0;
+  for (const sg of segmentsOf(curve)) {
+    const idx = sg.indices.map((i) => pts[i - 1]);
+    if (sg.kind === "IFCLINEINDEX") {
+      for (let k = 0; k + 1 < idx.length; k++) {
+        area += (idx[k][0] * idx[k + 1][1] - idx[k + 1][0] * idx[k][1]) / 2;
+        length += Math.hypot(idx[k + 1][0] - idx[k][0], idx[k + 1][1] - idx[k][1]);
+      }
+      continue;
+    }
+    const [a, , b] = idx;
+    const { r, sweep } = arcSweep(idx[0], idx[1], idx[2]);
+    area += (a[0] * b[1] - b[0] * a[1]) / 2 + ((r * r) / 2) * (Math.abs(sweep) - Math.sin(Math.abs(sweep))) * Math.sign(sweep);
+    length += r * Math.abs(sweep);
+  }
+  return { area: Math.abs(area), length };
+}
+
 const refsIn = (v: StepValue): number[] => (v.t === "ref" ? [v.id] : v.t === "list" ? v.items.flatMap(refsIn) : v.t === "typed" ? refsIn(v.value) : []);
 
 /** Check a file the export wrote; `errors` is empty when it is a well-formed IFC4 model of the kind the export promises. */
@@ -531,6 +674,29 @@ export function checkIfc(text: string): IfcCheck {
       if (g.t !== "str" || !GUID.test(g.v)) errors.push(`#${e.id}: ${e.type} has an invalid GlobalId ${JSON.stringify(g)}`);
       else if (guids.has(g.v)) errors.push(`#${e.id}: GlobalId ${g.v} is used twice`);
       else guids.add(g.v);
+    }
+  }
+  // indexed curves: two coordinates a point, segments of the right size indexing the point list,
+  // each starting where the last ended, an arc through three points not on one line; a closed
+  // profile's curve ends where it starts
+  for (const list2d of of("IFCCARTESIANPOINTLIST2D")) {
+    const coords = list2d.attrs[0];
+    if (coords.t !== "list" || coords.items.length === 0) errors.push(`#${list2d.id}: IFCCARTESIANPOINTLIST2D.CoordList must be a list of points`);
+    else
+      for (const p of coords.items)
+        if (p.t !== "list" || p.items.length !== 2 || p.items.some((x) => x.t !== "real")) errors.push(`#${list2d.id}: IFCCARTESIANPOINTLIST2D.CoordList holds a point that is not two REALs`);
+  }
+  for (const curve of of("IFCINDEXEDPOLYCURVE")) {
+    const problem = indexedCurveProblem(file, curve);
+    if (problem) errors.push(`#${curve.id}: ${problem}`);
+  }
+  for (const profile of of("IFCARBITRARYCLOSEDPROFILEDEF")) {
+    const curve = entities.get((profile.attrs[2] as { id: number }).id);
+    if (curve?.type === "IFCINDEXEDPOLYCURVE" && !indexedCurveProblem(file, curve)) {
+      const segs = segmentsOf(curve);
+      const first = segs[0].indices[0];
+      const last = segs[segs.length - 1].indices[segs[segs.length - 1].indices.length - 1];
+      if (first !== last) errors.push(`#${profile.id}: the closed profile's curve #${curve.id} ends at point ${last}, not where it starts (${first})`);
     }
   }
   if (errors.length > 0) return { file, errors, byType, attr, deref, storeyOf: new Map() };

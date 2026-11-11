@@ -8,8 +8,9 @@
  * list, quoted.
  */
 
-import type { ApprovalTarget, PendingApproval, PlanModel } from "../../model/types";
-import { segLen, segPoint } from "../../model/geometry";
+import { isCurved, outlineBounds, outlineBox, roomArea, subEdge, tangentOnEdge, tessellateEdge, wallEdge, wallPointAt } from "../../model/shapes";
+import type { ApprovalTarget, PendingApproval, PlanModel, Wall } from "../../model/types";
+import { segLen } from "../../model/geometry";
 import { openingSpan } from "../../model/issues";
 import { catalogOf } from "../../model/catalog";
 import { levelSlice, stairGeometryIn } from "../../model/levels";
@@ -86,7 +87,7 @@ export function targetFacts(a: PendingApproval, model: PlanModel): TargetFact[] 
     facts.push({ term: capitalise(NOUN[t.type]), value: t.label, quoted: NAMED.has(t.type), id: t.type === "plan" || t.type === "file" ? undefined : t.id });
     if (t.type === "room") {
       const r = model.rooms.find((x) => x.id === t.id);
-      if (r) facts.push({ term: "Area", value: `${(r.w * r.h).toFixed(2)} m²`, quoted: false });
+      if (r) facts.push({ term: "Area", value: `${roomArea(r).toFixed(2)} m²`, quoted: false });
     }
   }
   return facts;
@@ -111,7 +112,29 @@ export type Shape =
   /** a rectangle centred on (cx, cy), turned `rotation` degrees counter-clockwise */
   | { kind: "rect"; cx: number; cy: number; w: number; h: number; rotation: number }
   /** a thick segment: a wall, or the stretch of wall an opening fills */
-  | { kind: "segment"; ax: number; ay: number; bx: number; by: number; thickness: number };
+  | { kind: "segment"; ax: number; ay: number; bx: number; by: number; thickness: number }
+  /** any outline: a curved wall's band, or the stretch of it an opening fills, its arc cut into pieces */
+  | { kind: "polygon"; points: { x: number; y: number }[] };
+
+/**
+ * The band of a wall from t0 to t1 along its centreline, half its thickness either side: a
+ * straight wall's as a thick segment, a curved one's as the polygon of its two faces' arcs, so it
+ * holds the arc's bow and not just its chord.
+ */
+function wallBand(w: Wall, t0: number, t1: number): Shape {
+  const a = wallPointAt(w, t0);
+  const b = wallPointAt(w, t1);
+  if (!isCurved(w)) return { kind: "segment", ax: a.x, ay: a.y, bx: b.x, by: b.y, thickness: w.thickness };
+  const piece = subEdge(wallEdge(w), t0, t1);
+  const along = [...tessellateEdge(piece), piece.b];
+  const half = w.thickness / 2;
+  const side = (s: number) =>
+    along.map((p, i) => {
+      const u = tangentOnEdge(piece, i / (along.length - 1));
+      return { x: p.x - u.y * half * s, y: p.y + u.x * half * s };
+    });
+  return { kind: "polygon", points: [...side(1), ...side(-1).reverse()] };
+}
 
 /** The shapes a request would act on, as the plan holds them now. */
 export function targetShapes(a: PendingApproval, model: PlanModel): Shape[] {
@@ -121,7 +144,7 @@ export function targetShapes(a: PendingApproval, model: PlanModel): Shape[] {
     switch (t.type) {
       case "wall": {
         const w = model.walls.find((x) => x.id === t.id);
-        if (w) shapes.push({ kind: "segment", ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness });
+        if (w) shapes.push(wallBand(w, 0, 1));
         break;
       }
       case "door":
@@ -129,16 +152,18 @@ export function targetShapes(a: PendingApproval, model: PlanModel): Shape[] {
         const o = model.openings.find((x) => x.id === t.id);
         const w = o && model.walls.find((x) => x.id === o.wallId);
         if (o && w) {
+          // its span is measured along the wall's arc: placed along it, not along the chord
           const [t0, t1] = openingSpan(w, o);
-          const a0 = segPoint({ x: w.ax, y: w.ay }, { x: w.bx, y: w.by }, t0);
-          const a1 = segPoint({ x: w.ax, y: w.ay }, { x: w.bx, y: w.by }, t1);
-          shapes.push({ kind: "segment", ax: a0.x, ay: a0.y, bx: a1.x, by: a1.y, thickness: w.thickness });
+          shapes.push(wallBand(w, t0, t1));
         }
         break;
       }
       case "room": {
         const r = model.rooms.find((x) => x.id === t.id);
-        if (r) shapes.push({ kind: "rect", cx: r.x + r.w / 2, cy: r.y + r.h / 2, w: r.w, h: r.h, rotation: 0 });
+        if (r) {
+          const b = outlineBounds(r.points);
+          shapes.push({ kind: "rect", cx: b.x + b.w / 2, cy: b.y + b.h / 2, w: b.w, h: b.h, rotation: 0 });
+        }
         break;
       }
       case "item": {
@@ -174,8 +199,9 @@ export function targetShapes(a: PendingApproval, model: PlanModel): Shape[] {
 
 /** The rectangle around a plan's walls, rooms and items, or null when it has none. */
 function extentOf(model: PlanModel): Shape | null {
-  const xs = [...model.walls.flatMap((w) => [w.ax, w.bx]), ...model.rooms.flatMap((r) => [r.x, r.x + r.w]), ...model.items.map((i) => i.x)];
-  const ys = [...model.walls.flatMap((w) => [w.ay, w.by]), ...model.rooms.flatMap((r) => [r.y, r.y + r.h]), ...model.items.map((i) => i.y)];
+  const boxes = model.rooms.map((r) => outlineBox(r.points));
+  const xs = [...model.walls.flatMap((w) => [w.ax, w.bx]), ...boxes.flatMap((b) => [b.minX, b.maxX]), ...model.items.map((i) => i.x)];
+  const ys = [...model.walls.flatMap((w) => [w.ay, w.by]), ...boxes.flatMap((b) => [b.minY, b.maxY]), ...model.items.map((i) => i.y)];
   if (xs.length === 0) return null;
   const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
   return { kind: "rect", cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0, rotation: 0 };
@@ -183,6 +209,7 @@ function extentOf(model: PlanModel): Shape | null {
 
 /** A shape's corners, in metres (a segment as the four corners of its thickness). */
 export function cornersOf(s: Shape): { x: number; y: number }[] {
+  if (s.kind === "polygon") return s.points;
   if (s.kind === "rect") {
     // the editor turns items with rotate(-rotation) on a y-down sheet
     const a = (-s.rotation * Math.PI) / 180;

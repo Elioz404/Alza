@@ -22,6 +22,7 @@
  * already have, with the rooms themselves, in the 2D view and the panels.
  */
 
+import { outlineAnchor, outlineBounds, outlineRect } from "../model/shapes";
 import * as THREE from "three";
 import type { PendingApproval, PlanModel, Room } from "../model/types";
 import { elevationOf } from "../model/levels";
@@ -47,9 +48,19 @@ const scratch = {
  * longer side (toward its east or south end), never past LABELS.maxShift of its half-length.
  */
 export function labelAnchor(room: Room): { x: number; z: number } {
-  const wide = room.w >= room.h;
-  const shift = Math.min(LABELS.pendantClear, ((wide ? room.w : room.h) / 2) * LABELS.maxShift);
-  return { x: room.x + room.w / 2 + (wide ? shift : 0), z: room.y + room.h / 2 + (wide ? 0 : shift) };
+  const r = outlineRect(room.points);
+  if (!r) {
+    // any other outline: its most interior point, the pendant's spot (build.ts roomMiddle), moved
+    // along the longer side of its bounds as far as the widest circle there allows
+    const anchor = outlineAnchor(room.points);
+    const box = outlineBounds(room.points);
+    const wide = box.w >= box.h;
+    const shift = Math.min(LABELS.pendantClear, anchor.clearance * LABELS.maxShift);
+    return { x: anchor.x + (wide ? shift : 0), z: anchor.y + (wide ? 0 : shift) };
+  }
+  const wide = r.w >= r.h;
+  const shift = Math.min(LABELS.pendantClear, ((wide ? r.w : r.h) / 2) * LABELS.maxShift);
+  return { x: r.x + r.w / 2 + (wide ? shift : 0), z: r.y + r.h / 2 + (wide ? 0 : shift) };
 }
 
 /**
@@ -87,11 +98,12 @@ export function placeLabel(
   let minX = Infinity;
   let maxX = -Infinity;
   let behind = false;
+  const box = outlineBounds(room.points);
   for (const [cx, cz] of [
-    [room.x, room.y],
-    [room.x + room.w, room.y],
-    [room.x + room.w, room.y + room.h],
-    [room.x, room.y + room.h],
+    [box.x, box.y],
+    [box.x + box.w, box.y],
+    [box.x + box.w, box.y + box.h],
+    [box.x, box.y + box.h],
   ]) {
     const corner = scratch.corner.set(cx, level, cz);
     if (scratch.dir.copy(corner).applyMatrix4(camera.matrixWorldInverse).z >= 0) behind = true;

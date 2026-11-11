@@ -9,7 +9,7 @@
  * gone is removed and its GPU resources freed; a piece of furniture that only moved is moved.
  *
  * A wall's signature covers everything its shape depends on: its own numbers, its openings,
- * its joints with its neighbours (jointExtensions) and which of its windows have curtains. So
+ * its footprint mitred against its neighbours (wallSolids.ts wallBands) and which of its windows have curtains. So
  * moving a wall rebuilds it and exactly the neighbours whose joints it changed; a sofa pushed
  * against a window rebuilds that window's wall (its curtains go) and nothing else.
  *
@@ -25,6 +25,7 @@
  * rebuilds nothing; setLevels() shows and hides whole storeys.
  */
 
+import { outlineBox } from "../model/shapes";
 import * as THREE from "three";
 import type { KindDef, Opening, PlanModel, Stair, Wall } from "../model/types";
 import { levelSlice, levelsOf, stairGeometryIn } from "../model/levels";
@@ -41,7 +42,7 @@ import {
   curtainedWindows,
   openingsByWall,
 } from "./build";
-import { jointExtensions } from "../model/joints";
+import { bandsSignature, wallBands, type WallBands } from "./wallSolids";
 import { buildFurniture } from "./furniture";
 import { MaterialCache, disposeObject } from "./materials";
 import { contactShadow } from "./surfaces";
@@ -118,8 +119,8 @@ const defId = (def: KindDef): number => {
 const openingSignature = (o: Opening, curtained: ReadonlySet<string>) =>
   [o.id, o.kind, o.t, o.width, o.sill, o.height, o.hinge ?? "", o.side ?? "", curtained.has(o.id)];
 
-const wallSignature = (w: Wall, openings: readonly Opening[], ext: readonly [number, number], curtained: ReadonlySet<string>) =>
-  JSON.stringify([w.ax, w.ay, w.bx, w.by, w.thickness, w.height, ext, openings.map((o) => openingSignature(o, curtained))]);
+const wallSignature = (w: Wall, openings: readonly Opening[], bands: WallBands, curtained: ReadonlySet<string>) =>
+  JSON.stringify([w.ax, w.ay, w.bx, w.by, w.bulge ?? 0, w.thickness, w.height, bandsSignature(bands), openings.map((o) => openingSignature(o, curtained))]);
 
 export class PlanScene {
   /** Everything the plan puts in the scene, ground included: add it to the scene, export it as OBJ. */
@@ -208,9 +209,9 @@ export class PlanScene {
       const curtained = curtainedWindows(slice, byWall);
       for (const w of slice.walls) {
         const openings = byWall.get(w.id) ?? [];
-        const ext = jointExtensions(w, slice.walls);
-        put(`wall:${w.id}`, wallSignature(w, openings, ext, curtained), () => buildWall(w, openings, ext, curtained), (at) =>
-          wallCutCap(w, openings, ext, at),
+        const bands = wallBands(w, slice.walls);
+        put(`wall:${w.id}`, wallSignature(w, openings, bands, curtained), () => buildWall(w, openings, bands, curtained), (at) =>
+          wallCutCap(w, openings, bands, at),
         );
       }
       if (stats.added + stats.rebuilt > before) wallsChanged = true;
@@ -223,9 +224,10 @@ export class PlanScene {
       const ceiling = ceilingOf(slice);
       for (const r of slice.rooms) {
         // the stairwells that reach into this room: only those can change its floor
-        const near = wells.filter((w) => w.some((p) => p.x > r.x - 1e-9) && w.some((p) => p.x < r.x + r.w + 1e-9) && w.some((p) => p.y > r.y - 1e-9) && w.some((p) => p.y < r.y + r.h + 1e-9));
-        put(`floor:${r.id}`, JSON.stringify([r.x, r.y, r.w, r.h, r.floor, polysSignature(near)]), () => buildFloor(r, this.materials, near));
-        put(`pendant:${r.id}`, JSON.stringify([r.x, r.y, r.w, r.h, ceiling]), () => buildPendant(r, ceiling));
+        const b = outlineBox(r.points);
+        const near = wells.filter((w) => w.some((p) => p.x > b.minX - 1e-9) && w.some((p) => p.x < b.maxX + 1e-9) && w.some((p) => p.y > b.minY - 1e-9) && w.some((p) => p.y < b.maxY + 1e-9));
+        put(`floor:${r.id}`, JSON.stringify([r.points, r.floor, polysSignature(near)]), () => buildFloor(r, this.materials, near));
+        put(`pendant:${r.id}`, JSON.stringify([r.points, ceiling]), () => buildPendant(r, ceiling));
       }
       for (const st of slice.stairs) {
         const g = stairGeometryIn(model, st);

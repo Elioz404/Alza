@@ -16,13 +16,16 @@
  */
 
 import * as THREE from "three";
+import { outlineAnchor, outlineBounds, outlineDistance, outlineRect, roomArea, tessellateEdge, tessellateOutline, wallLength, wallPointAt, wallTangentAt } from "../model/shapes";
+import type { WallFootprint } from "../model/joints";
 import type { Item, Opening, PlanModel, Room, Wall } from "../model/types";
 import { catalogOf, type Catalog } from "../model/catalog";
-import { segLen } from "../model/geometry";
+import type { Pt } from "../model/geometry";
 import { openingSpan } from "../model/issues";
 import { DOUBLE_DOOR_CLEAR, REGION, WALL_DEFAULTS, type FloorFinish } from "../model/limits";
 import { keepStatic, type MaterialCache } from "./materials";
-import { CONTACT, CUTAWAY, FLOOR_TOP, LIGHTS, PENDANT, SCENE } from "./config";
+import { CONTACT, CUTAWAY, FLOOR_TOP, LIGHTS, PENDANT, SCENE, WALL_SOLID } from "./config";
+import { PRISM_SOLID, alongWall, bandRuns, localTurn, pieceRing, prismGeometry, ringSection, seamShare, toLocal, wallFrame, type WallBands, type WallFrame, type WallPiece } from "./wallSolids";
 import { piecesArea, regionPieces, regionRim, type Poly } from "../model/region";
 import { NO_INK, piecesGeometry, rimGeometry } from "./slabs";
 import { createSurfaceMaterial, ninePatch, projectSurfaceUVs, staticSurface, surface, type SurfaceName } from "./surfaces";
@@ -69,7 +72,6 @@ export const curtainMaterial = wallSurface("linen", MATERIAL.curtain.hex);
 export const lampShadeMaterial = staticSurface("lampShade", MATERIAL.lampShade.hex);
 export const cableMaterial = staticSurface("rubber", MATERIAL.cable.hex);
 
-const SKIRTING_H = 0.09;
 /** the width of a window's frame and of a door's, and how far either stands proud of the wall */
 const WINDOW_FRAME = 0.05;
 const DOOR_FRAME = 0.06;
@@ -117,52 +119,138 @@ function box(
   return m;
 }
 
-/**
- * Build one wall with its openings as solid segments + lintels + sills + glass. `ext` is what
- * jointExtensions() gives for it, and `curtained` the windows that have room for curtains.
- */
-export function buildWall(
-  wall: Wall,
-  openings: readonly Opening[],
-  ext: readonly [number, number],
-  curtained: ReadonlySet<string>,
-): THREE.Group {
-  const g = new THREE.Group();
-  const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
-  const [extA, extB] = insetJoints(ext);
-  const total = len + extA + extB;
-  const angle = Math.atan2(wall.by - wall.ay, wall.bx - wall.ax);
-  // local frame: origin at wall start (extended), x along the wall
-  const dirX = (wall.bx - wall.ax) / len;
-  const dirY = (wall.by - wall.ay) / len;
-  const ox = wall.ax - dirX * extA;
-  const oy = wall.ay - dirY * extA;
-
-  const spans = openings
-    .map((o) => ({ o, span: openingSpan(wall, o) }))
-    .sort((p, q) => p.span[0] - q.span[0]);
-
-  // full-height segments between openings (in extended coords: opening t is relative to original len)
-  const toX = (t: number) => extA + t * len;
-  let cursor = 0;
+/** One door or window as a wall is built round it: where it is along the wall, and its frame. */
+interface OpeningPlan {
+  readonly o: Opening;
+  /** its span along the centreline, as shares of the wall's length (openingSpan) */
+  readonly t0: number;
+  readonly t1: number;
+  /** its chord: the straight line across it from one cut to the other, which its leaf or pane spans */
+  readonly chord: number;
   /**
-   * One box of the wall. Neighbouring boxes overlap by a hair, so no hairline crack opens between
-   * them onto the wall's inside (which the cutaway draws in the poché). Where they overlap, one
-   * box's end meets the other's face edge-on, in its plane: the ends are drawn a little deeper
-   * than they are (wallEndMaterial), so they never show through as a seam.
+   * Its own frame on the plan: x along the chord, z to the chord's right, its origin half way
+   * from the chord's middle to the centreline's (on a straight wall, the opening's middle), so a
+   * straight frame across an arc stands as far proud of one face as it is short of the other.
    */
-  const addSeg = (x0: number, x1: number, y0: number, y1: number) => {
-    if (x1 - x0 < 0.005 || y1 - y0 < 0.005) return;
-    x0 -= CUTAWAY.seam;
-    x1 += CUTAWAY.seam;
-    const depth = wall.thickness;
-    // local coords: group origin is the CENTER of the extended wall
-    g.add(box(x1 - x0, y1 - y0, depth, wallMaterial, (x0 + x1) / 2 - total / 2, (y0 + y1) / 2, 0, 0, true, wallEndMaterial));
-    // skirting board wherever the wall meets the floor
-    if (y0 < 0.001 && y1 > SKIRTING_H) {
-      g.add(box(x1 - x0, SKIRTING_H, depth + 0.024, skirtingMaterial, (x0 + x1) / 2 - total / 2, SKIRTING_H / 2, 0, 0, false, skirtingEndMaterial));
+  readonly origin: Pt;
+  readonly dir: Pt;
+  /**
+   * How far the centreline's middle stands off the chord's (0 on a straight wall): across the
+   * opening the wall is that much deeper than its thickness, so the frame's head and foot and the
+   * window's stone sill, straight across the chord, are deepened by it to cover the lintel and sill.
+   */
+  readonly sag: number;
+  /** the jambs, square to the centreline where it is cut: each one's middle on the plan and its direction along the wall */
+  readonly jambs: readonly { readonly at: Pt; readonly dir: Pt }[];
+}
+
+/** How a wall is built: its frame, its prisms (body, skirting and top band) and its openings. */
+export interface WallPlan {
+  readonly frame: WallFrame;
+  readonly body: readonly WallPiece[];
+  readonly skirting: readonly WallPiece[];
+  readonly cap: WallPiece | null;
+  readonly openings: readonly OpeningPlan[];
+}
+
+/** The plan of a wall's solids: cut at its openings, along its centreline (along the arc, on a curved wall). */
+export function planWall(wall: Wall, openings: readonly Opening[], bands: WallBands): WallPlan {
+  const frame = wallFrame(wall);
+  const tess = WALL_SOLID.tessellation;
+  const half = wall.thickness / 2;
+  const seam = seamShare(wall);
+  const body: WallPiece[] = [];
+  const skirting: WallPiece[] = [];
+  const len = wallLength(wall);
+  const spans = openings.map((o) => ({ o, span: openingSpan(wall, o) })).sort((p, q) => p.span[0] - q.span[0]);
+  /** one stretch of the wall between two cuts (null: the footprint's own end), from y0 up to y1 */
+  const addSeg = (from: number | null, to: number | null, y0: number, y1: number) => {
+    if (y1 - y0 < 0.005) return;
+    if (from !== null && to !== null && (to - from) * len < 0.005) return;
+    const t0 = from === null ? null : from - seam;
+    const t1 = to === null ? null : to + seam;
+    const runs = bandRuns(bands.body, wall, half, t0, t1, tess);
+    if (!runs) return;
+    body.push({ runs, y0, y1 });
+    // skirting wherever the wall meets the floor
+    if (y0 < 0.001 && y1 > WALL_SOLID.skirtingHeight) {
+      const skirt = bandRuns(bands.skirting, wall, half + WALL_SOLID.skirtingProud, t0, t1, tess);
+      if (skirt) skirting.push({ runs: skirt, y0: 0, y1: WALL_SOLID.skirtingHeight });
     }
   };
+  let cursor: number | null = null;
+  const plans: OpeningPlan[] = [];
+  for (const { o, span } of spans) {
+    const [t0, t1] = span;
+    addSeg(cursor, t0, 0, wall.height);
+    // the lintel over the opening, the sill under a window
+    addSeg(t0, t1, o.sill + o.height, wall.height);
+    if (o.sill > 0.005) addSeg(t0, t1, 0, o.sill);
+    cursor = t1;
+    const a = wallPointAt(wall, t0);
+    const b = wallPointAt(wall, t1);
+    const m = wallPointAt(wall, o.t);
+    const chord = Math.hypot(b.x - a.x, b.y - a.y);
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const dir = chord > 0 ? { x: (b.x - a.x) / chord, y: (b.y - a.y) / chord } : wallTangentAt(wall, o.t);
+    const jamb = o.kind === "door" ? DOOR_FRAME : WINDOW_FRAME;
+    const ta = wallTangentAt(wall, t0);
+    const tb = wallTangentAt(wall, t1);
+    plans.push({
+      o,
+      t0,
+      t1,
+      chord,
+      origin: { x: (mid.x + m.x) / 2, y: (mid.y + m.y) / 2 },
+      dir,
+      sag: Math.hypot(m.x - mid.x, m.y - mid.y),
+      jambs: [
+        { at: { x: a.x + (ta.x * jamb) / 2, y: a.y + (ta.y * jamb) / 2 }, dir: ta },
+        { at: { x: b.x - (tb.x * jamb) / 2, y: b.y - (tb.y * jamb) / 2 }, dir: tb },
+      ],
+    });
+  }
+  addSeg(cursor, null, 0, wall.height);
+  const capRuns = bandRuns(bands.cap, wall, half + WALL_SOLID.capProud, null, null, tess);
+  const cap = capRuns ? { runs: capRuns, y0: wall.height, y1: wall.height + WALL_SOLID.capHeight } : null;
+  return { frame, body, skirting, cap, openings: plans };
+}
+
+/** One prism of a wall as a mesh: its ends in `ends`, the rest in `material`. */
+function prism(piece: WallPiece, plan: WallPlan, along: (p: Pt) => number, material: THREE.Material, ends: THREE.Material | null, castShadow: boolean): THREE.Mesh {
+  const metres = (material.userData?.metres as readonly [number, number] | undefined) ?? [1, 1];
+  const geometry = prismGeometry(piece, plan.frame, along, metres);
+  const m = new THREE.Mesh(geometry, ends ? [ends, material] : material);
+  if (!ends) geometry.clearGroups();
+  m.castShadow = castShadow;
+  m.receiveShadow = true;
+  m.userData[PRISM_SOLID] = geometry.userData[PRISM_SOLID];
+  m.userData.ownUVs = true;
+  return m;
+}
+
+/** A box on the plan, in a wall's frame: its middle `at`, its length along `dir`. */
+function planBox(plan: WallPlan, w: number, h: number, d: number, mat: THREE.Material, at: Pt, y: number, dir: Pt, castShadow = true): THREE.Mesh {
+  const q = toLocal(plan.frame, at);
+  return box(w, h, d, mat, q.x, y, q.y, localTurn(plan.frame, dir), castShadow);
+}
+
+/**
+ * Build one wall with its openings: its prisms (the stretches between its openings, the lintels
+ * and sills, its skirting and the band on its top), its windows' frames, panes and curtains and
+ * its doors' frames and leaves. `bands` is what wallBands() gives for it against the walls of its
+ * level, and `curtained` the windows that have room for curtains. Straight or curved: on an arc,
+ * every pane and leaf spans its opening's chord, its jambs square to the centreline where it is cut.
+ */
+export function buildWall(wall: Wall, openings: readonly Opening[], bands: WallBands, curtained: ReadonlySet<string>): THREE.Group {
+  const g = new THREE.Group();
+  const plan = planWall(wall, openings, bands);
+  const along = alongWall(wall, plan.frame);
+  for (const piece of plan.body) g.add(prism(piece, plan, along, wallMaterial, wallEndMaterial, true));
+  for (const piece of plan.skirting) g.add(prism(piece, plan, along, skirtingMaterial, skirtingEndMaterial, false));
+  // the band along the wall's top, for a finished dollhouse look
+  if (plan.cap) g.add(prism(plan.cap, plan, along, wallTopMaterial, null, true));
+
   /** the wall's curtains, in one group of their own (made with the first) */
   let curtains: THREE.Group | null = null;
   const curtainGroup = (): THREE.Group => {
@@ -174,86 +262,91 @@ export function buildWall(
     return curtains;
   };
 
-  /**
-   * One hinged door leaf. dir=+1 hinges on the A-side jamb (leaf runs toward +x), -1 on the
-   * B-side jamb. `left` swings the leaf to -z instead of the default +z — i.e. to the left
-   * of someone walking the wall from its A endpoint to its B endpoint.
-   */
-  const addLeaf = (hingeX: number, dir: 1 | -1, leafW: number, height: number, id: string, left: boolean) => {
-    const hinge = new THREE.Group();
-    hinge.position.set(hingeX - total / 2, 0, 0);
-    hinge.userData = { doorHinge: true, doorId: id, swing: dir * (left ? 1 : -1) * DOOR_SWING };
-    const h = height - 0.03;
-    const cx = (dir * leafW) / 2;
-    hinge.add(box(leafW, h, 0.045, doorLeafMaterial, cx, h / 2, 0, 0));
-    // two recessed panels per leaf, on both faces
-    for (const py_ph of [[h * 0.31, h * 0.42], [h * 0.75, h * 0.34]]) {
-      const py = py_ph[0];
-      const ph = py_ph[1];
-      hinge.add(box(leafW - 0.18, ph, 0.008, doorPanelMaterial, cx, py, 0.027, 0, false));
-      hinge.add(box(leafW - 0.18, ph, 0.008, doorPanelMaterial, cx, py, -0.027, 0, false));
-    }
-    // lever handle on the free edge, both faces
-    const hx = cx + dir * (leafW / 2 - 0.09);
-    for (const z of [0.055, -0.055]) {
-      const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.05, 12), handleMaterial);
-      knob.rotation.x = Math.PI / 2;
-      knob.position.set(hx, 1.05, z);
-      knob.castShadow = true;
-      hinge.add(knob);
-      hinge.add(box(0.11, 0.022, 0.022, handleMaterial, hx - dir * 0.045, 1.05, z * 1.4, 0, false));
-    }
-    g.add(hinge);
-  };
+  for (const op of plan.openings) {
+    const { o } = op;
+    // the opening's own frame: x along its chord, from -chord/2 to chord/2
+    const of = new THREE.Group();
+    const q = toLocal(plan.frame, op.origin);
+    of.position.set(q.x, 0, q.y);
+    of.rotation.y = localTurn(plan.frame, op.dir);
+    g.add(of);
+    const x0 = -op.chord / 2;
+    const x1 = op.chord / 2;
+    const fw = op.chord;
+    const fT = o.kind === "door" ? DOOR_FRAME : WINDOW_FRAME;
+    const depth = wall.thickness + FRAME_PROUD;
+    // straight across the chord, as deep as the wall is there (deeper than its thickness on an arc)
+    const across = depth + op.sag;
+    // the jambs, square to the centreline at the cuts
+    for (const j of op.jambs) g.add(planBox(plan, fT, o.height, depth, frameMaterial, j.at, o.sill + o.height / 2, j.dir, false));
 
-  for (const { o, span } of spans) {
-    const x0 = toX(span[0]);
-    const x1 = toX(span[1]);
-    addSeg(cursor, x0, 0, wall.height);
-    // lintel above the opening
-    addSeg(x0, x1, o.sill + o.height, wall.height);
-    // sill below windows
-    if (o.sill > 0.005) addSeg(x0, x1, 0, o.sill);
-    // glass pane for windows
-    if (o.kind === "window") {
-      const glass = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0 - 0.04, o.height - 0.04, 0.02), glassMaterial);
-      glass.position.set((x0 + x1) / 2 - total / 2, o.sill + o.height / 2, 0);
-      g.add(glass);
-      // frame
-      const fw = x1 - x0;
-      const fh = o.height;
-      const fT = WINDOW_FRAME;
-      const cy = o.sill + fh / 2;
-      const cx = (x0 + x1) / 2 - total / 2;
-      for (const [bw, bh, px, py] of [
-        [fw, fT, cx, o.sill + fT / 2],
-        [fw, fT, cx, o.sill + fh - fT / 2],
-        [fT, fh, x0 - total / 2 + fT / 2, cy],
-        [fT, fh, x1 - total / 2 - fT / 2, cy],
-      ] as const) {
-        g.add(box(bw, bh, wall.thickness + FRAME_PROUD, frameMaterial, px, py, 0, 0, false));
+    /**
+     * One hinged door leaf. dir=+1 hinges on the A-side jamb (leaf runs toward +x), -1 on the
+     * B-side jamb. `left` swings the leaf to -z instead of the default +z — i.e. to the left
+     * of someone walking the wall from its A endpoint to its B endpoint.
+     */
+    const addLeaf = (hingeX: number, dir: 1 | -1, leafW: number, height: number, id: string, left: boolean) => {
+      const hinge = new THREE.Group();
+      hinge.position.set(hingeX, 0, 0);
+      hinge.userData = { doorHinge: true, doorId: id, swing: dir * (left ? 1 : -1) * DOOR_SWING };
+      const h = height - 0.03;
+      const cx = (dir * leafW) / 2;
+      hinge.add(box(leafW, h, 0.045, doorLeafMaterial, cx, h / 2, 0, 0));
+      // two recessed panels per leaf, on both faces
+      for (const [py, ph] of [
+        [h * 0.31, h * 0.42],
+        [h * 0.75, h * 0.34],
+      ]) {
+        hinge.add(box(leafW - 0.18, ph, 0.008, doorPanelMaterial, cx, py, 0.027, 0, false));
+        hinge.add(box(leafW - 0.18, ph, 0.008, doorPanelMaterial, cx, py, -0.027, 0, false));
       }
+      // lever handle on the free edge, both faces
+      const hx = cx + dir * (leafW / 2 - 0.09);
+      for (const z of [0.055, -0.055]) {
+        const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.05, 12), handleMaterial);
+        knob.rotation.x = Math.PI / 2;
+        knob.position.set(hx, 1.05, z);
+        knob.castShadow = true;
+        hinge.add(knob);
+        hinge.add(box(0.11, 0.022, 0.022, handleMaterial, hx - dir * 0.045, 1.05, z * 1.4, 0, false));
+      }
+      of.add(hinge);
+    };
+
+    if (o.kind === "window") {
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(fw - 0.04, o.height - 0.04, 0.02), glassMaterial);
+      glass.position.set(0, o.sill + o.height / 2, 0);
+      of.add(glass);
+      // the frame's head and foot (its jambs stand at the cuts)
+      for (const py of [o.sill + fT / 2, o.sill + o.height - fT / 2]) of.add(box(fw, fT, across, frameMaterial, 0, py, 0, 0, false));
       // stone sill, proud of both faces
-      g.add(box(fw + 0.14, 0.045, wall.thickness + 0.16, sillMaterial, cx, o.sill - 0.022, 0, 0, false));
+      of.add(box(fw + 0.14, 0.045, wall.thickness + 0.16 + op.sag, sillMaterial, 0, o.sill - 0.022, 0, 0, false));
       // curtains, but only where nothing is parked in front of the window
       if (curtained.has(o.id)) {
-        const rodY = o.sill + fh + 0.16;
+        // on a curved wall whose right face curves toward the curtains, they hang that much further out
+        const reach = fw / 2 + 0.44;
+        const lift = Math.max(0, ...curtainFace(bands.body, op).filter((p) => Math.abs(p.x) <= reach).map((p) => p.y - wall.thickness / 2));
+        const rodY = o.sill + o.height + 0.16;
         const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, fw + 0.44, 10), frameMaterial);
         rod.rotation.z = Math.PI / 2;
-        rod.position.set(cx, rodY, wall.thickness / 2 + 0.11);
-        curtainGroup().add(rod);
+        rod.position.set(0, rodY, wall.thickness / 2 + lift + 0.11);
+        const hung = new THREE.Group();
+        hung.position.copy(of.position);
+        hung.rotation.copy(of.rotation);
+        hung.add(rod);
         const top = rodY - 0.05;
         const bottom = 0.06;
         const ph = top - bottom;
         // four narrow slats per panel at alternating depths read as folds
         for (const edge of [-1, 1] as const) {
-          const outer = cx + edge * (fw / 2 + 0.19);
+          const outer = edge * (fw / 2 + 0.19);
           for (let k = 0; k < 4; k++) {
             const px2 = outer - edge * k * 0.082;
-            const z = wall.thickness / 2 + (k % 2 === 0 ? 0.075 : 0.135);
-            curtainGroup().add(box(0.085, ph, 0.055, curtainMaterial, px2, bottom + ph / 2, z, 0, false));
+            const z = wall.thickness / 2 + lift + (k % 2 === 0 ? 0.075 : 0.135);
+            hung.add(box(0.085, ph, 0.055, curtainMaterial, px2, bottom + ph / 2, z, 0, false));
           }
         }
+        curtainGroup().add(hung);
       }
     } else {
       // hinged leaf (or two, for a double door) — clickable + animatable in Scene3D
@@ -268,71 +361,63 @@ export function buildWall(
       } else {
         addLeaf(x0 + 0.02, 1, clear, o.height, o.id, left);
       }
-      // door frame (two posts + header)
-      const fT = DOOR_FRAME;
-      for (const [bw, bh, px, py] of [
-        [fT, o.height, x0 - total / 2 + fT / 2, o.height / 2],
-        [fT, o.height, x1 - total / 2 - fT / 2, o.height / 2],
-        [x1 - x0, fT, (x0 + x1) / 2 - total / 2, o.height + fT / 2],
-      ] as const) {
-        g.add(box(bw, bh, wall.thickness + FRAME_PROUD, frameMaterial, px, py, 0, 0, false));
-      }
+      // the door frame's head (its posts stand at the cuts)
+      of.add(box(fw, fT, across, frameMaterial, 0, o.height + fT / 2, 0, 0, false));
     }
-    cursor = x1;
   }
-  addSeg(cursor, total, 0, wall.height);
-
-  // wall cap (top band) for a finished dollhouse look
-  const cap = new THREE.Mesh(new THREE.BoxGeometry(total, 0.03, wall.thickness + 0.02), wallTopMaterial);
-  cap.position.set(0, wall.height + 0.015, 0);
-  cap.castShadow = true;
-  g.add(cap);
 
   // grain on the frames and sills in metres, along the wall
   projectSurfaceUVs(g);
 
-  // place group: center of extended wall, rotated
-  g.position.set(ox + (dirX * total) / 2, 0, oy + (dirY * total) / 2);
-  g.rotation.y = -angle;
+  // place the group: at the middle of the wall's chord, turned along it
+  g.position.set(plan.frame.ox, 0, plan.frame.oy);
+  g.rotation.y = -plan.frame.angle;
   return g;
 }
 
+/** The right face of a wall's body round an opening, in the opening's frame (x along its chord, y its z). */
+function curtainFace(body: WallFootprint, op: OpeningPlan): Pt[] {
+  const pts = tessellateEdge(body.right, WALL_SOLID.tessellation).concat([body.right.b]);
+  return pts.map((p) => {
+    const dx = p.x - op.origin.x;
+    const dy = p.y - op.origin.y;
+    return { x: dx * op.dir.x + dy * op.dir.y, y: -dx * op.dir.y + dy * op.dir.x };
+  });
+}
+
+/** A box's outline on (x, z): w along x and d along z, about (cx, cz), turned `turn` about y as three.js turns it. */
+function boxRing(cx: number, cz: number, w: number, d: number, turn: number): Pt[] {
+  const c = Math.cos(turn);
+  const s = Math.sin(turn);
+  return [
+    [-w / 2, -d / 2],
+    [w / 2, -d / 2],
+    [w / 2, d / 2],
+    [-w / 2, d / 2],
+  ].map(([x, z]) => ({ x: cx + x * c + z * s, y: cz - x * s + z * c }));
+}
+
 /**
- * A wall's cap at the cutaway's `level` (metres above the ground), in the wall's own frame (as
- * buildWall places it): flat poché over what the cut passes through — the wall's solid
- * stretches, a lintel or a sill where the cut is above or below an opening, and the frames'
- * jambs beside an opening it crosses — so a cut wall reads as the plan's solid wall, with its
- * doorways and windows open. Null when the cut passes over the wall.
+ * A wall's cap at the cutaway's `level` (metres above its floor), in the wall's own frame (as
+ * buildWall places it): flat poché over what the cut passes through — the wall's prisms there (a
+ * stretch, a lintel or a sill where the cut is above or below an opening) and the frames' jambs
+ * beside an opening it crosses — so a cut wall reads as the plan's solid wall, with its doorways
+ * and windows open. Null when the cut passes over the wall.
  */
-export function wallCutCap(wall: Wall, openings: readonly Opening[], ext: readonly [number, number], level: number): THREE.Mesh | null {
+export function wallCutCap(wall: Wall, openings: readonly Opening[], bands: WallBands, level: number): THREE.Mesh | null {
   if (level >= wall.height || level <= 0) return null;
-  const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
-  const [extA, extB] = insetJoints(ext);
-  const total = len + extA + extB;
-  const toX = (t: number) => extA + t * len;
-  /** the stretches of the wall's length the cut passes through, and how deep each is */
-  const solid: [number, number, number][] = [];
-  let cursor = 0;
-  const spans = openings.map((o) => ({ o, span: openingSpan(wall, o) })).sort((p, q) => p.span[0] - q.span[0]);
-  for (const { o, span } of spans) {
-    const x0 = toX(span[0]);
-    const x1 = toX(span[1]);
-    if (level > o.sill && level < o.sill + o.height) {
-      // the cut crosses the opening: masonry up to it, then the frame's two jambs
-      solid.push([cursor, x0, wall.thickness]);
-      const jamb = o.kind === "door" ? DOOR_FRAME : WINDOW_FRAME;
-      solid.push([x0, x0 + jamb, wall.thickness + FRAME_PROUD], [x1 - jamb, x1, wall.thickness + FRAME_PROUD]);
-      cursor = x1;
-    }
-  }
-  solid.push([cursor, total, wall.thickness]);
+  const plan = planWall(wall, openings, bands);
   const positions: number[] = [];
-  for (const [a, b, depth] of solid) {
-    if (b - a < 0.005) continue;
-    const [x0, x1] = [a - total / 2 - CUTAWAY.seam, b - total / 2 + CUTAWAY.seam];
-    const [z0, z1] = [-depth / 2, depth / 2];
-    // two triangles facing up
-    positions.push(x0, level, z0, x0, level, z1, x1, level, z1, x0, level, z0, x1, level, z1, x1, level, z0);
+  for (const piece of plan.body) if (level > piece.y0 && level < piece.y1) ringSection(pieceRing(piece.runs, plan.frame).pts, level, positions);
+  for (const op of plan.openings) {
+    const { o } = op;
+    if (!(level > o.sill && level < o.sill + o.height)) continue;
+    // the cut crosses the opening: the frame's two jambs
+    const fT = o.kind === "door" ? DOOR_FRAME : WINDOW_FRAME;
+    for (const j of op.jambs) {
+      const q = toLocal(plan.frame, j.at);
+      ringSection(boxRing(q.x, q.y, fT, wall.thickness + FRAME_PROUD, localTurn(plan.frame, j.dir)), level, positions);
+    }
   }
   if (positions.length === 0) return null;
   const geometry = new THREE.BufferGeometry();
@@ -391,29 +476,28 @@ function slabSides(x0: number, z0: number, x1: number, z1: number, uv: (x: numbe
 export function buildFloor(room: Room, materials?: MaterialCache, wells: readonly Poly[] = []): THREE.Mesh {
   const material = surface(FLOOR_SURFACE[room.floor], undefined, materials);
   const [mu, mv] = (material.userData.metres as readonly [number, number] | undefined) ?? [1, 1];
-  const cx = room.x + room.w / 2;
-  const cz = room.y + room.h / 2;
-  const hw = room.w / 2;
-  const hd = room.h / 2;
+  const box = outlineBounds(room.points);
+  const cx = box.x + box.w / 2;
+  const cz = box.y + box.h / 2;
+  const hw = box.w / 2;
+  const hd = box.h / 2;
   // the edge band, never wider than half the room
   const band = Math.min(CONTACT.floorEdge.width, hw, hd);
-  const outline: Poly = [
-    { x: room.x, y: room.y },
-    { x: room.x + room.w, y: room.y },
-    { x: room.x + room.w, y: room.y + room.h },
-    { x: room.x, y: room.y + room.h },
-  ];
+  // its arcs cut as finely as the curved walls along them (WALL_SOLID.tessellation)
+  const outline: Poly = tessellateOutline(room.points, WALL_SOLID.tessellation);
   // a stairwell crosses the room when it takes some of its floor away
-  const area = room.w * room.h;
+  const area = piecesArea(regionPieces([outline]));
   const crossing = wells.filter((w) => piecesArea(regionPieces([outline], [w])) < area - REGION.probe * REGION.probe);
-  if (crossing.length > 0) {
-    // a stairwell crosses the room: its floor is the room less the opening, in pieces cut at the
-    // edge band's lines (so the band shades as the nine-patch's does), its sides along the rim
+  if (crossing.length > 0 || !outlineRect(room.points)) {
+    // a stairwell crosses the room, or it is no rectangle: its floor is the room (less the
+    // opening), in pieces cut at the edge band's lines, its sides along the rim
     const shade = (x: number, z: number) => {
-      const d = Math.min(x - room.x, room.x + room.w - x, z - room.y, room.y + room.h - z);
+      const d = outlineDistance({ x, y: z }, room.points);
       return CONTACT.floorEdge.shade + (1 - CONTACT.floorEdge.shade) * Math.min(1, Math.max(0, d) / band);
     };
-    const pieces = regionPieces([outline], crossing, [room.x + band, room.x + room.w - band], [room.y + band, room.y + room.h - band]);
+    // cut a band's width in from every corner of it too, so an L's inner corner shades as its outer ones do
+    const cuts = (along: (p: { x: number; y: number }) => number) => [...new Set(room.points.flatMap((p) => [along(p) - band, along(p) + band]))];
+    const pieces = regionPieces([outline], crossing, cuts((p) => p.x), cuts((p) => p.y));
     const floor = new THREE.Mesh(piecesGeometry(pieces, FLOOR_TOP, false, (x, z) => [x / mu, z / mv], shade, -cx, -cz), material);
     floor.receiveShadow = true;
     // cut into pieces that are no edge of anything: the ink is the rim's
@@ -449,6 +533,12 @@ export function buildFloor(room: Room, materials?: MaterialCache, wells: readonl
   return floor;
 }
 
+/** A room's middle: its rectangle's centre, or for any other outline its most interior point. */
+export function roomMiddle(room: Room): { x: number; y: number } {
+  const r = outlineRect(room.points);
+  return r ? { x: r.x + r.w / 2, y: r.y + r.h / 2 } : outlineAnchor(room.points);
+}
+
 /**
  * A pendant fixture plus the point light it stands for, hung over a room's centre: a cord, an
  * open shade, and the bulb inside it (round enough that no facet of it takes the ink).
@@ -470,33 +560,33 @@ export function buildPendant(room: Room, ceiling: number): THREE.Group {
   g.add(bulb);
   // brightness scaled to the room so a corridor is not lit like a living room
   const { base, perSquareMetre, max, minArea, minRange, decay } = LIGHTS.pendant;
-  const area = Math.max(minArea, room.w * room.h);
+  const area = Math.max(minArea, roomArea(room));
+  const box = outlineBounds(room.points);
   const light = new THREE.PointLight(
     MATERIAL.pendantLight.hex,
     Math.min(max, base + area * perSquareMetre),
-    Math.max(minRange, room.w + room.h),
+    Math.max(minRange, box.w + box.h),
     decay,
   );
   light.position.set(0, shadeY - p.lightBelow, 0);
   g.add(light);
-  g.position.set(room.x + room.w / 2, 0, room.y + room.h / 2);
+  // over its middle: a rectangle's centre, any other room's most interior point
+  const over = roomMiddle(room);
+  g.position.set(over.x, 0, over.y);
   return g;
 }
 
-/** Is a piece of furniture parked within curtain depth of this window? */
+/** Is a piece of furniture parked within curtain depth of this window? Measured along the wall where the window is (its tangent there, on an arc). */
 function blockedInFront(wall: Wall, o: Opening, items: readonly Item[], catalog: Catalog): boolean {
-  const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
-  if (len === 0) return true;
-  const dx = (wall.bx - wall.ax) / len;
-  const dy = (wall.by - wall.ay) / len;
-  const cx = wall.ax + dx * o.t * len;
-  const cy = wall.ay + dy * o.t * len;
+  if (wallLength(wall) === 0) return true;
+  const c = wallPointAt(wall, o.t);
+  const { x: dx, y: dy } = wallTangentAt(wall, o.t);
   for (const it of items) {
     const cat = catalog.get(it.kind);
     if (!cat || cat.isRug) continue;
     const radius = Math.max(cat.w, cat.d) / 2;
-    const vx = it.x - cx;
-    const vy = it.y - cy;
+    const vx = it.x - c.x;
+    const vy = it.y - c.y;
     const along = Math.abs(vx * dx + vy * dy);
     const across = Math.abs(-vx * dy + vy * dx);
     if (along < o.width / 2 + radius && across < wall.thickness / 2 + 0.3 + radius) return true;
@@ -529,16 +619,6 @@ export function curtainedWindows(model: PlanModel, byWall = openingsByWall(model
     }
   }
   return curtained;
-}
-
-/**
- * A wall's two ends as built: each joint's reach (jointExtensions) stops a hair inside the wall
- * it runs into, so the end face lies behind that wall's face, not in its plane — two faces in
- * one plane fight for depth, and draw the corner as a dashed seam.
- */
-function insetJoints([extA, extB]: readonly [number, number]): [number, number] {
-  const inset = (e: number) => (e > 0 ? Math.max(0, e - CUTAWAY.faceInset) : 0);
-  return [inset(extA), inset(extB)];
 }
 
 /** The ceiling the pendants hang from: the plan's first wall, or a standard wall's height. */

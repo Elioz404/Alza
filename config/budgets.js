@@ -54,8 +54,39 @@ export const SHIPPED = Object.freeze({
     // sync command and its checked apply, and ids unique per page. Everything else stays out:
     // the session runtime, its merge and message schemas, the tools' answers, the indicator and
     // the plan's and 3D view's markers all load after the first paint.
-    js: { min: 520_919, gzip: 169_826 },
-    css: { min: 110_997, gzip: 18_767 },
+    // Raised again from 520_919 / 169_826 (measured 553_940 / 182_004) for free shapes: rooms as
+    // polygons with arc edges and curved walls are the plan model itself, so what the store's
+    // actions, the checker and the tools validate and measure with runs before the first paint —
+    // the arc and outline geometry (model/shapes.ts, about 14 kB: length, point and tangent at t,
+    // curve intersections, winding, self-crossing, point-in-outline, the label's pole of
+    // inaccessibility), the reshape/bend actions and their refusals (+5 kB), the checker's new
+    // rules with the polygon overlap measure they need (region.ts, now reached by issues.ts,
+    // +6 kB), the tools' outline/arc schemas and descriptions (+6 kB) and the format-3 migration.
+    // Fitting a room to its walls (enclose.ts), the wall footprints' mitres (joints.ts, with the
+    // floors) and the Crescent House demo stay in chunks of their own, fetched when first used.
+    // Raised again from 553_940 / 182_004 (measured 564_810 / 185_561) for drawing free shapes
+    // by hand and their review. The 2D side (+6.3 kB / +2.0 kB gzip; 560.2 kB / 184.0 kB in the
+    // build log): the room tool's corner-by-corner outline and its keyboard cross
+    // (editor/roomDraft.ts and its drafting in Editor.tsx, which the first paint draws with), the
+    // hint bar's outline and selection hints, the shortcut sheet's rows and the inspector's Shape
+    // and Bend entry points; the handles, the mitred poché and their sheet stay deferred
+    // (ShapeHandles.tsx, WallPoche.tsx, shapes.css). The review (+4.5 kB / +1.5 kB gzip), all of
+    // it code the store, the checker or the first paint runs: straightness read by sagitta and
+    // the well-conditioned arc intersections and self-crossing test (model/shapes.ts), the
+    // outline's fault as data so the hint names the edges as drawn, the checker's door-swing
+    // rule with the leaves it shares with the plan's drawing (issues.ts doorLeaves), a saved
+    // plan's sub-precision bows dropped on load, the hint's lettered cross, the get_issues
+    // description's new rule, the approval card's
+    // and feed's curved-wall places, and the Shape section's focus handling.
+    js: { min: 564_810, gzip: 185_561 },
+    // Raised from 110_997 / 18_767 (set at 115c39e; measured 113_203 / 19_153). Levels, the IFC
+    // export and the shared session added their first-load rules without a re-measure (the
+    // session's indicator and dots, session.css; the level switcher's), and free shapes added a
+    // few: the draft outline's preview and the keyboard cross (canvas.css), the inspector's
+    // Shape and Bend sections (inspector.css), the canvas's bottom row that keeps the hint beside
+    // the zoom dock (shell.css) and a parapet seen below the plan's cut (canvas.css). The
+    // handles' and the poché's rules are in shapes.css, which loads with them.
+    css: { min: 113_203, gzip: 19_153 },
   },
   partner: {
     js: { min: 8_991, gzip: 4_209 },
@@ -97,8 +128,16 @@ export const LAZY_SHIPPED = Object.freeze({
   three: { min: 517_921, gzip: 130_065 },
   // raised from 109_791 / 41_777 for storeys and stairs in 3D: the stair model, the slabs and their
   // stairwells (with the region cutter they are built by), the walker's climb between floors and
-  // the View panel's levels control. All of it loads with the 3D view, never with the page
-  scene3d: { min: 128_449, gzip: 48_798 },
+  // the View panel's levels control.
+  // raised again from 128_449 / 48_798 (measured 136_026 / 51_946) for free shapes in 3D: every wall
+  // is now extruded from its footprint mitred at any angle (model/joints.ts wallFootprint, its
+  // concentric arc faces and caps, now loaded with the view), cut along the arc at its openings and
+  // closed at the cut over its prisms (wallSolids.ts, about 4 kB), with an ear-clipping triangulator
+  // of its own (triangulate.ts, under 1 kB, instead of three.js's far larger ShapeUtils, which
+  // leaves the three.js chunk as it was), the ink's seam test read off each prism's outline, shaped
+  // rooms' and curved walls' marks, and the walker's collisions along arcs. All of it loads with
+  // the 3D view, never with the page
+  scene3d: { min: 136_026, gzip: 51_946 },
 });
 
 /**

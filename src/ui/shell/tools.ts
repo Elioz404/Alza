@@ -64,6 +64,7 @@ const drawTool = (id: "select" | "wall" | "room", label: string, hint: string, i
   run: () => {
     setPlanTool(null);
     pageActions.setDrawMode(id);
+    if (KEYBOARD_PLACING.has(id)) focusCanvasRegion();
   },
 });
 
@@ -78,14 +79,17 @@ const planTool = (id: PlanTool, label: string, hint: string, icon: IconComponent
   isActive: (e, tool) => activeTool(e.drawMode, tool) === id,
   run: () => {
     setPlanTool(id);
-    // the placing tools aim and place from the plan's keys (a stair: arrows aim, Enter places),
-    // which the rail's own arrow keys would otherwise keep: focus goes to the plan
-    if (PLACING_TOOLS.has(id)) focusCanvasRegion();
+    if (KEYBOARD_PLACING.has(id)) focusCanvasRegion();
   },
 });
 
-/** The editor's tools that place something, from the pointer or from the plan's keys. */
-const PLACING_TOOLS: ReadonlySet<PlanTool> = new Set<PlanTool>(["door", "window", "stair"]);
+/**
+ * The tools that place something from the plan's keys as well as the pointer: a door, a window
+ * or a stair (arrows aim, Enter places), a room drawn corner by corner (arrows move the cross, C
+ * puts a corner down, Enter closes). The rail's own arrow keys and Enter would otherwise keep
+ * those keys, so choosing one of them sends focus to the plan, whichever factory built it.
+ */
+const KEYBOARD_PLACING: ReadonlySet<string> = new Set<PlanTool | "room">(["door", "window", "stair", "room"]);
 
 const metres = (m: number) => `${m.toFixed(2)} m`;
 
@@ -119,7 +123,7 @@ export const RAIL_TOOLS: readonly RailTool[] = Object.freeze([
   drawTool("select", "Select", "Click to select, drag to move or pan", IconSelect, "v"),
   planTool("pan", "Pan", "Drag to move the plan; Space-drag pans with any tool", IconPan, "h"),
   drawTool("wall", "Draw walls", "Click each corner; Esc or right-click ends the chain", IconWall, "w"),
-  drawTool("room", "Draw a room", "Drag a rectangle", IconRoom, "r"),
+  drawTool("room", "Draw a room", "Drag a rectangle, or click corner by corner and press Enter", IconRoom, "r"),
   planTool("door", "Add a door", `Click a wall to place a ${metres(DOOR_DEFAULTS.width)} door`, IconDoor, "d"),
   planTool("window", "Add a window", `Click a wall to place a ${metres(WINDOW_DEFAULTS.width)} window`, IconWindow, "n"),
   planTool("stair", "Add a stair", "Press where it starts, drag the way it climbs", IconStair, "s"),

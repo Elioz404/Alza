@@ -393,18 +393,12 @@ export const EDGES = Object.freeze({
 export const CUTAWAY = Object.freeze({
   off: 1000,
   /**
-   * How far each box of a wall reaches into the next, and a cap past its ends, metres: no
+   * How far each prism of a wall reaches into the next across an opening's cut, metres: no
    * hairline crack opens between them.
    */
   seam: 0.001,
   /**
-   * How far a wall's end stops inside the wall it runs into, metres: its end face then lies behind
-   * that wall's face, not in its plane, and its side faces meet nothing edge-on, so no seam shows
-   * through at a corner or a T.
-   */
-  faceInset: 0.001,
-  /**
-   * A wall box's two ends are drawn this much deeper than they are (polygon offset: factor and
+   * A wall prism's ends (its cuts and caps) are drawn this much deeper than they are (polygon offset: factor and
    * units). Where a lintel or a sill overlaps the stretch beside it, each one's end meets the
    * other's face edge-on, in its plane; pushed back, the end never shows through as a seam.
    */
@@ -444,6 +438,13 @@ export const MARKS = Object.freeze({
   /** a room's marks lie this far over its floor, and over the top of its walls (or the cut) */
   lift: 0.006,
   lidFill: 0.18,
+  /**
+   * A shaped room's outline or a curved wall's, standing MARKS.outline off it: each corner moves out
+   * along its mitre, at most this many times the outline's distance; an upright line is drawn at
+   * every corner turning by more than `ringCorner` degrees (an arc's facets turn far less).
+   */
+  mitreLimit: 4,
+  ringCorner: 20,
 });
 
 /**
@@ -538,6 +539,28 @@ export const LEVELS_VIEW = Object.freeze({ defaultShown: "active" as const });
  * stands on it and clicks land on it.
  */
 export const FLOOR_TOP = FLOOR_FINISH_DEPTH;
+
+/**
+ * The walls as solids (build.ts, wallSolids.ts). Every wall is extruded from its footprint on
+ * the plan (model/joints.ts wallFootprint), mitred against its neighbours at any angle, a curved
+ * wall's two faces concentric arcs; a door or a window takes the stretch of it between two cuts
+ * square to its centreline (radial, on an arc), at t ± half its width along the arc.
+ *
+ * `tessellation` is how finely the 3D view cuts an arc into flat facets — a curved wall's faces,
+ * a room's curved edge in its floor — no facet longer than `maxSegment` metres or turning more
+ * than `maxAngle` degrees: far under EDGES.crease, so the ink draws a curved face's rims and
+ * never its facets. The skirting stands `skirtingProud` metres proud of each face, `skirtingHeight`
+ * high, and the band that finishes a wall's top `capProud` past each face, `capHeight` high: each
+ * one is the footprint of the wall grown by that much on both faces, mitred against its
+ * neighbours grown the same, so skirtings and bands meet at every corner as the walls do.
+ */
+export const WALL_SOLID = Object.freeze({
+  tessellation: Object.freeze({ maxSegment: 0.15, maxAngle: 3 }),
+  skirtingProud: 0.012,
+  skirtingHeight: 0.09,
+  capProud: 0.01,
+  capHeight: 0.03,
+});
 
 /** A pointer that travels further than this between press and click was a drag, not a click. */
 export const CLICK_SLOP_PX = 5;

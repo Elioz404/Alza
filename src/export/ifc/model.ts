@@ -13,12 +13,22 @@
  *                               one wall fills each corner, the others stop at its face, so no two
  *                               bodies overlap), with a one-layer IfcMaterialLayerSetUsage,
  *                               Pset_WallCommon (IsExternal, when the rooms tell) and
- *                               Qto_WallBaseQuantities
+ *                               Qto_WallBaseQuantities. A curved wall's Axis is its arc and its
+ *                               Body is extruded from its closed curved outline (both an
+ *                               IfcIndexedPolyCurve with an IfcArcIndex per arc): its two faces
+ *                               concentric arcs, run on along their tangents or trimmed back along
+ *                               the arc to the same butt joints
  *   door / window             → an IfcOpeningElement voiding its wall (IfcRelVoidsElement),
  *                               filled (IfcRelFillsElement) by an IfcDoor / IfcWindow; a door's
- *                               placement faces the way its leaf swings (see doorFacing)
+ *                               placement faces the way its leaf swings (see doorFacing). In a
+ *                               curved wall the opening is placed on its chord (from one cut to
+ *                               the other, square to the arc at t ± half its width along it), its
+ *                               void the stretch of the wall between the two radial cuts, and its
+ *                               door or window spans the chord: OverallWidth is the chord
  *   room                      → an IfcSpace (LongName = its label) aggregated under its storey,
- *                               with Pset_SpaceCommon and Qto_SpaceBaseQuantities; and its floor
+ *                               its FootPrint and Body its outline (a polyline, or with arcs an
+ *                               IfcIndexedPolyCurve), with Pset_SpaceCommon and
+ *                               Qto_SpaceBaseQuantities; and its floor
  *                               finish as an IfcCovering FLOORING laid on the slab, covering the
  *                               space (IfcRelCoversSpaces), in its finish's material
  *   stair                     → IfcStair, aggregating its IfcStairFlights (one per flight, with
@@ -36,18 +46,39 @@
  * point (x, y) is IFC (x, -y): the plan seen from above is the model seen from above.
  */
 
-import type { Item, Level, Opening, PlanModel, Room, Stair, Wall } from "../../model/types";
+import {
+  concentricBulge,
+  isCurved,
+  isStraight,
+  outlineArea,
+  outlineDistance,
+  outlineEdges,
+  outlinePerimeter,
+  pointInOutline,
+  pointOnEdge,
+  roomArea,
+  tessellateOutline,
+  intersectCurves,
+  wallDistance,
+  wallEdge,
+  wallLength,
+  type Curve,
+  wallPointAt,
+  wallTangentAt,
+  closestOnEdge,
+} from "../../model/shapes";
+import type { Item, Level, Opening, PlanModel, Room, RoomVertex, Stair, Wall } from "../../model/types";
 import { catalogOf, SUPPLIER_KIND_PREFIX, isSupplierKind } from "../../model/catalog";
-import { rectCorners, segLen, type ORect } from "../../model/geometry";
+import { rectCorners, segLen, type ORect, type Pt } from "../../model/geometry";
 import { levelSlice, levelsOf, slabUnderside, stairGeometryIn, stairwellsOf, type LevelInfo } from "../../model/levels";
-import { buttJointExtensions } from "../../model/joints";
+import { buttJointExtensions, offsetCurve } from "../../model/joints";
 import { slabOutline, stairwellPolys } from "../../model/floors";
 import { piecesArea, regionPieces, type Piece, type Poly } from "../../model/region";
 import { stairSplit } from "../../model/stairs";
 import { cleanText } from "../../model/text";
-import { DOOR_SWING_DEFAULTS, DOUBLE_DOOR_CLEAR, FLOOR_FINISH_DEPTH, REGION, SLAB_THICKNESS, SUPPLIER, TEXT } from "../../model/limits";
+import { DOOR_SWING_DEFAULTS, DOUBLE_DOOR_CLEAR, FLOOR_FINISH_DEPTH, REGION, SLAB_THICKNESS, SUPPLIER, TEXT, WALL_IN_LINE_SINE, WALL_JOINT_REACH, WALL_MITRE_LIMIT } from "../../model/limits";
 import { FLOOR_MATERIAL, FURNITURE_TYPE, IFC_NAMES, IFC_PSETS, IFC_REPRESENTATION as REP, IFC_SIZES, MODEL_PRECISION, STEP_LABEL_MAX, WALL_MATERIAL } from "./config";
-import { IfcEntities, type Context, type ElementHead, type LayerSetUsage, type LocalPlacement, type Material, type ProductShape, type PropertyValue } from "./entities";
+import { IfcEntities, type Context, type CurveSegment, type ElementHead, type LayerSetUsage, type LocalPlacement, type Material, type ProductShape, type PropertyValue } from "./entities";
 import type { Ref } from "./step";
 
 const DEG = Math.PI / 180;
@@ -62,10 +93,56 @@ const rectFrame = (r: ORect): { centre: [number, number]; xAxis: [number, number
   xAxis: [Math.cos(r.rot), -Math.sin(r.rot)],
 });
 
-const roomRect = (r: Room): ORect => ({ cx: r.x + r.w / 2, cy: r.y + r.h / 2, hw: r.w / 2, hd: r.h / 2, rot: 0 });
-const roomPoly = (r: Room): Poly => rectCorners(roomRect(r));
+/** A room's outline, its arcs cut into pieces (limits.ts ARC_TESSELLATION): what regions are cut from. */
+const roomPoly = (r: Room): Poly => tessellateOutline(r.points);
 
-const inRoom = (rooms: readonly Room[], x: number, y: number): boolean => rooms.some((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
+const inRoom = (rooms: readonly Room[], x: number, y: number): boolean => rooms.some((r) => pointInOutline({ x, y }, r.points) || outlineDistance({ x, y }, r.points) < 1e-9);
+
+/**
+ * A frame on the plan: an origin and the unit direction of its x axis. A plan point's coordinates
+ * in it, as IFC reads them (IFC's x is the plan's, its y the plan's flipped, so the frame's y axis
+ * is a quarter turn counter-clockwise from x seen from above).
+ */
+interface PlanFrame {
+  readonly o: Pt;
+  readonly d: Pt;
+}
+function inFrame(f: PlanFrame, p: Pt): [number, number] {
+  const [px, py] = at(p.x - f.o.x, p.y - f.o.y);
+  const [dx, dy] = at(f.d.x, f.d.y);
+  return [px * dx + py * dy, -px * dy + py * dx];
+}
+/** A plan direction in a frame, as IFC reads it. */
+function directionIn(f: PlanFrame, d: Pt): [number, number] {
+  return inFrame({ o: { x: 0, y: 0 }, d: f.d }, d);
+}
+const WORLD_FRAME: PlanFrame = { o: { x: 0, y: 0 }, d: { x: 1, y: 0 } };
+
+/**
+ * A closed outline on the plan (shapes.ts: vertex i carries the bulge of the edge to i + 1) as an
+ * IFC curve in a frame: a closed IfcPolyline when every edge is straight, else an
+ * IfcIndexedPolyCurve whose arcs are IfcArcIndex segments through each arc's middle.
+ */
+function outlineCurve(ifc: IfcEntities, points: readonly RoomVertex[], frame: PlanFrame = WORLD_FRAME) {
+  const edges = outlineEdges(points);
+  if (edges.every((e) => isStraight(e.bulge))) {
+    const ring = points.map((p) => inFrame(frame, p));
+    return ifc.polyline([...ring, ring[0]]);
+  }
+  const coords: [number, number][] = [];
+  const segments: CurveSegment[] = [];
+  const corner: number[] = [];
+  for (const e of edges) {
+    corner.push(coords.push(inFrame(frame, e.a)));
+    if (!isStraight(e.bulge)) coords.push(inFrame(frame, pointOnEdge(e, 0.5)));
+  }
+  edges.forEach((e, i) => {
+    const from = corner[i];
+    const to = corner[(i + 1) % edges.length];
+    segments.push(isStraight(e.bulge) ? { line: [from, to] } : { arc: [from, from + 1, to] });
+  });
+  return ifc.indexedCurve(coords, segments);
+}
 
 /** Plan text as an IFC label or identifier: a clean name (model/text.ts), at most STRING(255). */
 const label = (text: string): string => cleanText(text, STEP_LABEL_MAX);
@@ -100,18 +177,17 @@ function pieceCorners(p: Piece): [number, number][] | null {
  * Undefined when the rooms do not say (no room on either side), so the property is left out.
  */
 export function wallIsExternal(wall: Wall, rooms: readonly Room[]): boolean | undefined {
-  const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
-  if (len === 0) return undefined;
-  const nx = -(wall.by - wall.ay) / len;
-  const ny = (wall.bx - wall.ax) / len;
+  if (wallLength(wall) === 0) return undefined;
   const reach = wall.thickness / 2 + IFC_SIZES.roomProbe;
   let outside = 0;
   let inside = 0;
   for (const f of IFC_SIZES.roomProbeAt) {
-    const px = wall.ax + (wall.bx - wall.ax) * f;
-    const py = wall.ay + (wall.by - wall.ay) * f;
-    const left = inRoom(rooms, px + nx * reach, py + ny * reach);
-    const right = inRoom(rooms, px - nx * reach, py - ny * reach);
+    // square to the wall where it is probed: across a curved wall, along its radius
+    const p = wallPointAt(wall, f);
+    const u = wallTangentAt(wall, f);
+    const [nx, ny] = [-u.y, u.x];
+    const left = inRoom(rooms, p.x + nx * reach, p.y + ny * reach);
+    const right = inRoom(rooms, p.x - nx * reach, p.y - ny * reach);
     if (left && right) inside++;
     else if (left !== right) outside++;
   }
@@ -142,6 +218,191 @@ export function doorOperation(opening: Opening): string {
   const side = opening.side ?? DOOR_SWING_DEFAULTS.side;
   const leftEnd = side === "right" ? "b" : "a";
   return hinge === leftEnd ? "SINGLE_SWING_LEFT" : "SINGLE_SWING_RIGHT";
+}
+
+/** A wall's body on the plan as a building model has it: butt-jointed to the walls it meets (see buttBody). */
+export interface ButtBody {
+  /** its outline: its right face from A to B, its B end, its left face back, its A end */
+  readonly outline: RoomVertex[];
+  /** how far each end reaches past the wall's endpoint along its centreline's tangent (buttJointExtensions) */
+  readonly ext: readonly [number, number];
+  /** both ends square to a straight wall: its outline is a rectangle along it */
+  readonly square: boolean;
+}
+
+/** The short arc's bulge from p to q round a circle's centre c. */
+const bulgeRound = (c: Pt, p: Pt, q: Pt): number => {
+  const [ux, uy, vx, vy] = [p.x - c.x, p.y - c.y, q.x - c.x, q.y - c.y];
+  return Math.tan(Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy) / 4);
+};
+
+/** One end of a butt-jointed body: where its right and left faces stop, the faces they stop at, and the corner between those. */
+interface ButtEnd {
+  readonly right: Pt;
+  readonly left: Pt;
+  readonly rightFace: Curve | null;
+  readonly leftFace: Curve | null;
+  readonly via: Pt | null;
+}
+
+/**
+ * A wall's body, butt-jointed to the walls it meets at any angle (model/joints.ts
+ * buttJointExtensions says how far each end reaches along the centreline): each of its faces runs
+ * on, or is cut back, to the face it meets there — a line, or an arc of a curved wall — so a wall
+ * meeting another at 30 degrees stops exactly at its face, without a corner pushed into it.
+ *  - An end cut back (it ends against walls it does not fill the corner of): each face stops at
+ *    the first face of those walls it enters, within their bodies; where the two faces of the
+ *    wall stop at different walls (at a node of three), the end runs through the corner between
+ *    those faces.
+ *  - An end reaching on (it fills an L corner): both faces run on to the far face of the wall it
+ *    fills the corner against.
+ *  - A free end, or one in line with the next wall: square.
+ * A curved wall's faces are concentric arcs, run on along their circle.
+ */
+export function buttBody(wall: Wall, levelWalls: readonly Wall[]): ButtBody {
+  const len = wallLength(wall);
+  const butt = buttJointExtensions(wall, levelWalls);
+  // a wall wholly inside the walls it meets would be cut to nothing, so it keeps its own length
+  const ext: [number, number] = len + butt[0] + butt[1] > MODEL_PRECISION ? [butt[0], butt[1]] : [0, 0];
+  const half = wall.thickness / 2;
+  const faces = { left: offsetCurve(wall, half), right: offsetCurve(wall, -half) };
+  const reach = WALL_MITRE_LIMIT * Math.max(wall.thickness, ...levelWalls.map((w) => w.thickness));
+  let square = !isCurved(wall);
+  /** the nearest of the points to q, within reach of it */
+  const nearest = (pts: readonly Pt[], q: Pt): Pt | null =>
+    pts.filter((h) => Math.hypot(h.x - q.x, h.y - q.y) <= reach).reduce<Pt | null>((best, h) => (!best || Math.hypot(h.x - q.x, h.y - q.y) < Math.hypot(best.x - q.x, best.y - q.y) ? h : best), null);
+  /**
+   * Whether q lies along a wall's body: beside its centreline, or past an end no further than that
+   * end reaches on (buttJointExtensions) and the wall's own thickness, as far as a face cut along
+   * another at an angle, or run on round an arc, can stand past the end of its centreline.
+   */
+  const alongBody = (o: Wall, q: Pt): boolean => {
+    const [oa, ob] = buttJointExtensions(o, levelWalls);
+    const c = closestOnEdge(wallEdge(o), q);
+    if (c.t > 0 && c.t < 1) return true;
+    const endT = c.t <= 0 ? 0 : 1;
+    const u = wallTangentAt(o, endT);
+    const p = wallPointAt(o, endT);
+    const s = (q.x - p.x) * u.x + (q.y - p.y) * u.y;
+    return (endT === 0 ? -s - Math.max(0, oa) : s - Math.max(0, ob)) <= o.thickness;
+  };
+  const cap = (end: "a" | "b"): ButtEnd => {
+    const k = end === "a" ? 0 : 1;
+    const p = wallPointAt(wall, k);
+    const u = wallTangentAt(wall, k);
+    const out = end === "a" ? { x: -u.x, y: -u.y } : u;
+    // the walls met at this end, and each one's face toward this wall's body (its near face) and away (far)
+    const met = levelWalls.flatMap((o) => {
+      if (o.id === wall.id || wallLength(o) === 0 || wallDistance(p, o) >= WALL_JOINT_REACH) return [];
+      const v = wallTangentAt(o, closestOnEdge(wallEdge(o), p).t);
+      if (Math.abs(out.x * v.y - out.y * v.x) < WALL_IN_LINE_SINE) return [];
+      const side = -Math.sign(v.y * out.x - v.x * out.y);
+      // a wall this end runs into mid-span, or one that reaches on into the joint, is one it stops at first
+      const oEnd = (["a", "b"] as const).find((q) => Math.hypot((q === "a" ? o.ax : o.bx) - p.x, (q === "a" ? o.ay : o.by) - p.y) < WALL_JOINT_REACH);
+      const blocks = oEnd === undefined || buttJointExtensions(o, levelWalls)[oEnd === "a" ? 0 : 1] > 0;
+      return [{ o, blocks, through: oEnd === undefined, near: offsetCurve(o, (side * o.thickness) / 2), far: offsetCurve(o, (-side * o.thickness) / 2) }];
+    });
+    if (ext[k] === 0) {
+      // in line with the next wall: square, unless a wall runs on through the joint across both (a
+      // cross), whose near face this end then stops at, as the next wall's does at its far side
+      const cuts = met.filter((m) => m.through).flatMap((m) => intersectCurves({ kind: "line", p, d: out }, m.near).map((q) => (q.x - p.x) * out.x + (q.y - p.y) * out.y));
+      if (cuts.length > 0) ext[k] = cuts.reduce((best, c) => (Math.abs(c) < Math.abs(best) ? c : best));
+    }
+    const e = ext[k];
+    const tip = { x: p.x + out.x * e, y: p.y + out.y * e };
+    // where each face would end, square to the tangent at the end
+    const squared = (side: 1 | -1): Pt => ({ x: tip.x + u.y * half * side, y: tip.y - u.x * half * side });
+    if (e === 0) return { right: squared(-1), left: squared(1), rightFace: null, leftFace: null, via: null };
+    const atReach = (curve: Curve) => intersectCurves({ kind: "line", p, d: out }, curve).some((q) => Math.abs((q.x - p.x) * out.x + (q.y - p.y) * out.y - e) < 1e-7);
+    const filled = met.find((m) => atReach(m.far));
+    if (filled) {
+      // this end fills the corner: both faces run on to the far face of the wall it meets
+      const right = nearest(intersectCurves(faces.right, filled.far), squared(-1)) ?? squared(-1);
+      const left = nearest(intersectCurves(faces.left, filled.far), squared(1)) ?? squared(1);
+      return { right, left, rightFace: filled.far, leftFace: filled.far, via: null };
+    }
+    // cut back: each face stops at the first near face it enters, within that wall's body, of the
+    // walls that run on through the joint or reach into it if there are any
+    const blockers = met.some((m) => m.blocks) ? met.filter((m) => m.blocks) : met;
+    const stop = (mine: Curve, side: 1 | -1): { at: Pt; face: Curve | null } => {
+      const guess = squared(side);
+      let best: { at: Pt; face: Curve; s: number } | null = null;
+      for (const m of blockers) {
+        const hit = nearest(intersectCurves(mine, m.near), guess);
+        if (!hit || !alongBody(m.o, hit)) continue;
+        const s = (hit.x - p.x) * out.x + (hit.y - p.y) * out.y;
+        if (!best || s < best.s) best = { at: hit, face: m.near, s };
+      }
+      return best ? { at: best.at, face: best.face } : { at: guess, face: null };
+    };
+    const r = stop(faces.right, -1);
+    const l = stop(faces.left, 1);
+    const via = r.face && l.face && r.face !== l.face ? nearest(intersectCurves(r.face, l.face), p) : null;
+    return { right: r.at, left: l.at, rightFace: r.face, leftFace: l.face, via };
+  };
+  const a = cap("a");
+  const b = cap("b");
+  const sq = (q: Pt, r: Pt) => Math.hypot(q.x - r.x, q.y - r.y) <= MODEL_PRECISION;
+  if (!isCurved(wall)) {
+    const ends = [
+      [a, 0],
+      [b, 1],
+    ] as const;
+    for (const [c, t] of ends) {
+      const e = t === 0 ? ext[0] : ext[1];
+      const p = wallPointAt(wall, t);
+      const u = wallTangentAt(wall, t);
+      const out = t === 0 ? { x: -u.x, y: -u.y } : u;
+      const tip = { x: p.x + out.x * e, y: p.y + out.y * e };
+      if (c.via || !sq(c.right, { x: tip.x - u.y * half, y: tip.y + u.x * half }) || !sq(c.left, { x: tip.x + u.y * half, y: tip.y - u.x * half })) square = false;
+    }
+  }
+  const centre = wallEdge(wall);
+  const along = (face: Curve | null, from: Pt, to: Pt) => (face?.kind === "circle" ? bulgeRound(face.c, from, to) : 0);
+  const ring: RoomVertex[] = [];
+  const add = (p: Pt, bulge: number) => {
+    const last = ring[ring.length - 1];
+    if (last && Math.hypot(p.x - last.x, p.y - last.y) < MODEL_PRECISION) {
+      // the same corner twice: the edge from it is the one that follows
+      ring[ring.length - 1] = isStraight(bulge) ? { x: last.x, y: last.y } : { x: last.x, y: last.y, bulge };
+      return;
+    }
+    ring.push(isStraight(bulge) ? { x: p.x, y: p.y } : { x: p.x, y: p.y, bulge });
+  };
+  add(a.right, concentricBulge(centre, a.right, b.right));
+  if (b.via) {
+    add(b.right, along(b.rightFace, b.right, b.via));
+    add(b.via, along(b.leftFace, b.via, b.left));
+  } else add(b.right, along(b.rightFace, b.right, b.left));
+  add(b.left, -concentricBulge(centre, a.left, b.left));
+  if (a.via) {
+    add(a.left, along(a.leftFace, a.left, a.via));
+    add(a.via, along(a.rightFace, a.via, a.right));
+  } else add(a.left, along(a.leftFace, a.left, a.right));
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  if (ring.length > 2 && Math.hypot(first.x - last.x, first.y - last.y) < MODEL_PRECISION) ring.pop();
+  return { outline: ring, ext, square };
+}
+
+/**
+ * The stretch of a curved wall between its centreline's parameters t0 and t1, `reach` to either
+ * side of the centreline along its radius: an opening's void, between two radial cuts.
+ */
+export function arcBand(wall: Wall, t0: number, t1: number, reach: number): RoomVertex[] {
+  const centre = wallEdge(wall);
+  const at = (t: number, side: 1 | -1): Pt => {
+    const p = wallPointAt(wall, t);
+    const u = wallTangentAt(wall, t);
+    return { x: p.x + u.y * reach * side, y: p.y - u.x * reach * side };
+  };
+  const [r0, r1, l1, l0] = [at(t0, -1), at(t1, -1), at(t1, 1), at(t0, 1)];
+  return [
+    { ...r0, bulge: concentricBulge(centre, r0, r1) },
+    { ...r1 },
+    { ...l1, bulge: -concentricBulge(centre, l0, l1) },
+    { ...l0 },
+  ];
 }
 
 /** The plain-language counts of what was exported, by IFC class. */
@@ -293,17 +554,21 @@ export class PlanToIfc {
 
   /** A wall, and the doors and windows in it: the elements its storey contains. */
   private wall(wall: Wall, levelWalls: readonly Wall[], rooms: readonly Room[], storeyPlacement: LocalPlacement): Ref[] {
+    if (isCurved(wall)) return this.curvedWall(wall, levelWalls, rooms, storeyPlacement);
     const ifc = this.ifc;
     const len = segLen(wall.ax, wall.ay, wall.bx, wall.by);
     if (len === 0) return [];
     const dir: [number, number] = [(wall.bx - wall.ax) / len, -(wall.by - wall.ay) / len];
     const placement = ifc.localPlacement(storeyPlacement, ifc.placement3([...at(wall.ax, wall.ay), 0], dir));
-    // butt joints: a wall wholly inside the walls it meets would be cut to nothing, so it keeps its own length
-    const butt = buttJointExtensions(wall, levelWalls);
-    const [extA, extB] = len + butt[0] + butt[1] > MODEL_PRECISION ? butt : [0, 0];
+    // butt joints: a rectangle along the wall where both its ends are square, else its outline,
+    // each end cut along the face it meets at an angle
+    const outline = buttBody(wall, levelWalls);
+    const [extA, extB] = outline.ext;
     const bodyLength = len + extA + extB;
     const axis = ifc.shapeRepresentation(this.axis, REP.axis, REP.curve2d, [ifc.polyline([[0, 0], [len, 0]])]);
-    const profile = ifc.rectangle([(len + extB - extA) / 2, 0], bodyLength, wall.thickness);
+    const frame: PlanFrame = { o: { x: wall.ax, y: wall.ay }, d: { x: (wall.bx - wall.ax) / len, y: (wall.by - wall.ay) / len } };
+    const profile = outline.square ? ifc.rectangle([(len + extB - extA) / 2, 0], bodyLength, wall.thickness) : ifc.closedProfile(outlineCurve(ifc, outline.outline, frame));
+    const footprint = outline.square ? bodyLength * wall.thickness : Math.abs(outlineArea(outline.outline));
     const body = ifc.shapeRepresentation(this.body, REP.body, REP.sweptSolid, [ifc.extrusion(profile, wall.height)]);
     const element = ifc.wall(
       { guid: this.guid(`wall:${wall.id}`), name: label(`${IFC_NAMES.wall} ${wall.id}`), placement, shape: ifc.productShape([axis, body]), tag: label(wall.id) },
@@ -322,14 +587,103 @@ export class PlanToIfc {
       ["length", "Length", bodyLength],
       ["length", "Width", wall.thickness],
       ["length", "Height", wall.height],
-      ["area", "GrossFootprintArea", bodyLength * wall.thickness],
+      ["area", "GrossFootprintArea", footprint],
       ["area", "GrossSideArea", side],
       ["area", "NetSideArea", Math.max(0, side - cut)],
-      ["volume", "GrossVolume", side * wall.thickness],
-      ["volume", "NetVolume", Math.max(0, side - cut) * wall.thickness],
+      ["volume", "GrossVolume", footprint * wall.height],
+      ["volume", "NetVolume", Math.max(0, footprint * wall.height - cut * wall.thickness)],
     ]);
 
     return [element, ...openings.map((o) => this.filledOpening(o, wall, len, element, placement))];
+  }
+
+  /**
+   * A curved wall: placed at its A end, its x axis along its chord; its Axis the arc, its Body
+   * extruded from its outline — its two faces concentric with the centreline, butt-jointed as a
+   * straight wall is (buttBody). Its openings sit on the arc.
+   */
+  private curvedWall(wall: Wall, levelWalls: readonly Wall[], rooms: readonly Room[], storeyPlacement: LocalPlacement): Ref[] {
+    const ifc = this.ifc;
+    const len = wallLength(wall);
+    const chord = segLen(wall.ax, wall.ay, wall.bx, wall.by);
+    if (len === 0 || chord === 0) return [];
+    const frame: PlanFrame = { o: { x: wall.ax, y: wall.ay }, d: { x: (wall.bx - wall.ax) / chord, y: (wall.by - wall.ay) / chord } };
+    const placement = ifc.localPlacement(storeyPlacement, ifc.placement3([...at(wall.ax, wall.ay), 0], at(frame.d.x, frame.d.y)));
+    const centre = wallEdge(wall);
+    const axis = ifc.shapeRepresentation(this.axis, REP.axis, REP.curve2d, [
+      ifc.indexedCurve([inFrame(frame, centre.a), inFrame(frame, pointOnEdge(centre, 0.5)), inFrame(frame, centre.b)], [{ arc: [1, 2, 3] }]),
+    ]);
+    const { outline, ext } = buttBody(wall, levelWalls);
+    const [extA, extB] = ext;
+    const body = ifc.shapeRepresentation(this.body, REP.body, REP.sweptSolid, [ifc.extrusion(ifc.closedProfile(outlineCurve(ifc, outline, frame)), wall.height)]);
+    const element = ifc.wall(
+      { guid: this.guid(`wall:${wall.id}`), name: label(`${IFC_NAMES.wall} ${wall.id}`), placement, shape: ifc.productShape([axis, body]), tag: label(wall.id) },
+      "STANDARD",
+    );
+    this.wallUsage(wall.thickness).walls.push(element);
+    const external = wallIsExternal(wall, rooms);
+    this.properties(element, wall.id, IFC_PSETS.wallCommon, external === undefined ? [] : [["IsExternal", { type: "IFCBOOLEAN", value: external }]]);
+
+    // measured on the body as written: along the centreline, and the outline's own area
+    const openings = this.model.openings.filter((o) => o.wallId === wall.id);
+    const bodyLength = len + extA + extB;
+    const footprint = Math.abs(outlineArea(outline));
+    const cut = openings.reduce((sum, o) => sum + o.width * Math.max(0, Math.min(o.height, wall.height - o.sill)), 0);
+    const side = bodyLength * wall.height;
+    this.quantities(element, wall.id, IFC_PSETS.wallQuantities, [
+      ["length", "Length", bodyLength],
+      ["length", "Width", wall.thickness],
+      ["length", "Height", wall.height],
+      ["area", "GrossFootprintArea", footprint],
+      ["area", "GrossSideArea", side],
+      ["area", "NetSideArea", Math.max(0, side - cut)],
+      ["volume", "GrossVolume", footprint * wall.height],
+      ["volume", "NetVolume", Math.max(0, footprint * wall.height - cut * wall.thickness)],
+    ]);
+    return [element, ...openings.map((o) => this.filledArcOpening(o, wall, frame, element, placement))];
+  }
+
+  /**
+   * A door or window in a curved wall: placed on its chord's middle, its x axis along the chord;
+   * its void the stretch of the wall between the two radial cuts at t ± half its width along the
+   * arc, reaching IFC_SIZES.openingOverreach past both faces (and the foot or the top where it
+   * meets them); its door or window across the chord, as the 3D view and the plan draw it.
+   */
+  private filledArcOpening(o: Opening, wall: Wall, wallFrame: PlanFrame, wallElement: Ref, wallPlacement: LocalPlacement): Ref {
+    const ifc = this.ifc;
+    // its span along the centreline, by length (as model/issues.ts openingSpan measures it)
+    const half = o.width / 2 / wallLength(wall);
+    const [t0, t1] = [o.t - half, o.t + half];
+    const a = wallPointAt(wall, t0);
+    const b = wallPointAt(wall, t1);
+    const chord = segLen(a.x, a.y, b.x, b.y);
+    const frame: PlanFrame = { o: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, d: { x: (b.x - a.x) / chord, y: (b.y - a.y) / chord } };
+    const placement = ifc.localPlacement(wallPlacement, ifc.placement3([...inFrame(wallFrame, frame.o), o.sill], directionIn(wallFrame, frame.d)));
+    const reach = wall.thickness / 2 + IFC_SIZES.openingOverreach;
+    const below = o.sill <= 0 ? IFC_SIZES.openingOverreach : 0;
+    const above = o.sill + o.height >= wall.height ? IFC_SIZES.openingOverreach : 0;
+    const void_ = ifc.opening({
+      guid: this.guid(`opening:${o.id}`),
+      name: label(`${IFC_NAMES.opening} ${o.id}`),
+      placement,
+      shape: this.bodyShape([ifc.extrusion(ifc.closedProfile(outlineCurve(ifc, arcBand(wall, t0, t1, reach), frame)), o.height + below + above, [0, 0, -below])]),
+      tag: label(o.id),
+    });
+    ifc.voids(this.guid(`rel:voids:${o.id}`), wallElement, void_);
+
+    const facing = o.kind === "door" ? doorFacing(o) : null;
+    const fillPlacement = ifc.localPlacement(placement, ifc.placement3([0, 0, 0], facing ?? undefined));
+    const depth = o.kind === "door" ? IFC_SIZES.doorLeafDepth : IFC_SIZES.windowDepth;
+    const head: ElementHead = {
+      guid: this.guid(`${o.kind}:${o.id}`),
+      name: label(`${o.kind === "door" ? IFC_NAMES.door : IFC_NAMES.window} ${o.id}`),
+      placement: fillPlacement,
+      shape: this.bodyShape([ifc.extrusion(ifc.rectangle([0, 0], chord, depth), o.height)]),
+      tag: label(o.id),
+    };
+    const fill = o.kind === "door" ? ifc.door(head, o.height, chord, doorOperation(o)) : ifc.window(head, o.height, chord);
+    ifc.fills(this.guid(`rel:fills:${o.id}`), void_, fill);
+    return fill;
   }
 
   /**
@@ -374,20 +728,19 @@ export class PlanToIfc {
     const ifc = this.ifc;
     const height = slabUnderside(level.height);
     const placement = ifc.localPlacement(storeyPlacement, ifc.placement3([0, 0, 0]));
-    const rect = roomRect(room);
-    const outline = rectCorners(rect).map((p) => at(p.x, p.y));
-    const footPrint = ifc.shapeRepresentation(this.footPrint, REP.footPrint, REP.curve2d, [ifc.polyline([...outline, outline[0]])]);
-    const body = ifc.shapeRepresentation(this.body, REP.body, REP.sweptSolid, [this.boxSolid(rect, height)]);
+    // its outline as it is, arcs and all: the footprint, and the profile its body rises from
+    const footPrint = ifc.shapeRepresentation(this.footPrint, REP.footPrint, REP.curve2d, [outlineCurve(ifc, room.points)]);
+    const body = ifc.shapeRepresentation(this.body, REP.body, REP.sweptSolid, [ifc.extrusion(ifc.closedProfile(outlineCurve(ifc, room.points)), height)]);
     const longName = cleanText(room.label);
     const space = ifc.space(this.guid(`space:${room.id}`), label(room.id), label(longName || room.id), placement, ifc.productShape([footPrint, body]));
-    const area = room.w * room.h;
+    const area = roomArea(room);
     this.properties(space, room.id, IFC_PSETS.spaceCommon, [
       ["Reference", { type: "IFCIDENTIFIER", value: label(room.id) }],
       ["IsExternal", { type: "IFCBOOLEAN", value: false }],
     ]);
     this.quantities(space, room.id, IFC_PSETS.spaceQuantities, [
       ["length", "Height", height],
-      ["length", "GrossPerimeter", 2 * (room.w + room.h)],
+      ["length", "GrossPerimeter", outlinePerimeter(room.points)],
       ["area", "GrossFloorArea", area],
       ["area", "NetFloorArea", area],
       ["volume", "GrossVolume", area * height],
@@ -447,8 +800,13 @@ export class PlanToIfc {
    */
   private flooring(room: Room, wells: readonly Poly[], storeyPlacement: LocalPlacement): Ref<"IFCCOVERING"> | null {
     const ifc = this.ifc;
-    const pieces = regionPieces([roomPoly(room)], wells);
-    const shape = this.bodyShape(this.regionSolids(pieces, FLOOR_FINISH_DEPTH));
+    const outline = roomPoly(room);
+    const pieces = regionPieces([outline], wells);
+    // its own outline, arcs and all, where no stairwell crosses it; else the region left, in pieces
+    const crossed = wells.some((w) => piecesArea(regionPieces([outline], [w])) < piecesArea(regionPieces([outline])) - REGION.probe * REGION.probe);
+    const shape = crossed
+      ? this.bodyShape(this.regionSolids(pieces, FLOOR_FINISH_DEPTH))
+      : this.bodyShape([this.ifc.extrusion(this.ifc.closedProfile(outlineCurve(this.ifc, room.points)), FLOOR_FINISH_DEPTH)]);
     if (!shape) return null;
     const placement = ifc.localPlacement(storeyPlacement, ifc.placement3([0, 0, 0]));
     const longName = cleanText(room.label);
@@ -460,10 +818,10 @@ export class PlanToIfc {
     let entry = this.floorMaterials.get(room.floor);
     if (!entry) this.floorMaterials.set(room.floor, (entry = { material: ifc.material(finish.name, finish.category), coverings: [] }));
     entry.coverings.push(covering);
-    const net = piecesArea(pieces);
+    const net = crossed ? piecesArea(pieces) : roomArea(room);
     this.quantities(covering, room.id, IFC_PSETS.coveringQuantities, [
       ["length", "Width", FLOOR_FINISH_DEPTH],
-      ["area", "GrossArea", room.w * room.h],
+      ["area", "GrossArea", roomArea(room)],
       ["area", "NetArea", net],
     ]);
     return covering;

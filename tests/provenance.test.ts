@@ -9,6 +9,7 @@ import { beginGesture, dispatch } from "../src/model/commands";
 import { seedLoft } from "../src/model/seed";
 import { agentMarks, changedEntities, provenance, revisionOf } from "../src/model/provenance";
 import { resetStore } from "./support/store";
+import { rectOutline } from "../src/model/shapes";
 
 const agent = { actor: "agent" } as const;
 const human = { actor: "human" } as const;
@@ -27,7 +28,7 @@ describe("changedEntities", () => {
       ...before,
       walls: before.walls.slice(1),
       items: before.items.map((i, n) => (n === 0 ? { ...i, x: i.x + 1 } : i)),
-      rooms: [...before.rooms, { id: "room_new", levelId: "level_ground", x: 0, y: 0, w: 1, h: 1, label: "Nook", floor: "oak" as const }],
+      rooms: [...before.rooms, { id: "room_new", levelId: "level_ground", points: rectOutline(0, 0, 1, 1), label: "Nook", floor: "oak" as const }],
     };
     const change = changedEntities(before, after);
     expect(change.touched).toEqual(["room_new", before.items[0].id]);

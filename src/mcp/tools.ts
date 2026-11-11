@@ -20,10 +20,26 @@ import type { Actor } from "../model/commands";
 import { issuesOf, issuesOnLevel } from "../model/issues";
 import { catalogOf, kindName, type KindDef } from "../model/catalog";
 import { lookupItem, lookupLevel, lookupOpening, lookupRoom, lookupStair, lookupWall, type Lookup } from "../model/resolve";
-import type { PlanModel, Stair } from "../model/types";
+import type { PlanModel, Room, Stair, Wall } from "../model/types";
 import { levelContents, levelRemovalError, levelSlice, levelStats, levelsOf, rerouteText, stairGeometryIn, stairsRerouted } from "../model/levels";
 import { SUPPLIER_ORIGIN, SupplierError, getProduct, listProducts, type SupplierProduct } from "./supplier";
-import { dist, segLen } from "../model/geometry";
+import { dist, segLen, type Pt } from "../model/geometry";
+import {
+  extendedWall,
+  isCurved,
+  outlineAnchor,
+  outlineArea,
+  outlineFromInput,
+  outlinePerimeter,
+  outlineRect,
+  sagittaOf,
+  wallArc,
+  wallEdge,
+  wallLength,
+  type ArcInput,
+  type CurveInput,
+} from "../model/shapes";
+import type { RoomVertex } from "../model/types";
 import { bus, EVENTS } from "../model/sceneBus";
 import { exportIfc, ifcFileName, type IfcSummary } from "../export/ifcExport";
 import { defineTool, executeWrapped, type ToolDef } from "./registry";
@@ -39,6 +55,7 @@ import {
   LEVEL_WALLS,
   MAX_LEVELS,
   PART_MATERIALS,
+  ROOM_SHAPE,
   ROOM_SIZE,
   SLAB_THICKNESS,
   SNAP,
@@ -72,7 +89,10 @@ import {
   openingT,
   openingWidth,
   partList,
+  planPoint,
   ref,
+  roomArcs,
+  roomPoints,
   roomSize,
   rotation,
   signedLength,
@@ -84,6 +104,7 @@ import {
   supplierSku,
   swingSide,
   text,
+  wallCurve,
   wallEnd,
   wallHeight,
   wallThickness,
@@ -141,15 +162,92 @@ const kindForAgent = (k: KindDef) => {
   return k.source === "supplier" ? { kind, w, d, h, category, source } : { kind, label: k.label, w, d, h, category, source };
 };
 
-/** The plan as an agent reads it: the same model, with any partner text moved to `untrusted`. */
-function modelForAgent(m: PlanModel): { model: unknown; untrusted?: UntrustedText } {
-  const supplier = m.kinds.filter((k) => k.source === "supplier");
-  if (supplier.length === 0) return { model: m };
+const r3 = (v: number): number => Number(v.toFixed(3));
+
+/**
+ * A wall as an agent reads it: what is stored, and its length along its centreline; a curved
+ * one also its arc (centre, radius, sagitta: how far its middle stands off the chord, positive to
+ * the wall's left walking A to B).
+ */
+function wallForAgent(w: Wall) {
+  const arc = wallArc(w);
   return {
-    model: { ...m, kinds: m.kinds.map((k) => (k.source === "supplier" ? { ...kindForAgent(k), color: k.color } : k)) },
+    ...w,
+    length: r3(wallLength(w)),
+    ...(arc ? { arc: { center: { x: r3(arc.center.x), y: r3(arc.center.y) }, radius: r3(arc.radius), sagitta: r3(sagittaOf(wallEdge(w))) } } : {}),
+  };
+}
+
+/**
+ * A room as an agent reads it: its outline (`points`, each corner with the bulge of the edge it
+ * starts, positive bowing out of the room), its area and perimeter, the anchor its name stands at,
+ * and, when it is one, the rectangle it is.
+ */
+function roomForAgent(r: Room) {
+  const anchor = outlineAnchor(r.points);
+  const rect = outlineRect(r.points);
+  return {
+    ...r,
+    area: r3(Math.abs(outlineArea(r.points))),
+    perimeter: r3(outlinePerimeter(r.points)),
+    anchor: { x: r3(anchor.x), y: r3(anchor.y) },
+    ...(rect ? { rect: { x: r3(rect.x), y: r3(rect.y), w: r3(rect.w), h: r3(rect.h) } } : {}),
+  };
+}
+
+/** The plan as an agent reads it: the same model with each wall's and room's derived facts, and any partner text moved to `untrusted`. */
+function modelForAgent(m: PlanModel): { model: unknown; untrusted?: UntrustedText } {
+  const shaped = { ...m, walls: m.walls.map(wallForAgent), rooms: m.rooms.map(roomForAgent) };
+  const supplier = m.kinds.filter((k) => k.source === "supplier");
+  if (supplier.length === 0) return { model: shaped };
+  return {
+    model: { ...shaped, kinds: m.kinds.map((k) => (k.source === "supplier" ? { ...kindForAgent(k), color: k.color } : k)) },
     untrusted: untrustedText(supplier.map((k) => [k.kind, { label: k.label }])),
   };
 }
+
+/** A point as a tool takes it ([x, y]) as the model's. */
+const pt = ([x, y]: readonly [number, number]): Pt => ({ x, y });
+
+/** A wall's curve as a tool takes it, as the command's. */
+const wallCurveOf = (c: z.output<typeof wallCurve> | undefined): CurveInput | undefined =>
+  c === undefined ? undefined : "sagitta" in c ? { sagitta: c.sagitta } : { through: pt(c.through) };
+
+/** A room's corners and arcs as a tool takes them, as an outline; or the refusal. */
+function outlineOf(points: readonly (readonly [number, number])[], arcs: z.output<typeof roomArcs> | undefined): { ok: true; points: RoomVertex[] } | ActionResult & { ok: false } {
+  const given: ArcInput[] = (arcs ?? []).map((a) => ("sagitta" in a ? { edge: a.edge, sagitta: a.sagitta } : { edge: a.edge, through: pt(a.through) }));
+  const outline = outlineFromInput(points.map(pt), given);
+  return outline.ok ? outline : { ok: false, summary: outline.error };
+}
+
+/**
+ * The outline the walls of a level close off around `at` (model/enclose.ts, fetched the first time
+ * a room is fitted: the page's first load does without it), or the refusal.
+ */
+async function fittedOutline(levelId: string, at: Pt): Promise<{ ok: true; points: RoomVertex[] } | (ActionResult & { ok: false })> {
+  const { enclosedOutline } = await import("../model/enclose");
+  const { model } = store.getState();
+  const points = enclosedOutline(
+    model.walls.filter((w) => w.levelId === levelId),
+    at,
+  );
+  const level = model.levels.find((l) => l.id === levelId)?.name ?? levelId;
+  return points
+    ? { ok: true, points }
+    : { ok: false, summary: `No walls on ${level} close off a space around (${at.x}, ${at.y}): draw the walls round it first, or give the room's corners.` };
+}
+
+/** A point well inside a room, to fit it to its walls again from. */
+function insideOf(r: Room): Pt {
+  const rect = outlineRect(r.points);
+  return rect ? { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 } : outlineAnchor(r.points);
+}
+
+const CURVE_HELP =
+  "`curve` bends it into an arc: { sagitta } is how far the middle of the arc stands off the straight line between its ends, in metres — positive to the wall's left walking from A to B (the side opposite a door's \"right\" swing), negative to its right; or { through: [x, y] } is a point the arc passes through. At most a half circle, and no tighter than a radius of the wall's thickness. Doors and windows on a curved wall sit at t along its arc, and their width is measured along it.";
+
+const ROOM_SHAPE_HELP =
+  `Give the shape ONE way: a rectangle (x, y = top-left corner, w, h, at least ${ROOM_SIZE.min} m each); or \`points\`, its corners [[x, y], ...] in order round it (either way round, ${ROOM_SHAPE.vertices.min}-${ROOM_SHAPE.vertices.max} corners, snapped to the grid), with optional \`arcs\` [{ edge, sagitta } | { edge, through: [x, y] }] bending edge i (from corner i to corner i + 1) — a positive sagitta bows it OUT of the room, negative into it; or \`fit\`: [x, y], a point inside walls that close off a space, and the room fills that space to the walls' inner faces, curved walls included. The outline must not cross itself, no edge under ${Math.round(ROOM_SHAPE.minEdge * 100)} cm, at least ${ROOM_SHAPE.minArea} m² and ${ROOM_SIZE.min} m wide everywhere.`;
 
 // ---------------------------------------------------------------------------- resolve steps
 
@@ -244,7 +342,7 @@ export const TOOLS: ToolDef[] = [
     name: "get_model",
     title: "Read the whole plan",
     description:
-      "Read the full floor plan: its levels (storeys, from the ground up, each with its floor-to-floor height), walls (endpoints, thickness, height), openings (doors/windows with position along their wall), rooms (metric rects with labels), furniture, stairs, and plan name. Every wall, room, item and stair names its level in `levelId`; an opening is on its wall's level. Pass `level` (id or name) to read one level only. All units are meters.",
+      "Read the full floor plan: its levels (storeys, from the ground up, each with its floor-to-floor height), walls (endpoints, thickness, height, length; a curved wall's bulge and arc: centre, radius, sagitta), openings (doors/windows with position along their wall), rooms (their outline `points`, each corner with the bulge of the edge it starts — positive bows out of the room —, area, perimeter, the anchor their name stands at, and `rect` when one is a rectangle), furniture, stairs, and plan name. Every wall, room, item and stair names its level in `levelId`; an opening is on its wall's level. Pass `level` (id or name) to read one level only. All units are meters.",
     input: args({ level: levelArg }),
     // a plan that holds supplier products carries their names, which are the partner's text
     annotations: { readOnlyHint: true, untrustedContentHint: true },
@@ -271,7 +369,7 @@ export const TOOLS: ToolDef[] = [
     name: "get_issues",
     title: "Check the plan for problems",
     description:
-      "Run the constraint checker over the plan, level by level. Detects: too-short walls, loose ends, collinear overlaps, mid-span crossings, openings overflowing their wall or overlapping each other, walls ending inside an opening, floating/overlapping/doorless rooms, furniture crossing walls, blocking doors/windows, or colliding; and for stairs: risers or goings out of range, an uncomfortable 2 × riser + going, a stair on the top level (nothing to reach), too little headroom under the slab above, walls in a stair, over its stairwell or blocking its landings, a stairwell outside every room above, and furniture on a stair or over a stairwell. Pass `level` (id or name) for one level's issues only. Use it after editing to self-repair.",
+      "Run the constraint checker over the plan, level by level. Detects: too-short walls, curved walls bent tighter than their thickness allows, loose ends, collinear overlaps, mid-span crossings (arcs included), openings overflowing their wall (past an arc's end) or overlapping each other, openings too wide for the bend of their curved wall, walls ending inside an opening, doors whose leaves swing into each other, rooms that cross themselves, have an edge too short or are too small or narrow, floating/overlapping (by shared area)/doorless rooms, furniture crossing walls (curved ones included), outside every room, blocking doors/windows, or colliding; and for stairs: risers or goings out of range, an uncomfortable 2 × riser + going, a stair on the top level (nothing to reach), too little headroom under the slab above, walls in a stair, over its stairwell or blocking its landings, a stairwell outside every room above, and furniture on a stair or over a stairwell. Pass `level` (id or name) for one level's issues only. Use it after editing to self-repair.",
     input: args({ level: levelArg }),
     annotations: { readOnlyHint: true },
     execute: (i) => {
@@ -323,7 +421,7 @@ export const TOOLS: ToolDef[] = [
     name: "measure",
     title: "Measure a distance",
     description:
-      "Measure a distance: between two points (x1,y1)-(x2,y2), or the length of a wall by id. Returns meters.",
+      "Measure a distance: between two points (x1,y1)-(x2,y2), or the length of a wall by id (along its arc, for a curved wall). Returns meters.",
     // Published as one object with every field optional, which is what agents read today; the
     // transform turns it into the two shapes measure really takes, so the body narrows on
     // `wallId` instead of asserting that the points are there.
@@ -347,8 +445,8 @@ export const TOOLS: ToolDef[] = [
         const found = lookupWall(store.getState().model, i.wallId);
         if (!found.ok) return notResolved(found);
         const w = found.entity;
-        const len = segLen(w.ax, w.ay, w.bx, w.by);
-        return { ok: true, summary: `Wall ${w.id} is ${len.toFixed(2)} m long.`, meters: len };
+        const len = wallLength(w);
+        return { ok: true, summary: `Wall ${w.id} is ${len.toFixed(2)} m long${isCurved(w) ? ` along its arc (${segLen(w.ax, w.ay, w.bx, w.by).toFixed(2)} m end to end)` : ""}.`, meters: len };
       }
       const d = dist(i.from, i.to);
       return { ok: true, summary: `Distance: ${d.toFixed(2)} m.`, meters: d };
@@ -423,7 +521,7 @@ export const TOOLS: ToolDef[] = [
     name: "add_wall",
     title: "Add a wall",
     description:
-      `Add a wall segment from (ax,ay) to (bx,by) in meters. Coordinates snap to a ${snapCm} cm grid. Default thickness ${WALL_DEFAULTS.thickness} m (use 0.1 for interior), height ${WALL_DEFAULTS.height} m. ${LEVEL_HELP}`,
+      `Add a wall from (ax,ay) to (bx,by) in meters, straight at any angle, or curved. Coordinates snap to a ${snapCm} cm grid. Default thickness ${WALL_DEFAULTS.thickness} m (use 0.1 for interior), height ${WALL_DEFAULTS.height} m. ${CURVE_HELP} Walls meeting at their ends, or one ending on another, are joined (mitred) at any angle. ${LEVEL_HELP}`,
     input: args({
       ax: coord,
       ay: coord,
@@ -431,14 +529,15 @@ export const TOOLS: ToolDef[] = [
       by: coord,
       thickness: wallThickness.optional(),
       height: wallHeight.optional(),
+      curve: wallCurve.optional(),
       level: levelArg,
     }),
-    execute: (i, { dispatch }) => dispatch({ type: "add_wall", ...i }),
+    execute: ({ curve, ...i }, { dispatch }) => dispatch({ type: "add_wall", ...i, curve: wallCurveOf(curve) }),
   }),
   defineTool({
     name: "edit_wall",
     title: "Edit a wall",
-    description: `Move endpoints or change thickness/height of an existing wall (by id). Endpoints snap to ${snapCm} cm. ${MOVE_HELP} the wall, with its doors and windows.`,
+    description: `Move endpoints, change thickness/height, or bend or straighten an existing wall (by id). Endpoints snap to ${snapCm} cm; moving an end of a curved wall keeps its bulge (the arc scales with it). ${CURVE_HELP} curve: { sagitta: 0 } straightens it. Its doors and windows keep their t along it. ${MOVE_HELP} the wall, with its doors and windows.`,
     input: args({
       id: ref,
       ax: coord.optional(),
@@ -447,10 +546,12 @@ export const TOOLS: ToolDef[] = [
       by: coord.optional(),
       thickness: wallThickness.optional(),
       height: wallHeight.optional(),
+      curve: wallCurve.optional(),
       level: levelArg,
     }),
     // the lookup key is split off; only the geometry (and the level to move to) goes into the patch
-    execute: ({ id, level, ...patch }, { dispatch }) => dispatch({ type: "edit_wall", id, patch: withLevel(patch, level) }),
+    execute: ({ id, level, curve, ...patch }, { dispatch }) =>
+      dispatch({ type: "edit_wall", id, patch: withLevel(curve === undefined ? patch : { ...patch, curve: wallCurveOf(curve) }, level) }),
   }),
   defineTool({
     name: "remove_wall",
@@ -467,7 +568,7 @@ export const TOOLS: ToolDef[] = [
         ok: true,
         input: { id: wall.id },
         request: `Remove wall ${wall.id}`,
-        targets: [{ type: "wall", id: wall.id, label: `${segLen(wall.ax, wall.ay, wall.bx, wall.by).toFixed(2)} m long` }],
+        targets: [{ type: "wall", id: wall.id, label: `${wallLength(wall).toFixed(2)} m long${isCurved(wall) ? ", curved" : ""}` }],
         effects:
           openings.length > 0
             ? [`Also removes the ${plural(openings.length, "opening")} on it: ${openings.map((o) => `${o.kind} ${o.id}`).join(", ")}.`]
@@ -483,7 +584,7 @@ export const TOOLS: ToolDef[] = [
     name: "add_door",
     title: "Add a door",
     description:
-      `Add a door on a wall. t is the position of the door CENTER along the wall (0..1). Default width ${DOOR_DEFAULTS.width} m, height ${DOOR_DEFAULTS.height} m; a door wider than 1.2 m is built as a double door with two leaves. The vano is clamped so it always fits inside the wall; too-wide doors are rejected with the wall length. hinge picks the jamb the hinges sit on ("a" = the wall's A end, the default; "b" = the B end) and side picks which way the leaf swings, as seen walking the wall from A to B: "right" (default) or "left". Match these to the swing arc drawn on the plan.`,
+      `Add a door on a wall. t is the position of the door CENTER along the wall (0..1; along its arc on a curved wall, where the width is measured along the arc too and the straight leaf must stay inside the wall's thickness). Default width ${DOOR_DEFAULTS.width} m, height ${DOOR_DEFAULTS.height} m; a door wider than 1.2 m is built as a double door with two leaves. The vano is clamped so it always fits inside the wall; too-wide doors are rejected with the wall length. hinge picks the jamb the hinges sit on ("a" = the wall's A end, the default; "b" = the B end) and side picks which way the leaf swings, as seen walking the wall from A to B: "right" (default) or "left". Match these to the swing arc drawn on the plan.`,
     input: args({
       wallId: ref,
       t: openingT,
@@ -506,7 +607,7 @@ export const TOOLS: ToolDef[] = [
     name: "add_window",
     title: "Add a window",
     description:
-      `Add a window on a wall. t is the position of the window CENTER along the wall (0..1). Default width ${WINDOW_DEFAULTS.width} m, sill ${WINDOW_DEFAULTS.sill} m, height ${WINDOW_DEFAULTS.height} m. The vano is clamped to fit.`,
+      `Add a window on a wall. t is the position of the window CENTER along the wall (0..1; along its arc on a curved wall, where the width is measured along the arc too and the straight pane must stay inside the wall's thickness). Default width ${WINDOW_DEFAULTS.width} m, sill ${WINDOW_DEFAULTS.sill} m, height ${WINDOW_DEFAULTS.height} m. The vano is clamped to fit.`,
     input: args({
       wallId: ref,
       t: openingT,
@@ -550,27 +651,70 @@ export const TOOLS: ToolDef[] = [
     name: "add_room",
     title: "Add a room",
     description:
-      `Add a room: a metric rectangle (x, y = top-left corner, w, h in meters, at least ${ROOM_SIZE.min} m each) with a label and floor finish (${FLOOR_FINISHES.join(" | ")}; default ${DEFAULT_FLOOR}). ${LEVEL_HELP}`,
-    input: args({ x: coord, y: coord, w: roomSize, h: roomSize, label, floor: floorFinish.optional(), level: levelArg }),
-    execute: (i, { dispatch }) => dispatch({ type: "add_room", ...i }),
+      `Add a room — its floor, name and finish — of any shape: a rectangle, a polygon (an L, a wedge) or one with curved edges. ${ROOM_SHAPE_HELP} label names it; floor is its finish (${FLOOR_FINISHES.join(" | ")}; default ${DEFAULT_FLOOR}). Returns its id and area. ${LEVEL_HELP}`,
+    // Published as one object, every shape's fields optional; the body takes exactly one shape
+    input: args({
+      x: coord.optional(),
+      y: coord.optional(),
+      w: roomSize.optional(),
+      h: roomSize.optional(),
+      points: roomPoints.optional(),
+      arcs: roomArcs.optional(),
+      fit: planPoint.optional(),
+      label,
+      floor: floorFinish.optional(),
+      level: levelArg,
+    }),
+    execute: async ({ points, arcs, fit, ...i }, { dispatch }) => {
+      if (arcs !== undefined && points === undefined) return { ok: false, summary: "arcs bend the edges of `points`: give the corners too." };
+      if (fit !== undefined) {
+        if (points !== undefined || [i.x, i.y, i.w, i.h].some((v) => v !== undefined)) return { ok: false, summary: "Give a room exactly one shape: a rectangle, points, or fit." };
+        const state = store.getState();
+        const on = i.level === undefined ? null : lookupLevel(state.model, i.level);
+        if (on && !on.ok) return notResolved(on);
+        const fitted = await fittedOutline(on ? on.entity.id : activeLevelId(state), pt(fit));
+        return fitted.ok ? dispatch({ type: "add_room", ...i, points: fitted.points }) : fitted;
+      }
+      if (points === undefined) return dispatch({ type: "add_room", ...i });
+      const outline = outlineOf(points, arcs);
+      return outline.ok ? dispatch({ type: "add_room", ...i, points: outline.points }) : outline;
+    },
   }),
   defineTool({
     name: "update_room",
     title: "Update a room",
-    description: `Update a room by id or label (e.g. "bedroom"): move, resize, relabel, or change floor finish. ${MOVE_HELP} the room.`,
+    description: `Update a room by id or label (e.g. "bedroom"): reshape, move, resize, relabel, or change floor finish. \`points\` (with optional \`arcs\`, as add_room takes them) replaces its outline; fit: true fills again the space its walls close off around it; w, h stretch its outline from its bounds' top-left corner to that size (a rectangle's width and depth); x, y move that corner there. ${MOVE_HELP} the room.`,
     input: args({
       id: ref,
       x: coord.optional(),
       y: coord.optional(),
       w: roomSize.optional(),
       h: roomSize.optional(),
+      points: roomPoints.optional(),
+      arcs: roomArcs.optional(),
+      fit: z.boolean().optional(),
       label: label.optional(),
       floor: floorFinish.optional(),
       level: levelArg,
     }),
     // `id` addresses the room and is never part of the patch: passing the whole input let it
     // overwrite the room's real id with whatever label the agent used to find it
-    execute: ({ id, level, ...patch }, { dispatch }) => dispatch({ type: "update_room", id, patch: withLevel(patch, level) }),
+    execute: async ({ id, level, points, arcs, fit, ...patch }, { dispatch }) => {
+      if (arcs !== undefined && points === undefined) return { ok: false, summary: "arcs bend the edges of `points`: give the corners too." };
+      if (fit) {
+        if (points !== undefined) return { ok: false, summary: "Give points or fit, not both: each sets the whole outline." };
+        const model = store.getState().model;
+        const found = lookupRoom(model, id);
+        if (!found.ok) return notResolved(found);
+        const on = level === undefined ? null : lookupLevel(model, level);
+        if (on && !on.ok) return notResolved(on);
+        const fitted = await fittedOutline(on ? on.entity.id : found.entity.levelId, insideOf(found.entity));
+        return fitted.ok ? dispatch({ type: "update_room", id: found.entity.id, patch: withLevel({ ...patch, points: fitted.points }, level) }) : fitted;
+      }
+      if (points === undefined) return dispatch({ type: "update_room", id, patch: withLevel(patch, level) });
+      const outline = outlineOf(points, arcs);
+      return outline.ok ? dispatch({ type: "update_room", id, patch: withLevel({ ...patch, points: outline.points }, level) }) : outline;
+    },
   }),
   defineTool({
     name: "remove_room",
@@ -1022,22 +1166,19 @@ export const EXTEND_SELECTED_WALL: ToolDef = defineTool({
   name: "extend_selected_wall",
   title: "Extend the wall the human selected",
   description:
-    "DYNAMIC TOOL — available only while the human has a wall selected. Extends the wall the human is pointing at by `meters` (positive grows, negative shrinks) from its `end` (\"a\" = start, \"b\" = end).",
+    "DYNAMIC TOOL — available only while the human has a wall selected. Extends the wall the human is pointing at by `meters` (positive grows, negative shrinks) from its `end` (\"a\" = start, \"b\" = end): a straight wall along its line, a curved one along its arc.",
   input: args({ meters: signedLength, end: wallEnd }),
   execute: (i, { dispatch }) => {
     const id = store.getState().editor.selectedWallId;
     if (!id) return { ok: false, summary: "No wall is selected right now — the human must select one first." };
     const w = store.getState().model.walls.find((x) => x.id === id);
     if (!w) return { ok: false, summary: "Selected wall no longer exists." };
-    const len = segLen(w.ax, w.ay, w.bx, w.by);
-    const dx = (w.bx - w.ax) / len;
-    const dy = (w.by - w.ay) / len;
-    const m = i.meters;
-    const patch =
-      i.end === "a"
-        ? { ax: w.ax - dx * m, ay: w.ay - dy * m }
-        : { bx: w.bx + dx * m, by: w.by + dy * m };
-    return dispatch({ type: "edit_wall", id, patch });
+    // a straight wall along its line, a curved one along its circle (shapes.ts, extendedWall)
+    const next = extendedWall(w, i.end, i.meters);
+    if (!next) return { ok: false, summary: `Wall ${w.id} is ${wallLength(w).toFixed(2)} m long${isCurved(w) ? " along its arc" : ""}: ${i.meters} m would leave no wall${isCurved(w) ? ", or bend it past a half circle" : ""}.` };
+    const { bulge, ...ends } = next;
+    const patch = i.end === "a" ? { ax: ends.ax, ay: ends.ay } : { bx: ends.bx, by: ends.by };
+    return dispatch({ type: "edit_wall", id, patch: bulge === undefined ? patch : { ...patch, curve: { bulge } } });
   },
 });
 

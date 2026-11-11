@@ -22,14 +22,17 @@ const tool = (name: string): ToolDef => {
   return def;
 };
 
-type Props = Record<string, { type?: string; enum?: string[]; maxItems?: number; pattern?: string; maxLength?: number }>;
+type Props = Record<string, { type?: string; anyOf?: unknown[]; enum?: string[]; maxItems?: number; pattern?: string; maxLength?: number }>;
 const schema = (name: string) => inputSchemaOf(tool(name)) as { properties: Props; required: string[]; additionalProperties: boolean };
 
 /**
  * The published argument lists as they were written by hand before the schemas became zod:
  * property names with their JSON types, and the required list. Agents depend on exactly these.
+ * Free shapes added to them, and only added: a wall's `curve` (one of two forms, so "anyOf"), and
+ * a room's `points`, `arcs` and `fit` — which made add_room's rectangle one of its shapes, so its
+ * x, y, w, h are no longer required (a call that passes them is read as it always was).
  */
-const N = "number", S = "string", B = "boolean";
+const N = "number", S = "string", B = "boolean", A = "array", ANY = "anyOf";
 const CONTRACT: Record<string, [Record<string, string>, string[]]> = {
   get_model: [{ level: S }, []],
   get_issues: [{ level: S }, []],
@@ -38,16 +41,16 @@ const CONTRACT: Record<string, [Record<string, string>, string[]]> = {
   measure: [{ x1: N, y1: N, x2: N, y2: N, wallId: S }, []],
   get_underlay: [{}, []],
   calibrate_underlay: [{ u1: N, v1: N, u2: N, v2: N, meters: N, opacity: N }, ["u1", "v1", "u2", "v2", "meters"]],
-  add_wall: [{ ax: N, ay: N, bx: N, by: N, thickness: N, height: N, level: S }, ["ax", "ay", "bx", "by"]],
-  edit_wall: [{ id: S, ax: N, ay: N, bx: N, by: N, thickness: N, height: N, level: S }, ["id"]],
+  add_wall: [{ ax: N, ay: N, bx: N, by: N, thickness: N, height: N, curve: ANY, level: S }, ["ax", "ay", "bx", "by"]],
+  edit_wall: [{ id: S, ax: N, ay: N, bx: N, by: N, thickness: N, height: N, curve: ANY, level: S }, ["id"]],
   remove_wall: [{ id: S }, ["id"]],
   add_door: [{ wallId: S, t: N, width: N, height: N, hinge: S, side: S }, ["wallId", "t"]],
   set_door_swing: [{ id: S, hinge: S, side: S }, ["id"]],
   add_window: [{ wallId: S, t: N, width: N, sill: N, height: N }, ["wallId", "t"]],
   move_opening: [{ id: S, t: N }, ["id", "t"]],
   remove_opening: [{ id: S }, ["id"]],
-  add_room: [{ x: N, y: N, w: N, h: N, label: S, floor: S, level: S }, ["x", "y", "w", "h", "label"]],
-  update_room: [{ id: S, x: N, y: N, w: N, h: N, label: S, floor: S, level: S }, ["id"]],
+  add_room: [{ x: N, y: N, w: N, h: N, points: A, arcs: A, fit: A, label: S, floor: S, level: S }, ["label"]],
+  update_room: [{ id: S, x: N, y: N, w: N, h: N, points: A, arcs: A, fit: B, label: S, floor: S, level: S }, ["id"]],
   remove_room: [{ id: S }, ["id"]],
   place_item: [{ kind: S, x: N, y: N, rotation: N, level: S }, ["kind", "x", "y"]],
   define_item_kind: [{ kind: S, label: S, w: N, d: N, h: N, color: S, category: S, parts: "array" }, ["kind", "label", "w", "d", "h"]],
@@ -86,7 +89,7 @@ describe("published input schemas", () => {
     const s = schema(name);
     expect(s.additionalProperties).toBe(false);
     expect(s.required).toEqual(required);
-    expect(Object.fromEntries(Object.entries(s.properties).map(([k, v]) => [k, v.type]))).toEqual(props);
+    expect(Object.fromEntries(Object.entries(s.properties).map(([k, v]) => [k, v.type ?? (v.anyOf ? ANY : undefined)]))).toEqual(props);
     expect(s).not.toHaveProperty("$schema");
   });
 

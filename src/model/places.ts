@@ -8,6 +8,7 @@ import type { PlanModel, TargetType } from "./types";
 import { catalogOf, kindName } from "./catalog";
 import { levelIdOf, stairGeometryIn } from "./levels";
 import { SESSION } from "./limits";
+import { outlineAnchor, outlineBox, wallPointAt } from "./shapes";
 
 /** A point on the plan, metres, and the level it is on (none for the plan as a whole). */
 export interface Place {
@@ -45,19 +46,27 @@ export function entityInfo(model: PlanModel, id: string): EntityInfo | null {
 
 /**
  * The middle of what `id` names on the plan: a wall's midpoint, an opening's centre on its wall,
- * a room's centre, a piece's centre, the middle of a stair's footprint. Null when it names none.
+ * a room's anchor (its most interior point, where its name goes: shapes.ts outlineAnchor), a
+ * piece's centre, the middle of a stair's footprint. Null when it names none.
  */
 export function placeOf(model: PlanModel, id: string): Place | null {
   const at = (x: number, y: number): Place => ({ x, y, levelId: levelIdOf(model, id) });
   const w = model.walls.find((x) => x.id === id);
-  if (w) return at((w.ax + w.bx) / 2, (w.ay + w.by) / 2);
+  if (w) {
+    const mid = wallPointAt(w, 0.5);
+    return at(mid.x, mid.y);
+  }
   const o = model.openings.find((x) => x.id === id);
   if (o) {
     const host = model.walls.find((x) => x.id === o.wallId);
-    return host ? at(host.ax + (host.bx - host.ax) * o.t, host.ay + (host.by - host.ay) * o.t) : null;
+    const c = host ? wallPointAt(host, o.t) : null;
+    return c ? at(c.x, c.y) : null;
   }
   const r = model.rooms.find((x) => x.id === id);
-  if (r) return at(r.x + r.w / 2, r.y + r.h / 2);
+  if (r) {
+    const anchor = outlineAnchor(r.points);
+    return at(anchor.x, anchor.y);
+  }
   const it = model.items.find((x) => x.id === id);
   if (it) return at(it.x, it.y);
   const st = model.stairs.find((x) => x.id === id);
@@ -67,12 +76,20 @@ export function placeOf(model: PlanModel, id: string): Place | null {
 
 /**
  * Where a marker on what `id` names stands (the agent's, point_at's ring, on the plan and over
- * the 3D view alike): where placeOf says, except in a room, whose middle is its name and area —
- * there it stands in from the room's corner (SESSION.markerInset), clear of them.
+ * the 3D view alike): where placeOf says, except in a room, whose anchor is its name and area —
+ * there it stands in from the room's corner nearest its bounds' top-left (SESSION.markerInset),
+ * toward its anchor, clear of them.
  */
 export function markerOf(model: PlanModel, id: string): Place | null {
   const r = model.rooms.find((x) => x.id === id);
   if (!r) return placeOf(model, id);
   const { metres, share } = SESSION.markerInset;
-  return { x: r.x + Math.min(metres, r.w * share), y: r.y + Math.min(metres, r.h * share), levelId: levelIdOf(model, id) };
+  const box = outlineBox(r.points);
+  const corner = r.points.reduce((best, p) => (p.x - box.minX + (p.y - box.minY) < best.x - box.minX + (best.y - box.minY) ? p : best));
+  const anchor = outlineAnchor(r.points);
+  const dx = anchor.x - corner.x;
+  const dy = anchor.y - corner.y;
+  const reach = Math.hypot(dx, dy);
+  const step = reach === 0 ? 0 : Math.min(metres * Math.SQRT2, reach * share * 2) / reach;
+  return { x: corner.x + dx * step, y: corner.y + dy * step, levelId: levelIdOf(model, id) };
 }

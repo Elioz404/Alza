@@ -22,7 +22,8 @@ import {
   SegmentedControl,
   SegmentedControlItem,
 } from "../primitives";
-import { AgentCallout, EntityHead, InspectorFoot, useCommit, useOpenRow } from "./parts";
+import { AgentCallout, EntityHead, InspectorFoot, Stats, useCommit, useOpenRow } from "./parts";
+import { isCurved, sagittaOf, wallArc, wallEdge } from "../../model/shapes";
 import { MeasureField, PointFields } from "./measure";
 import {
   metres,
@@ -31,6 +32,7 @@ import {
   openingTFor,
   wallAngle,
   wallEndFor,
+  wallChord,
   wallLength,
   wallName,
   wallPlace,
@@ -173,12 +175,45 @@ function OpeningsOnWall({ wall }: { wall: Wall }) {
   );
 }
 
+/**
+ * A wall's bend, from the keyboard: how far its middle stands off the straight line between its
+ * ends (positive to the wall's left, walking from its start to its end), and Straighten. On the
+ * plan, the same bend is the handle at the wall's middle.
+ */
+function BendSection({ wall, onEdit }: { wall: Wall; onEdit: (patch: WallPatch) => void }) {
+  const arc = wallArc(wall);
+  const half = wallChord(wall) / 2;
+  return (
+    <Section title="Bend" action={<span className="insp-aside">{arc ? "Curved" : "Straight"}</span>}>
+      <MeasureField label="Bend at the middle" value={sagittaOf(wallEdge(wall))} min={-half} max={half} step={SNAP} onCommit={(v) => onEdit({ curve: { sagitta: v } })} />
+      {arc ? (
+        <>
+          <Stats
+            items={[
+              { label: "Length along the arc", value: metres(arc.length) },
+              { label: "Radius", value: metres(arc.radius) },
+            ]}
+          />
+          <div className="insp-row">
+            <Button size="sm" onClick={() => onEdit({ curve: { sagitta: 0 } })}>
+              Straighten
+            </Button>
+          </div>
+        </>
+      ) : null}
+      <p className="insp-help">Positive bends to the left walking from the start to the end; 0 is straight. Doors and windows are measured along the arc.</p>
+    </Section>
+  );
+}
+
 export function WallInspector({ wall }: { wall: Wall }) {
   const model = useAppStore((s) => s.model);
   const commit = useCommit();
   const notify = useNotify();
   const name = wallName(model, wall);
-  const length = wallLength(wall);
+  // a curved wall's Length field is its chord: the straight distance its end is set at
+  const length = wallChord(wall);
+  const curved = isCurved(wall);
   const angle = wallAngle(wall);
   // a field that was not given stays as it is (edit_wall skips undefined keys)
   const edit = (patch: WallPatch) => commit({ type: "edit_wall", id: wall.id, patch });
@@ -197,7 +232,7 @@ export function WallInspector({ wall }: { wall: Wall }) {
         <EntityHead icon={IconWall} title={name} sub={wallPlace(model, wall) ?? "Not along any room"} id={wall.id} />
         <Section title="Geometry" action={<span className="insp-aside">Snaps to {Math.round(SNAP * 100)} cm</span>}>
           <div className="insp-grid">
-            <MeasureField label="Length" value={length} min={WALL_MIN_LENGTH} step={SNAP} onCommit={(v) => edit(wallEndFor(wall, v, angle))} />
+            <MeasureField label={curved ? "Chord" : "Length"} value={length} min={WALL_MIN_LENGTH} step={SNAP} onCommit={(v) => edit(wallEndFor(wall, v, angle))} />
             <MeasureField
               label="Thickness"
               value={wall.thickness}
@@ -215,6 +250,7 @@ export function WallInspector({ wall }: { wall: Wall }) {
             Length and angle move the end point; the start stays where it is.
           </p>
         </Section>
+        <BendSection wall={wall} onEdit={edit} />
         <OpeningsOnWall wall={wall} />
         <Section>
           <AgentCallout>

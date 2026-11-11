@@ -18,6 +18,7 @@ import { FIRST_LEVEL_ID, seedLoft, seedTownhouse } from "../src/model/seed";
 import { emptyModel, type PlanModel, type Stair } from "../src/model/types";
 import { GROUND_LEVEL_ID, LEVEL_DEFAULTS, LEVEL_HEIGHT, LEVEL_NAMES, PLAN_FORMAT_VERSION, SLAB_THICKNESS, STAIR, WALL_DEFAULTS, WALL_SLAB_TOLERANCE } from "../src/model/limits";
 import { flush, resetStore } from "./support/store";
+import { outlineBounds, rectOutline } from "../src/model/shapes";
 
 beforeEach(resetStore);
 
@@ -34,7 +35,8 @@ function loftV1(): PlanModelV1 {
     name: m.name,
     walls: m.walls.map((w) => withoutLevel(w)),
     openings: m.openings,
-    rooms: m.rooms.map((r) => withoutLevel(r)),
+    // a format-1 room is a rectangle: the loft's rooms are, so their bounds are exactly them
+    rooms: m.rooms.map(({ points, ...r }) => withoutLevel({ ...r, ...outlineBounds(points) })),
     items: m.items.map((i) => withoutLevel(i)),
     kinds: m.kinds,
     underlay: m.underlay,
@@ -449,7 +451,7 @@ describe("stair issues", () => {
 
   it("a stairwell that opens outside every room above", () => {
     const m = seedTownhouse();
-    const moved = { ...m, rooms: m.rooms.map((r) => (r.id === "f_room_hall" ? { ...r, x: 1.2, w: 1.25 } : r)) };
+    const moved = { ...m, rooms: m.rooms.map((r) => (r.id === "f_room_hall" ? { ...r, points: rectOutline(1.2, 0.075, 1.25, 5.85) } : r)) };
     expect(codes(moved)).toContain("stairwell_outside_room");
   });
 

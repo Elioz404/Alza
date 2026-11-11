@@ -37,6 +37,7 @@ import { checkModel } from "../src/model/issues";
 import { z } from "zod";
 import { flush, heldImage, kindOf, resetStore } from "./support/store";
 import type { Underlay } from "../src/model/types";
+import { outlineBounds, rectOutline } from "../src/model/shapes";
 
 beforeEach(resetStore);
 
@@ -144,48 +145,48 @@ describe("openings", () => {
 
 describe("rooms", () => {
   it.each([
-    ["an infinite width", () => actions.addRoom(0, 0, Infinity, 3, "R")],
-    ["a NaN corner", () => actions.addRoom(NaN, 0, 3, 3, "R")],
-    ["a size below the minimum", () => actions.addRoom(0, 0, ROOM_SIZE.min / 2, 3, "R")],
-    ["an empty label", () => actions.addRoom(0, 0, 3, 3, "  ")],
-    ["an over-long label", () => actions.addRoom(0, 0, 3, 3, "x".repeat(TEXT.label + 1))],
+    ["an infinite width", () => actions.addRoom({ x: 0, y: 0, w: Infinity, h: 3, label: "R" })],
+    ["a NaN corner", () => actions.addRoom({ x: NaN, y: 0, w: 3, h: 3, label: "R" })],
+    ["a size below the minimum", () => actions.addRoom({ x: 0, y: 0, w: ROOM_SIZE.min / 2, h: 3, label: "R" })],
+    ["an empty label", () => actions.addRoom({ x: 0, y: 0, w: 3, h: 3, label: "  " })],
+    ["an over-long label", () => actions.addRoom({ x: 0, y: 0, w: 3, h: 3, label: "x".repeat(TEXT.label + 1) })],
   ])("addRoom refuses %s", (_, act) => {
     expectRefused(act);
   });
 
   it("updateRoom refuses an invalid size and keeps the room", () => {
-    const id = actions.addRoom(0, 0, 3, 3, "Bedroom").id as string;
+    const id = actions.addRoom({ x: 0, y: 0, w: 3, h: 3, label: "Bedroom" }).id as string;
     expectRefused(() => actions.updateRoom(id, { w: NaN }));
     expectRefused(() => actions.updateRoom(id, { h: -2 }));
     expectRefused(() => actions.updateRoom(id, { label: "" }));
   });
 
   it("the checker and the action share the minimum room size", () => {
-    const issues = checkModel({ ...store.getState().model, rooms: [{ id: "r", levelId: "level_ground", x: 0, y: 0, w: ROOM_SIZE.min / 2, h: 1, label: "R", floor: "oak" }] });
+    const issues = checkModel({ ...store.getState().model, rooms: [{ id: "r", levelId: "level_ground", points: rectOutline(0, 0, ROOM_SIZE.min / 2, 1), label: "R", floor: "oak" }] });
     expect(issues.some((i) => i.code === "room_too_small")).toBe(true);
   });
 });
 
 describe("A1 — update_room never overwrites a room's id", () => {
   it("update_room { id: 'bedroom', label: 'Main' } keeps the room's real id", async () => {
-    const realId = actions.addRoom(0, 0, 4, 3, "Bedroom").id as string;
+    const realId = actions.addRoom({ x: 0, y: 0, w: 4, h: 3, label: "Bedroom" }).id as string;
     const r = await executeWrapped(tool("update_room"), { id: "bedroom", label: "Main" });
     expect(r.ok).toBe(true);
     const rooms = store.getState().model.rooms;
     expect(rooms).toHaveLength(1);
-    expect(rooms[0]).toMatchObject({ id: realId, label: "Main", x: 0, y: 0, w: 4, h: 3 });
+    expect(rooms[0]).toMatchObject({ id: realId, label: "Main", points: rectOutline(0, 0, 4, 3) });
   });
 
   it("the store action itself ignores keys outside the patch list", () => {
-    const realId = actions.addRoom(0, 0, 4, 3, "Bedroom").id as string;
+    const realId = actions.addRoom({ x: 0, y: 0, w: 4, h: 3, label: "Bedroom" }).id as string;
     actions.updateRoom(realId, { id: "hijacked", label: "Main" } as RoomPatch);
     expect(store.getState().model.rooms[0].id).toBe(realId);
   });
 
   it("an absent field is left alone rather than set to undefined", () => {
-    const realId = actions.addRoom(0, 0, 4, 3, "Bedroom").id as string;
+    const realId = actions.addRoom({ x: 0, y: 0, w: 4, h: 3, label: "Bedroom" }).id as string;
     actions.updateRoom(realId, { w: undefined, label: "Main" });
-    expect(store.getState().model.rooms[0].w).toBe(4);
+    expect(outlineBounds(store.getState().model.rooms[0].points).w).toBe(4);
   });
 });
 
@@ -301,16 +302,16 @@ describe("rooms: one size rule for the action, the tool and the snap", () => {
 
   it("a size just under the minimum is refused by the action and by add_room alike", async () => {
     const under = ROOM_SIZE.min - SNAP / 2 + 0.005;
-    expectRefused(() => actions.addRoom(0, 0, under, 3, "R"), /w must be/);
+    expectRefused(() => actions.addRoom({ x: 0, y: 0, w: under, h: 3, label: "R" }), /w must be/);
     const r = await executeWrapped(tool("add_room"), { x: 0, y: 0, w: under, h: 3, label: "R" });
     expect(r.ok).toBe(false);
-    expect(actions.addRoom(0, 0, ROOM_SIZE.min, ROOM_SIZE.min, "R").ok).toBe(true);
+    expect(actions.addRoom({ x: 0, y: 0, w: ROOM_SIZE.min, h: ROOM_SIZE.min, label: "R" }).ok).toBe(true);
     expect((await executeWrapped(tool("add_room"), { x: 2, y: 0, w: ROOM_SIZE.min, h: 1, label: "S" })).ok).toBe(true);
   });
 
   it("only known floor finishes are stored", async () => {
-    expectRefused(() => actions.addRoom(0, 0, 3, 3, "R", "marble"), /floor must be one of/);
-    const id = actions.addRoom(0, 0, 3, 3, "R").id as string;
+    expectRefused(() => actions.addRoom({ x: 0, y: 0, w: 3, h: 3, label: "R", floor: "marble" }), /floor must be one of/);
+    const id = actions.addRoom({ x: 0, y: 0, w: 3, h: 3, label: "R" }).id as string;
     expectRefused(() => actions.updateRoom(id, { floor: "marble" as never }), /floor/);
     expect((await executeWrapped(tool("add_room"), { x: 0, y: 4, w: 3, h: 3, label: "M", floor: "marble" })).ok).toBe(false);
     for (const floor of FLOOR_FINISHES) expect(actions.updateRoom(id, { floor }).ok).toBe(true);

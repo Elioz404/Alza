@@ -8,7 +8,8 @@
  */
 
 import type { PlanModel } from "./types";
-import { COORD, FURNITURE_DIM, LEVEL_HEIGHT, OPENING_HEIGHT, OPENING_SILL, OPENING_T, OPENING_WIDTH, ROOM_SIZE, ROTATION, STAIR, WALL_HEIGHT, WALL_THICKNESS, rangeError, type Range } from "./limits";
+import { outlineBounds } from "./shapes";
+import { BULGE, COORD, FURNITURE_DIM, LEVEL_HEIGHT, OPENING_HEIGHT, OPENING_SILL, OPENING_T, OPENING_WIDTH, ROOM_SIZE, ROTATION, STAIR, WALL_HEIGHT, WALL_THICKNESS, rangeError, type Range } from "./limits";
 
 type Check = readonly [field: string, value: number | undefined, range: Range];
 
@@ -35,6 +36,7 @@ export function planRangeErrors(model: PlanModel): string[] {
       ["by", w.by, COORD],
       ["thickness", w.thickness, WALL_THICKNESS],
       ["height", w.height, WALL_HEIGHT],
+      ["bulge", w.bulge, BULGE],
     ]);
   }
   for (const o of model.openings) {
@@ -46,12 +48,16 @@ export function planRangeErrors(model: PlanModel): string[] {
     ]);
   }
   for (const r of model.rooms) {
-    check(`room ${r.id}`, [
-      ["x", r.x, COORD],
-      ["y", r.y, COORD],
-      ["w", r.w, ROOM_SIZE],
-      ["h", r.h, ROOM_SIZE],
-    ]);
+    check(
+      `room ${r.id}`,
+      r.points.flatMap((p, i): Check[] => [
+        [`points.${i}.x`, p.x, COORD],
+        [`points.${i}.y`, p.y, COORD],
+        [`points.${i}.bulge`, p.bulge, BULGE],
+      ]),
+    );
+    const bounds = r.points.length > 0 ? outlineBounds(r.points) : null;
+    if (bounds) check(`room ${r.id}`, [["width", bounds.w, ROOM_SIZE], ["depth", bounds.h, ROOM_SIZE]]);
   }
   for (const i of model.items) {
     check(`item ${i.id}`, [

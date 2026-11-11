@@ -18,6 +18,7 @@ import { catalogOf } from "../model/catalog";
 import { bus, EVENTS } from "../model/sceneBus";
 import { centreOf, type EntityRef } from "../ui/activity/entities";
 import { stairGeometryIn } from "../model/levels";
+import { outlineBox } from "../model/shapes";
 
 /** The view: the world point at the canvas's top-left corner and the zoom, in pixels per metre. */
 export interface PlanView {
@@ -64,6 +65,18 @@ export interface CanvasState {
   openingFits: boolean | null;
   /** the way the stair tool's next stair climbs: degrees, 0 = +y, 90 = +x (a stair's rotation) */
   stairRotation: number;
+  /**
+   * With the room tool: the corners of an outline being drawn one click at a time, in plan
+   * metres (roomDraft.ts); null while none is under way.
+   */
+  roomDraft: readonly Pt[] | null;
+  /** the room tool's keyboard cross: where C puts the next corner; null until an arrow moves it */
+  roomCursor: Pt | null;
+}
+
+interface Pt {
+  readonly x: number;
+  readonly y: number;
 }
 
 export const canvasStore = createStore<CanvasState>(() => ({
@@ -75,6 +88,8 @@ export const canvasStore = createStore<CanvasState>(() => ({
   showAgentMarks: true,
   openingFits: null,
   stairRotation: 0,
+  roomDraft: null,
+  roomCursor: null,
 }));
 
 /** Read a slice of the canvas state from React. */
@@ -92,6 +107,10 @@ store.subscribe((s, prev) => {
   // choosing a draw mode (the rail, a shortcut, the Library) puts the editor's own tool down
   if (s.editor.drawMode !== prev.editor.drawMode && s.editor.drawMode !== "select" && canvasStore.getState().tool) {
     canvasStore.setState({ tool: null });
+  }
+  // an outline being drawn belongs to the room tool, and to the level it was started on
+  if ((s.editor.drawMode !== prev.editor.drawMode || s.editor.activeLevelId !== prev.editor.activeLevelId) && (canvasStore.getState().roomDraft || canvasStore.getState().roomCursor)) {
+    canvasStore.setState({ roomDraft: null, roomCursor: null });
   }
   // a whole plan arriving on an empty sheet (the demo, a loaded plan) is shown whole; a first
   // wall or room drawn by hand is one entity and leaves the view where the hand is
@@ -175,8 +194,9 @@ export function planBounds(model: PlanModel): { minX: number; minY: number; maxX
     ys.push(w.ay, w.by);
   }
   for (const r of model.rooms) {
-    xs.push(r.x, r.x + r.w);
-    ys.push(r.y, r.y + r.h);
+    const b = outlineBox(r.points);
+    xs.push(b.minX, b.maxX);
+    ys.push(b.minY, b.maxY);
   }
   const catalog = catalogOf(model);
   for (const it of model.items) {

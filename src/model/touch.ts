@@ -41,6 +41,7 @@ export function touchedBy(command: Command, model: PlanModel): readonly string[]
     case "remove_opening":
       return [idOf(model, command.id, lookupOpening)];
     case "update_room":
+    case "reshape_room":
     case "remove_room":
       return [idOf(model, command.id, lookupRoom)];
     case "move_item":

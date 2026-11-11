@@ -61,6 +61,46 @@ export const WALL_JOINT_REACH = 0.09;
  * in line: where they meet, one continues the other and neither is cut back to the other's face.
  */
 export const WALL_IN_LINE_SINE = 1e-3;
+/**
+ * How a wall or a room's edge bends: its bulge, tan(θ/4) for the arc's included angle θ (the
+ * DXF convention). 0 is straight; ±1 is a half circle, the most an edge bends. A positive bulge
+ * bows to the side of (dy, −dx) for the chord's direction (dx, dy): a wall's left, walking from
+ * A to B (the side opposite a door's "right" swing), and out of a room, whose outline is kept
+ * wound that way round (model/shapes.ts). A bulge is unchanged by moving, scaling or offsetting
+ * the arc concentrically, which is why it is the number stored: a wall's two faces and the room
+ * edge along it share it with the centreline.
+ */
+export const BULGE = range(-1, 1, "");
+/** A bulge closer to 0 than this is a straight edge (float noise: whatever its length). */
+export const STRAIGHT_BULGE = 1e-9;
+/**
+ * An edge or a wall whose middle stands off its chord by less than this many metres is straight:
+ * a bow below what a building model can hold (the IFC export's declared precision,
+ * export/ifc/config.ts MODEL_PRECISION, is this same 1e-5 m: an arc bowed less is three points on
+ * one line to a reader). Every entry point (the commands, a loaded plan) stores such an edge with
+ * no bulge, and the geometry reads one as straight. Kept this fine, not at a drafting tolerance,
+ * because a short arc a joint's cap follows along a curved face (a 0.2 m cap on a 10 m radius
+ * bows half a millimetre) must stay an arc for the footprints to tile.
+ */
+export const STRAIGHT_SAGITTA = 1e-5;
+/**
+ * A curved wall must bend no tighter than this many times its thickness, measured as the radius
+ * of its centreline: tighter, its inner face would shrink to (or past) the centre of its arc.
+ */
+export const WALL_ARC_MIN_RADIUS = 1;
+/**
+ * How finely an arc is cut into straight pieces where a straight-edged shape is needed (the
+ * floors' regions, the checker's tests against furniture, a label's anchor): no piece longer
+ * than `maxSegment` metres, none turning by more than `maxAngle` degrees. A 4 m radius arc is
+ * then off its chords by under 2 mm.
+ */
+export const ARC_TESSELLATION = Object.freeze({ maxSegment: 0.1, maxAngle: 4 });
+/**
+ * Where two walls meet at an angle their faces are mitred: each face runs on to where it meets
+ * its neighbour's (model/joints.ts, wallFootprint). At a very sharp angle that point runs far
+ * out; past this many times the thicker wall's thickness, the face is squared off instead.
+ */
+export const WALL_MITRE_LIMIT = 6;
 /** A wall's two endpoints: "a" is (ax, ay), "b" is (bx, by). */
 export const WALL_ENDS = ["a", "b"] as const;
 export type WallEnd = (typeof WALL_ENDS)[number];
@@ -84,6 +124,11 @@ export type SwingSide = (typeof SWING_SIDES)[number];
  * the plan draws two swings and the 3D view builds two leaves, from this one number.
  */
 export const DOUBLE_DOOR_CLEAR = 1.15;
+/**
+ * Two doors' swings that share more floor than this, square metres, hit each other when both
+ * open (the checker's doors_swing_together); less is two swings drawn touching.
+ */
+export const DOOR_SWINGS_TOUCH = 1e-3;
 export const DOOR_SWING_DEFAULTS = Object.freeze({ hinge: "a", side: "right" } as const satisfies { hinge: Hinge; side: SwingSide });
 /** What set_doors can do to the leaves in the 3D scene. */
 export const DOOR_STATES = ["open", "closed", "toggle"] as const;
@@ -97,6 +142,23 @@ export type DoorState = (typeof DOOR_STATES)[number];
  * what the checker calls "too small".
  */
 export const ROOM_SIZE = range(0.5, 1000);
+/**
+ * A room is a simple polygon whose edges may be arcs (model/shapes.ts). It has from 3 to
+ * `vertices.max` corners; no edge shorter than `minEdge` (one grid step); at least the area of
+ * a ROOM_SIZE.min square; and it is never narrower than ROOM_SIZE.min (the circle that fits
+ * inside it is at least that wide). `overlap` is the shared area, m², under which two rooms
+ * only touch. `anchorPrecision` is how close to the most interior point (the pole of
+ * inaccessibility) a room's label anchor is found, metres.
+ */
+export const ROOM_SHAPE = Object.freeze({
+  vertices: range(3, 100, ""),
+  minEdge: SNAP,
+  minArea: ROOM_SIZE.min * ROOM_SIZE.min,
+  overlap: 1e-4,
+  /** how near an arc edge, metres, a new corner must be to split the arc into two rather than make two straight edges */
+  onArc: 0.02,
+  anchorPrecision: 0.01,
+});
 /** Floor finishes the 2D fills and the 3D textures are drawn for. */
 export const FLOOR_FINISHES = ["oak", "tile", "carpet", "concrete"] as const;
 export type FloorFinish = (typeof FLOOR_FINISHES)[number];
@@ -179,8 +241,10 @@ export type KindSource = (typeof KIND_SOURCES)[number];
  * migrated on load by model/planFormat.ts; a plan from a newer format is refused.
  *   1 — one storey: walls, openings, rooms and items, no levels
  *   2 — levels (storeys) and stairs; every wall, room and item names its level
+ *   3 — free shapes: a room is a polygon (`points`, each corner with the bulge of the edge it
+ *       starts) instead of a rectangle (x, y, w, h), and a wall may be an arc (`bulge`)
  */
-export const PLAN_FORMAT_VERSION = 2;
+export const PLAN_FORMAT_VERSION = 3;
 
 /** The id of the level a fresh plan (and a migrated single-storey one) stands on. */
 export const GROUND_LEVEL_ID = "level_ground";
@@ -412,8 +476,8 @@ export const MAX_CANDIDATES = 10;
 export const SESSION = Object.freeze({
   /** the BroadcastChannel the tabs of this origin meet on */
   channel: "alza-session",
-  /** the message format; a message in any other is ignored */
-  protocol: 1,
+  /** the message format; a message in any other is ignored (2: rooms as polygons, walls with a bulge) */
+  protocol: 2,
   /** how long a new tab listens for a tab that already holds the plan before it holds its own */
   joinWaitMs: 400,
   /** at most this often a tab tells the others where its pointer is */

@@ -10,7 +10,8 @@
 
 import type { Opening, Wall } from "../model/types";
 import { openingSpan } from "../model/issues";
-import { segPoint, type Pt } from "../model/geometry";
+import type { Pt } from "../model/geometry";
+import { edgeArc, edgePathTo, piecesOf, pointOnEdge, subEdge, tangentOnEdge, wallEdge, type Edge } from "../model/shapes";
 import { QUARTER_TURN, SNAP, headingOf } from "../model/limits";
 import { FONT_SIZE } from "../ui/theme/tokens";
 
@@ -85,6 +86,18 @@ export const MARK = Object.freeze({
   stairDot: 2.5,
   /** how far (px) the pointer must travel from where a stair starts before its direction follows it */
   stairAim: 12,
+  /**
+   * A shape's handles (a room's corners and edge middles, a curved wall's middle): what they take
+   * a press within, as a radius in pixels (a 44 px touch target), and the drawn dot's radius.
+   */
+  touchReach: 22,
+  midHandle: 4.5,
+  /** an edge's middle handle is offered once the edge is this many pixels long, clear of its corners' reach */
+  midHandleRoom: 88,
+  /** an edge's length is lettered once the edge is this many pixels long */
+  edgeDimRoom: 64,
+  /** an edge's length stands this far (px) inside the room from the edge */
+  edgeDimInset: 14,
 });
 
 /**
@@ -108,6 +121,17 @@ export const PRESENCE_MARK = Object.freeze({
 });
 
 /**
+ * Where the plan is cut, as a floor plan is: a horizontal section `height` metres above the floor
+ * of the level it shows. What stands taller is cut and drawn in section (a wall's solid poché, a
+ * stair's treads up to the cut); what stops below it is seen from above, in projection (a
+ * parapet's outline, the treads past the cut dashed).
+ */
+export const PLAN_CUT = Object.freeze({ height: 1.2 });
+
+/** Whether a wall stops below the plan's cut: drawn in projection, its outline only, not as poché. */
+export const belowCut = (w: Pick<Wall, "height">): boolean => w.height < PLAN_CUT.height;
+
+/**
  * How a stair is drawn on the plan, in metres and fractions of the stair (so the symbol scales
  * with it). The plan is cut, as a floor plan is, at `cutHeight` above its floor: treads below
  * the cut are drawn, the ones above it hidden (dashed), with a break line where the cut crosses
@@ -115,8 +139,8 @@ export const PRESENCE_MARK = Object.freeze({
  * through the void beneath.
  */
 export const STAIR_SYMBOL = Object.freeze({
-  /** the plan's cut, above the floor of the level shown, metres */
-  cutHeight: 1.2,
+  /** the plan's cut, above the floor of the level shown, metres (PLAN_CUT) */
+  cutHeight: PLAN_CUT.height,
   /** the break line's zigzag, as a fraction of the stair's width */
   breakZig: 0.12,
   /** the UP / DN lettering sits this many goings in from its end of the walking line, and this
@@ -175,35 +199,65 @@ export function chainStops(values: readonly number[]): number[] {
 /** Metres as the plan letters them: two decimals, no unit (the sheet is in metres). */
 export const metres = (m: number): string => m.toFixed(2);
 
-/** The four corners of a wall's poché, in metres. */
-export function wallCorners(w: Wall): Pt[] {
-  const len = Math.hypot(w.bx - w.ax, w.by - w.ay) || 1;
-  const nx = (-(w.by - w.ay) / len) * (w.thickness / 2);
-  const ny = ((w.bx - w.ax) / len) * (w.thickness / 2);
-  return [
-    { x: w.ax + nx, y: w.ay + ny },
-    { x: w.bx + nx, y: w.by + ny },
-    { x: w.bx - nx, y: w.by - ny },
-    { x: w.ax - nx, y: w.ay - ny },
-  ];
+/**
+ * The point `off` metres to the right of a wall's centreline at t (walking from A to B; the
+ * left for a negative `off`). On a curved wall the offset is along the radius, so the points of
+ * one `off` run along a face, an arc concentric with the centreline.
+ */
+export function wallOffsetAt(w: Wall, t: number, off: number): Pt {
+  const e = wallEdge(w);
+  const p = pointOnEdge(e, t);
+  const u = tangentOnEdge(e, t);
+  return { x: p.x - u.y * off, y: p.y + u.x * off };
 }
 
-/** The corners of an opening's cut through its wall, in metres. */
+/**
+ * The band of a wall between parameters t0 and t1, `half` metres to either side of its
+ * centreline, as a closed polygon in metres: the right face from t0 to t1, the left face back. A
+ * curved wall's faces are cut into the pieces its centreline is (ARC_TESSELLATION).
+ */
+export function bandPoints(w: Wall, t0: number, t1: number, half: number): Pt[] {
+  const n = piecesOf(subEdge(wallEdge(w), t0, t1));
+  const ts = Array.from({ length: n + 1 }, (_, i) => t0 + ((t1 - t0) * i) / n);
+  return [...ts.map((t) => wallOffsetAt(w, t, half)), ...ts.reverse().map((t) => wallOffsetAt(w, t, -half))];
+}
+
+/**
+ * The same band as SVG path data at `S` pixels per metre, its faces as true arcs on a curved
+ * wall: what an opening's cut and a window's frame are drawn with.
+ */
+export function bandPath(w: Wall, t0: number, t1: number, half: number, S: number): string {
+  const e = wallEdge(w);
+  const arc = edgeArc(e);
+  const r0 = wallOffsetAt(w, t0, half);
+  const r1 = wallOffsetAt(w, t1, half);
+  const l1 = wallOffsetAt(w, t1, -half);
+  const l0 = wallOffsetAt(w, t0, -half);
+  const face = (from: Pt, to: Pt, backwards: boolean): Edge => {
+    if (!arc) return { a: from, b: to, bulge: 0 };
+    // a face is the centreline's circle at another radius, turning the same way (or back)
+    const sweep = arc.sweep * (t1 - t0) * (backwards ? -1 : 1);
+    return { a: from, b: to, bulge: Math.tan(sweep / 4) };
+  };
+  return `M${r0.x * S} ${r0.y * S}${edgePathTo(face(r0, r1, false), S)}L${l1.x * S} ${l1.y * S}${edgePathTo(face(l1, l0, true), S)}Z`;
+}
+
+/** A wall's drawn tone, as a class: selected, hovered or plain. */
+export const wallTone = (id: string, selectedId: string | null, hoverId: string | null): string =>
+  id === selectedId ? "pl-wall--selected" : id === hoverId ? "pl-wall--hover" : "";
+
+/** A wall's centreline as SVG path data: a line, or its arc. What a fallback poché and the hit band stroke. */
+export function wallPathD(w: Wall, S: number): string {
+  return `M${w.ax * S} ${w.ay * S}${edgePathTo(wallEdge(w), S)}`;
+}
+
+/** The outline of a wall's poché, in metres (unmitred): its four corners, or a curved wall's band. */
+export const wallCorners = (w: Wall): Pt[] => bandPoints(w, 0, 1, w.thickness / 2);
+
+/** The outline of an opening's cut through its wall, in metres (along the arc on a curved wall). */
 export function openingCorners(wall: Wall, o: Opening): Pt[] {
   const [t0, t1] = openingSpan(wall, o);
-  const a = { x: wall.ax, y: wall.ay };
-  const b = { x: wall.bx, y: wall.by };
-  const p0 = segPoint(a, b, t0);
-  const p1 = segPoint(a, b, t1);
-  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-  const nx = (-(b.y - a.y) / len) * (wall.thickness / 2);
-  const ny = ((b.x - a.x) / len) * (wall.thickness / 2);
-  return [
-    { x: p0.x + nx, y: p0.y + ny },
-    { x: p1.x + nx, y: p1.y + ny },
-    { x: p1.x - nx, y: p1.y - ny },
-    { x: p0.x - nx, y: p0.y - ny },
-  ];
+  return bandPoints(wall, t0, t1, wall.thickness / 2);
 }
 
 /** The corners of a piece's footprint, in metres (rotation counter-clockwise on the plan). */

@@ -27,7 +27,7 @@ import {
   wallCutCap,
   wallMaterial,
 } from "../src/three/build";
-import { jointExtensions } from "../src/model/joints";
+import { wallBands } from "../src/three/wallSolids";
 import { CUT_CAP, CUT_PLANE, POCHE, cutLevel, setCut } from "../src/three/cutaway";
 import { INK, INK_CLIPPED, INK_EDGE, INK_STAIR, addInkEdges, findCreases, removeInkEdges } from "../src/three/edges";
 import { SceneMarks, markBox, hatch, hatchGeometry, hatchImage } from "../src/three/marks";
@@ -48,6 +48,7 @@ import { dispatch } from "../src/model/commands";
 import { TOOLS, runToolManually } from "../src/mcp/tools";
 import { inputSchemaOf } from "../src/mcp/registry";
 import { resetStore } from "./support/store";
+import { outlineBounds, rectOutline } from "../src/model/shapes";
 
 const kind = (k: string) => BUILT_IN_KINDS.find((d) => d.kind === k)!;
 const lines = (root: THREE.Object3D) => {
@@ -155,7 +156,9 @@ describe("selection shared between the plan and the model", () => {
     expect(window.y0).toBeCloseTo(0.9);
     expect(window.y1).toBeCloseTo(2.1);
     const room = markBox("room", "room_bed", m)!;
-    expect(room).toMatchObject({ w: 2.85, d: 3.25, y0: FLOOR_TOP, y1: FLOOR_TOP });
+    expect(room).toMatchObject({ y0: FLOOR_TOP, y1: FLOOR_TOP });
+    expect(room.w).toBeCloseTo(2.85, 9);
+    expect(room.d).toBeCloseTo(3.25, 9);
     // a piece's box reaches over its height by its fittings' rise (the bed's headboard)
     const item = markBox("item", "item_bed", m)!;
     expect(item.y1 - item.y0).toBeCloseTo(kind("bed_double").h + riseOf(kind("bed_double")));
@@ -271,7 +274,7 @@ describe("the cutaway", () => {
     const m = seedLoft();
     const byWall = openingsByWall(m);
     const w = m.walls[2];
-    const wall = buildWall(w, byWall.get(w.id) ?? [], jointExtensions(w, m.walls), curtainedWindows(m, byWall));
+    const wall = buildWall(w, byWall.get(w.id) ?? [], wallBands(w, m.walls), curtainedWindows(m, byWall));
     // no cut, no plane in the shaders: the walls draw with the programs the furniture does
     for (const mat of materialsOf(wall)) expect(mat.clippingPlanes ?? [], mat.name).toHaveLength(0);
     setCut(1.2);
@@ -294,17 +297,24 @@ describe("the cutaway", () => {
   const covered = (cap: THREE.Mesh) => {
     const p = cap.geometry.getAttribute("position");
     const spans: [number, number][] = [];
-    for (let i = 0; i < p.count; i += 6) {
-      const xs = [0, 1, 2, 3, 4, 5].map((k) => p.getX(i + k));
+    for (let i = 0; i < p.count; i += 3) {
+      const xs = [0, 1, 2].map((k) => p.getX(i + k));
       spans.push([Math.min(...xs), Math.max(...xs)]);
     }
-    return spans.sort((x, y) => x[0] - y[0]);
+    spans.sort((x, y) => x[0] - y[0]);
+    const merged: [number, number][] = [];
+    for (const s of spans) {
+      const last = merged[merged.length - 1];
+      if (last && s[0] <= last[1] + 1e-6) last[1] = Math.max(last[1], s[1]);
+      else merged.push([...s]);
+    }
+    return merged;
   };
   const capOf = (id: string, level: number) => {
     const m = seedLoft();
     const byWall = openingsByWall(m);
     const w = m.walls.find((x) => x.id === id)!;
-    return wallCutCap(w, byWall.get(w.id) ?? [], jointExtensions(w, m.walls), level);
+    return wallCutCap(w, byWall.get(w.id) ?? [], wallBands(w, m.walls), level);
   };
 
   it("closes a cut wall in the plan's poché, open across a doorway or a window the cut passes through", () => {
@@ -447,7 +457,7 @@ describe("ink edges", () => {
     const m = seedLoft();
     const byWall = openingsByWall(m);
     const w = m.walls[2];
-    const wall = buildWall(w, byWall.get(w.id) ?? [], jointExtensions(w, m.walls), curtainedWindows(m, byWall));
+    const wall = buildWall(w, byWall.get(w.id) ?? [], wallBands(w, m.walls), curtainedWindows(m, byWall));
     for (const piece of [wall, buildFurniture(kind("sofa"))]) {
       piece.traverse((o) => {
         const mesh = o as THREE.Mesh;
@@ -456,17 +466,24 @@ describe("ink edges", () => {
         if (face.name.startsWith("surface:")) expect(face.polygonOffset, face.name).toBe(false);
       });
     }
-    // but a wall box's ends are: where a lintel overlaps the stretch beside it, an end never shows through
+    // but a wall prism's ends are: where a lintel overlaps the stretch beside it, an end never shows through
     const boxes: THREE.Mesh[] = [];
     wall.traverse((o) => Array.isArray((o as THREE.Mesh).material) && boxes.push(o as THREE.Mesh));
     expect(boxes.length).toBeGreaterThan(0);
     for (const b of boxes) {
-      // two runs, two draws: the box's ends (+x, -x), then its four other faces
+      // two runs, two draws: the prism's ends (its cuts and mitred caps), then its faces, top and bottom
       expect(b.material).toHaveLength(2);
-      expect(b.geometry.groups.map((gr) => [gr.start, gr.count, gr.materialIndex])).toEqual([
-        [0, 12, 0],
-        [12, 24, 1],
-      ]);
+      const [ends, rest] = b.geometry.groups;
+      expect(b.geometry.groups).toHaveLength(2);
+      expect([ends.start, ends.materialIndex, rest.start, rest.materialIndex]).toEqual([0, 0, ends.count, 1]);
+      expect(ends.count).toBeGreaterThanOrEqual(12);
+      expect(ends.count + rest.count).toBe(b.geometry.getAttribute("position").count);
+      // every end stands upright and faces along the wall: a cut square to it, or a mitred cap
+      const n = b.geometry.getAttribute("normal");
+      for (let i = 0; i < ends.count; i++) {
+        expect(n.getY(i)).toBe(0);
+        expect(Math.abs(n.getX(i))).toBeGreaterThan(0.1);
+      }
       const [end, face] = b.material as THREE.Material[];
       expect(end.polygonOffset && end.polygonOffsetFactor > 0 && end.polygonOffsetUnits > 0).toBe(true);
       expect(face.polygonOffset).toBe(false);
@@ -494,7 +511,7 @@ describe("ink edges", () => {
     const m = seedLoft();
     const byWall = openingsByWall(m);
     const w = m.walls.find((x) => x.id === "wall_bed_w")!;
-    const wall = buildWall(w, byWall.get(w.id) ?? [], jointExtensions(w, m.walls), curtainedWindows(m, byWall));
+    const wall = buildWall(w, byWall.get(w.id) ?? [], wallBands(w, m.walls), curtainedWindows(m, byWall));
     addInkEdges(wall, true);
     const sets = lines(wall);
     const hinges = sets.filter((s) => s.parent?.userData.doorHinge);
@@ -530,7 +547,7 @@ describe("ink edges", () => {
 // ---------------------------------------------------------------------------- room names
 
 describe("room names over the model", () => {
-  const room = { id: "r", levelId: "level_ground", x: 0, y: 0, w: 4, h: 4, label: "Studio", floor: "oak" as const };
+  const room = { id: "r", levelId: "level_ground", points: rectOutline(0, 0, 4, 4), label: "Studio", floor: "oak" as const };
   const camera = (x: number, y: number, z: number) => {
     const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
     cam.position.set(x, y, z);
@@ -551,7 +568,7 @@ describe("room names over the model", () => {
     expect(spot.x).toBeCloseTo(((p.x + 1) / 2) * 800, 0);
     expect(spot.y).toBeCloseTo(((1 - p.y) / 2) * 800, 0);
     // a small room keeps its name inside it
-    const closet = { ...room, w: 0.8, h: 0.6 };
+    const closet = { ...room, points: rectOutline(0, 0, 0.8, 0.6) };
     expect(labelAnchor(closet).x - 0.4).toBeLessThanOrEqual(0.4 * LABELS.maxShift + 1e-9);
   });
 
@@ -757,7 +774,7 @@ describe("where Walk sets the walker down", () => {
     const b = blockersFor(m);
     const shut = () => 0;
     const spot = walkEntry(m, b, shut)!;
-    const living = m.rooms.find((r) => r.id === "room_living")!;
+    const living = outlineBounds(m.rooms.find((r) => r.id === "room_living")!.points);
     expect(spot.x).toBeGreaterThan(living.x + WALK.personRadius);
     expect(spot.x).toBeLessThan(living.x + living.w - WALK.personRadius);
     expect(spot.z).toBeGreaterThan(living.y + living.h / 2); // toward its south end
@@ -781,7 +798,7 @@ describe("where Walk sets the walker down", () => {
   it("prefers a spot clear of the pendant over the room's centre", () => {
     const m = seedLoft();
     const spot = walkEntry(m, blockersFor(m), () => 0)!;
-    const room = m.rooms.reduce((a, r) => (r.w * r.h > a.w * a.h ? r : a));
+    const room = m.rooms.map((r) => outlineBounds(r.points)).reduce((a, r) => (r.w * r.h > a.w * a.h ? r : a));
     expect(Math.hypot(spot.x - (room.x + room.w / 2), spot.z - (room.y + room.h / 2))).toBeGreaterThanOrEqual(WALK_ENTRY.pendantClear - 1e-9);
   });
 

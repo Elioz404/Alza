@@ -174,7 +174,7 @@ describe("the hint bar", () => {
     pageActions.selectWall("wall_bed_s");
     const h = hintFor(base());
     expect(h.title).toBe("Wall selected");
-    expect(words(h)).toEqual(["Drag an end to move it", "[left] [right] [up] [down] nudge 5 cm", "[delete] remove", "[esc] deselect"]);
+    expect(words(h)).toEqual(["Drag an end to move it", "Drag the middle to bend it", "[left] [right] [up] [down] nudge 5 cm", "[delete] remove", "[esc] deselect"]);
   });
 
   it("says why a door cannot go where the pointer is", () => {

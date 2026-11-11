@@ -23,7 +23,8 @@ import { placeOf, type Place } from "../model/places";
 import { stairGeometryIn } from "../model/levels";
 import { catalogOf } from "../model/catalog";
 import type { PlanModel } from "../model/types";
-import { PRESENCE_MARK } from "./drawing";
+import { outlinePath } from "../model/shapes";
+import { PRESENCE_MARK, wallPathD } from "./drawing";
 import { AGENT_COLOUR, agentLabel, agentShows, firstPlace, peerColour, tabName } from "../ui/session/participants";
 import { usePlaced } from "../ui/session/place";
 
@@ -32,9 +33,9 @@ const P = PRESENCE_MARK;
 /** A soft highlight round what `id` names, drawn at `S` pixels per metre. */
 function Highlight({ model, id, S, className }: { model: PlanModel; id: string; S: number; className: string }) {
   const w = model.walls.find((x) => x.id === id);
-  if (w) return <line className={className} x1={w.ax * S} y1={w.ay * S} x2={w.bx * S} y2={w.by * S} strokeWidth={w.thickness * S + 2 * P.pad} />;
+  if (w) return <path className={`${className} ss-highlight--wall`} d={wallPathD(w, S)} strokeWidth={w.thickness * S + 2 * P.pad} />;
   const r = model.rooms.find((x) => x.id === id);
-  if (r) return <rect className={className} x={r.x * S - P.pad} y={r.y * S - P.pad} width={r.w * S + 2 * P.pad} height={r.h * S + 2 * P.pad} />;
+  if (r) return <path className={className} d={outlinePath(r.points, S)} strokeWidth={2 * P.pad} />;
   const it = model.items.find((x) => x.id === id);
   const def = it && catalogOf(model).get(it.kind);
   if (it && def) {
