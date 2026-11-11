@@ -61,7 +61,8 @@ export function handleShellKey(e: KeyboardEvent, shell: ShellState): boolean {
   const view = store.getState().editor.view;
   const tool = toolsFor(view).find((t) => keyOf(t.shortcut) === e.key.toLowerCase());
   if (!tool) return false;
-  tool.run(shell);
+  if (tool.runByKey) tool.runByKey(shell);
+  else tool.run(shell);
   return true;
 }
 
@@ -119,11 +120,14 @@ export const SHORTCUT_SHEET: readonly ShortcutGroup[] = Object.freeze([
       { keys: [], gesture: "Drag the middle of a selected room's edge", does: "Bend the edge; with Shift, add a corner there and move it" },
       { keys: [], gesture: "Properties → Shape", does: "Move, add and remove a room's corners and bend its edges from the keyboard" },
       { keys: ["arrowup", "arrowdown", "arrowleft", "arrowright"], isSet: true, does: `Nudge the selection ${cm(SNAP)} (with Shift, ${cm(SNAP * NUDGE_SHIFT_FACTOR)})` },
-      { keys: ["delete", "backspace"], does: "Remove the selected wall, room, item or stair" },
+      { keys: ["delete", "backspace"], does: "Remove the selected wall, room, item, stair or column" },
       { keys: ["enter"], does: "While placing furniture, put one in the middle of the view, selected" },
       { keys: [], gesture: "Add a stair: press, then drag", does: "Start the stair where you press, climbing the way you drag" },
       { keys: ["arrowup", "arrowdown", "arrowleft", "arrowright"], isSet: true, does: "With Add a stair, choose the way it climbs (Enter puts it in the middle of the view)" },
-      { keys: [], gesture: "Properties → On the plan", does: "Select any wall, room, door, window or piece from a list" },
+      { keys: [], gesture: "Add a column: click", does: "Put a column down, pulled to a wall's corner or axis, or in line with another column" },
+      { keys: ["arrowup", "arrowdown", "arrowleft", "arrowright"], isSet: true, does: `With Add a column, move the cross ${cm(SNAP)} (with Shift, ${cm(SNAP * NUDGE_SHIFT_FACTOR)})` },
+      { keys: ["enter"], does: "With Add a column, put a column down at the cross" },
+      { keys: [], gesture: "Properties → On the plan", does: "Select any wall, room, door, window, piece, stair or column from a list" },
       { keys: ["mod+z"], does: "Undo" },
     ],
   },

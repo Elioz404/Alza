@@ -40,6 +40,7 @@ const RECORDS: Record<Collection, z.ZodType<Record<string, unknown>>> = {
   rooms: R.roomRecord.extend(onLevel),
   items: R.itemRecord.extend(onLevel),
   stairs: R.stairRecord,
+  columns: R.columnRecord,
   kinds: R.kindRecord,
   notes: noteRecord,
 };

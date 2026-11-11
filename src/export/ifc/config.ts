@@ -62,6 +62,7 @@ export const IFC_NAMES = Object.freeze({
   flight: "Flight",
   landing: "Landing",
   stairwell: "Stairwell",
+  column: "Column",
   /** an item whose kind the catalogue no longer has is still exported, under its kind id */
   unknownKind: "Furniture",
 });
@@ -74,6 +75,8 @@ export const IFC_REPRESENTATION = Object.freeze({
   axis: "Axis",
   footPrint: "FootPrint",
   sweptSolid: "SweptSolid",
+  /** a body that is a boolean of solids: a wall less the columns standing in it */
+  csg: "CSG",
   curve2d: "Curve2D",
 });
 
@@ -101,6 +104,27 @@ export const IFC_SIZES = Object.freeze({
  * the plaster the 3D view draws them in.
  */
 export const WALL_MATERIAL = Object.freeze({ name: "Plaster", category: "plaster" });
+
+/**
+ * The material the columns are written in: what a column carrying a floor is made of. The 3D
+ * view draws them plastered, in the walls' finish.
+ */
+export const COLUMN_MATERIAL = Object.freeze({ name: "Concrete", category: "concrete" });
+
+/**
+ * The IfcSpaceTypeEnum value of a room: an open room (a carport, a porch: limits.ts ROOM_KINDS)
+ * is EXTERNAL, and PARKING where a parked car stands in it (a kind with `parking`); every other
+ * room is a SPACE. An open room is also IsExternal in Pset_SpaceCommon.
+ */
+export const SPACE_TYPE = Object.freeze({ enclosed: "SPACE", open: "EXTERNAL", parking: "PARKING" });
+
+/*
+ * A garage door (limits.ts GARAGE_DOOR) is an IfcDoor, PredefinedType DOOR. IFC4's
+ * IfcDoorTypeOperationEnum has no sectional or up-and-over door (ROLLINGUP is a roller shutter
+ * that coils), so its OperationType is USERDEFINED and its UserDefinedOperationType names the
+ * operation, GARAGE_DOOR.ifcOperation ("SECTIONAL"). It has no swing, so its placement is the
+ * wall's own, never turned to face a leaf.
+ */
 
 /** The material each floor finish is written as, on the floor covering of the room that has it. */
 export const FLOOR_MATERIAL: Readonly<Record<FloorFinish, { name: string; category: string }>> = Object.freeze({
@@ -131,6 +155,11 @@ export const FURNITURE_TYPE: Readonly<Record<string, string>> = Object.freeze({
   bookshelf: "SHELF",
   sideboard: "SHELF",
   wardrobe: "SHELF",
+  /*
+   * The car is a reference object, exported as furniture is: an IfcFurniture whose ObjectType is
+   * its kind id ("car"), NOTDEFINED. IfcTransportElement is IFC4's lifts, escalators and moving
+   * walkways (the building's own transport), not a vehicle parked in it, and IFC4 has no vehicle.
+   */
 });
 
 /**
@@ -142,6 +171,8 @@ export const IFC_PSETS = Object.freeze({
   wallCommon: "Pset_WallCommon",
   spaceCommon: "Pset_SpaceCommon",
   stairCommon: "Pset_StairCommon",
+  columnCommon: "Pset_ColumnCommon",
+  columnQuantities: "Qto_ColumnBaseQuantities",
   wallQuantities: "Qto_WallBaseQuantities",
   spaceQuantities: "Qto_SpaceBaseQuantities",
   slabQuantities: "Qto_SlabBaseQuantities",

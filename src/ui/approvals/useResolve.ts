@@ -22,6 +22,7 @@ const NOUN: Record<PendingApproval["targets"][number]["type"], string> = {
   room: "Room",
   item: "Item",
   stair: "Stair",
+  column: "Column",
   level: "Level",
   plan: "Plan",
   file: "File",

@@ -4,7 +4,9 @@
  * WALK.personRadius that cannot enter a wall or a piece of furniture.
  *
  * Walls are solid except across a door's clear span, and only while that leaf is actually
- * open — a window is never walkable, since the wall under its sill is solid at hip height.
+ * open — a window is never walkable, since the wall under its sill is solid at hip height. A
+ * garage door's span is walkable once its sections have run far enough up. Columns are solid
+ * (a round one as the disc it is), and so is a car parked in the plan, as any tall piece is.
  * Rugs and anything ankle-low are ignored so you can walk over them. Blocked moves are retried
  * on each axis alone, which slides the camera along a wall instead of gluing it there.
  *
@@ -25,6 +27,7 @@
 import { closestOnEdge, outlineAnchor, outlineRect, roomArea, tangentOnEdge, wallEdge, wallLength, type Edge } from "../model/shapes";
 import type { Opening, PlanModel } from "../model/types";
 import { catalogOf } from "../model/catalog";
+import { isRound } from "../model/columns";
 import { levelSlice, levelsOf, stairGeometryIn, stairwellsOf } from "../model/levels";
 import type { StairGeometry } from "../model/stairs";
 import { pointInORect, type ORect } from "../model/geometry";
@@ -51,6 +54,8 @@ interface ItemBlocker {
   hh: number;
   cos: number;
   sin: number;
+  /** a round column: a disc of this radius, rather than the rectangle */
+  radius?: number;
 }
 
 export interface Blockers {
@@ -82,6 +87,11 @@ export function blockersFor(model: PlanModel, byWall: ReadonlyMap<string, readon
     const th = (it.rotation * Math.PI) / 180;
     return [{ cx: it.x, cy: it.y, hw: c.w / 2, hh: c.d / 2, cos: Math.cos(th), sin: Math.sin(th) }];
   });
+  // the columns stand from floor to ceiling: never walked over
+  for (const col of model.columns) {
+    const th = (col.rotation * Math.PI) / 180;
+    items.push({ cx: col.x, cy: col.y, hw: col.w / 2, hh: col.d / 2, cos: Math.cos(th), sin: Math.sin(th), ...(isRound(col) ? { radius: col.w / 2 } : {}) });
+  }
   return { walls, items };
 }
 
@@ -115,6 +125,10 @@ export function blocked(b: Blockers, x: number, z: number, openness: (doorId: st
   for (const it of b.items) {
     const dx = x - it.cx;
     const dz = z - it.cy;
+    if (it.radius !== undefined) {
+      if (Math.hypot(dx, dz) < it.radius + r) return true;
+      continue;
+    }
     const lx = dx * it.cos - dz * it.sin;
     const lz = dx * it.sin + dz * it.cos;
     if (Math.abs(lx) < it.hw + r && Math.abs(lz) < it.hh + r) return true;

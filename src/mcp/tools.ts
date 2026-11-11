@@ -19,8 +19,10 @@ import { actions, activeLevelId, store, type ActionResult } from "../model/store
 import type { Actor } from "../model/commands";
 import { issuesOf, issuesOnLevel } from "../model/issues";
 import { catalogOf, kindName, type KindDef } from "../model/catalog";
-import { lookupItem, lookupLevel, lookupOpening, lookupRoom, lookupStair, lookupWall, type Lookup } from "../model/resolve";
-import type { PlanModel, Room, Stair, Wall } from "../model/types";
+import { lookupColumn, lookupItem, lookupLevel, lookupOpening, lookupRoom, lookupStair, lookupWall, type Lookup } from "../model/resolve";
+import type { Column, PlanModel, Room, Stair, Wall } from "../model/types";
+import { columnGrid, columnHeight as heightOfColumn, columnWalls } from "../model/columns";
+import { supportsUnder, unsupportedZones } from "../model/supports";
 import { levelContents, levelRemovalError, levelSlice, levelStats, levelsOf, rerouteText, stairGeometryIn, stairsRerouted } from "../model/levels";
 import { SUPPLIER_ORIGIN, SupplierError, getProduct, listProducts, type SupplierProduct } from "./supplier";
 import { dist, segLen, type Pt } from "../model/geometry";
@@ -32,6 +34,7 @@ import {
   outlineFromInput,
   outlinePerimeter,
   outlineRect,
+  pointInOutline,
   sagittaOf,
   wallArc,
   wallEdge,
@@ -45,10 +48,17 @@ import { exportIfc, ifcFileName, type IfcSummary } from "../export/ifcExport";
 import { defineTool, executeWrapped, type ToolDef } from "./registry";
 import { PRESENCE_TOOLS } from "./presenceTools";
 import {
+  COLUMN,
+  COLUMN_GRID,
+  COLUMN_SHAPES,
   CUT_HEIGHT,
   DEFAULT_FLOOR,
   DOOR_DEFAULTS,
   FLOOR_FINISHES,
+  GARAGE_DOOR,
+  OPEN_FLOOR,
+  PARKING,
+  SUPPORT,
   FURNITURE_DIM,
   LEVEL_DEFAULTS,
   LEVEL_HEIGHT,
@@ -70,8 +80,13 @@ import {
 import {
   calibrationMeters,
   cameraMode,
+  columnGridSpec,
+  columnHeight,
+  columnShape,
+  columnSize,
   coord,
   doorState,
+  doorStyle,
   floorFinish,
   furnitureDim,
   hexColor,
@@ -195,9 +210,46 @@ function roomForAgent(r: Room) {
   };
 }
 
-/** The plan as an agent reads it: the same model with each wall's and room's derived facts, and any partner text moved to `untrusted`. */
+/** A column as an agent reads it: what is stored, the height it stands (derived unless set), and the walls it is part of. */
+function columnForAgent(m: PlanModel, c: Column) {
+  const height = heightOfColumn(m, c);
+  return { ...c, ...(height === undefined ? {} : { height: r3(height) }), heightSet: c.height !== undefined, inWalls: columnWalls(m.walls, c).map((w) => w.id) };
+}
+
+/**
+ * What carries each upper level's floor, as an agent reads it: how many walls and columns stand
+ * under it reaching its slab (a low partition or a short column carries nothing), and the zones
+ * of it with neither within SUPPORT.span / 2 (model/supports.ts).
+ */
+function supportsForAgent(plan: PlanModel, levels: readonly string[]) {
+  return levels.flatMap((levelId) => {
+    const at = plan.levels.findIndex((l) => l.id === levelId);
+    if (at < 1) return [];
+    const below = plan.levels[at - 1].id;
+    const carriers = supportsUnder(plan, levelId);
+    return [
+      {
+        levelId,
+        onLevel: below,
+        walls: carriers?.walls.length ?? 0,
+        columns: carriers?.columns.length ?? 0,
+        maxReach: SUPPORT.span / 2,
+        unsupported: unsupportedZones(plan, levelId).map((z) => ({
+          area: r3(z.area),
+          box: { minX: r3(z.box.minX), minY: r3(z.box.minY), maxX: r3(z.box.maxX), maxY: r3(z.box.maxY) },
+          centre: { x: r3(z.centre.x), y: r3(z.centre.y) },
+          // null with nothing under the floor at all
+          reach: Number.isFinite(z.reach) ? r3(z.reach) : null,
+          rooms: z.rooms,
+        })),
+      },
+    ];
+  });
+}
+
+/** The plan as an agent reads it: the same model with each wall's, room's and column's derived facts, and any partner text moved to `untrusted`. */
 function modelForAgent(m: PlanModel): { model: unknown; untrusted?: UntrustedText } {
-  const shaped = { ...m, walls: m.walls.map(wallForAgent), rooms: m.rooms.map(roomForAgent) };
+  const shaped = { ...m, walls: m.walls.map(wallForAgent), rooms: m.rooms.map(roomForAgent), columns: m.columns.map((c) => columnForAgent(m, c)) };
   const supplier = m.kinds.filter((k) => k.source === "supplier");
   if (supplier.length === 0) return { model: shaped };
   return {
@@ -342,7 +394,7 @@ export const TOOLS: ToolDef[] = [
     name: "get_model",
     title: "Read the whole plan",
     description:
-      "Read the full floor plan: its levels (storeys, from the ground up, each with its floor-to-floor height), walls (endpoints, thickness, height, length; a curved wall's bulge and arc: centre, radius, sagitta), openings (doors/windows with position along their wall), rooms (their outline `points`, each corner with the bulge of the edge it starts — positive bows out of the room —, area, perimeter, the anchor their name stands at, and `rect` when one is a rectangle), furniture, stairs, and plan name. Every wall, room, item and stair names its level in `levelId`; an opening is on its wall's level. Pass `level` (id or name) to read one level only. All units are meters.",
+      "Read the full floor plan: its levels (storeys, from the ground up, each with its floor-to-floor height), walls (endpoints, thickness, height, length; a curved wall's bulge and arc: centre, radius, sagitta), openings (doors/windows with position along their wall; a garage door has style \"garage\"), rooms (their outline `points`, each corner with the bulge of the edge it starts — positive bows out of the room —, area, perimeter, the anchor their name stands at, `rect` when one is a rectangle, and kind \"open\" for an open space such as a carport), furniture, stairs, columns (centre, section shape and size, rotation, the height it stands — to the slab over it unless `heightSet` —, and the walls it is part of), plan name, and `supports`: for each upper level, the walls and columns under its floor that reach its slab and the zones of it with neither within half a slab's span. Every wall, room, item, stair and column names its level in `levelId`; an opening is on its wall's level. Pass `level` (id or name) to read one level only. All units are meters.",
     input: args({ level: levelArg }),
     // a plan that holds supplier products carries their names, which are the partner's text
     annotations: { readOnlyHint: true, untrustedContentHint: true },
@@ -350,18 +402,24 @@ export const TOOLS: ToolDef[] = [
       const plan = store.getState().model;
       let m = plan;
       let where = "";
+      let only: string[] | null = null;
       if (i.level !== undefined) {
         const found = lookupLevel(plan, i.level);
         if (!found.ok) return notResolved(found);
         m = levelSlice(plan, found.entity.id);
         where = ` on ${found.entity.name}`;
+        only = [found.entity.id];
       }
       const storeys = plan.levels.length > 1 && i.level === undefined ? ` ${plural(plan.levels.length, "level")}: ${perLevel(plan)}.` : "";
+      const columns = m.columns.length > 0 ? `, ${plural(m.columns.length, "column")}` : "";
+      const open = m.rooms.filter((r) => r.kind === "open").length;
+      const spaces = open > 0 ? ` (${plural(open, "open space")})` : "";
       return {
         ok: true,
-        summary: `Plan "${m.name}"${where}: ${m.walls.length} walls, ${m.openings.length} openings, ${m.rooms.length} rooms, ${m.items.length} items.${storeys}`,
+        summary: `Plan "${m.name}"${where}: ${m.walls.length} walls, ${m.openings.length} openings, ${m.rooms.length} rooms${spaces}, ${m.items.length} items${columns}.${storeys}`,
         levels: levelsForAgent(plan),
         ...modelForAgent(m),
+        supports: supportsForAgent(plan, only ?? plan.levels.map((l) => l.id)),
       };
     },
   }),
@@ -369,7 +427,7 @@ export const TOOLS: ToolDef[] = [
     name: "get_issues",
     title: "Check the plan for problems",
     description:
-      "Run the constraint checker over the plan, level by level. Detects: too-short walls, curved walls bent tighter than their thickness allows, loose ends, collinear overlaps, mid-span crossings (arcs included), openings overflowing their wall (past an arc's end) or overlapping each other, openings too wide for the bend of their curved wall, walls ending inside an opening, doors whose leaves swing into each other, rooms that cross themselves, have an edge too short or are too small or narrow, floating/overlapping (by shared area)/doorless rooms, furniture crossing walls (curved ones included), outside every room, blocking doors/windows, or colliding; and for stairs: risers or goings out of range, an uncomfortable 2 × riser + going, a stair on the top level (nothing to reach), too little headroom under the slab above, walls in a stair, over its stairwell or blocking its landings, a stairwell outside every room above, and furniture on a stair or over a stairwell. Pass `level` (id or name) for one level's issues only. Use it after editing to self-repair.",
+      `Run the constraint checker over the plan, level by level. Detects: too-short walls, curved walls bent tighter than their thickness allows, loose ends, collinear overlaps, mid-span crossings (arcs included), openings overflowing their wall (past an arc's end) or overlapping each other, openings too wide for the bend of their curved wall, walls ending inside an opening, doors whose leaves swing into each other, rooms that cross themselves, have an edge too short or are too small or narrow, floating/overlapping (by shared area)/doorless rooms (an open space needs no walls or door), furniture crossing walls (curved ones included), outside every room, blocking doors/windows, or colliding; for stairs: risers or goings out of range, an uncomfortable 2 × riser + going, a stair on the top level (nothing to reach), too little headroom under the slab above, walls in a stair, over its stairwell or blocking its landings, a stairwell outside every room above, and furniture on a stair or over a stairwell; and for structure (a sanity check, not engineering): an upper floor with no wall or column under it within ${SUPPORT.span / 2} m (the zone is reported with its bounds; only a wall or column reaching the slab's underside carries it), a column under a level above that stops short of its slab or runs up through it, a column with nothing under it on the level below, a column off every room and wall, in a door's swing, a garage door's drive or a window, on a stair, on another column or in furniture, a car without ${PARKING.side} m clear at its sides and ${PARKING.end} m at its ends (a column in it, a wall through it, or past its garage's walls), and a garage door too wide for its wall with ${GARAGE_DOOR.jamb} m jambs. Pass \`level\` (id or name) for one level's issues only. Use it after editing to self-repair.`,
     input: args({ level: levelArg }),
     annotations: { readOnlyHint: true },
     execute: (i) => {
@@ -584,7 +642,7 @@ export const TOOLS: ToolDef[] = [
     name: "add_door",
     title: "Add a door",
     description:
-      `Add a door on a wall. t is the position of the door CENTER along the wall (0..1; along its arc on a curved wall, where the width is measured along the arc too and the straight leaf must stay inside the wall's thickness). Default width ${DOOR_DEFAULTS.width} m, height ${DOOR_DEFAULTS.height} m; a door wider than 1.2 m is built as a double door with two leaves. The vano is clamped so it always fits inside the wall; too-wide doors are rejected with the wall length. hinge picks the jamb the hinges sit on ("a" = the wall's A end, the default; "b" = the B end) and side picks which way the leaf swings, as seen walking the wall from A to B: "right" (default) or "left". Match these to the swing arc drawn on the plan.`,
+      `Add a door on a wall. t is the position of the door CENTER along the wall (0..1; along its arc on a curved wall, where the width is measured along the arc too and the straight leaf must stay inside the wall's thickness). Default width ${DOOR_DEFAULTS.width} m, height ${DOOR_DEFAULTS.height} m; a door wider than 1.2 m is built as a double door with two leaves. The vano is clamped so it always fits inside the wall; too-wide doors are rejected with the wall length. hinge picks the jamb the hinges sit on ("a" = the wall's A end, the default; "b" = the B end) and side picks which way the leaf swings, as seen walking the wall from A to B: "right" (default) or "left". Match these to the swing arc drawn on the plan. style: "garage" makes it a sectional overhead garage door instead (${GARAGE_DOOR.width.min}-${GARAGE_DOOR.width.max} m wide, default ${GARAGE_DOOR.defaults.width}; ${GARAGE_DOOR.height.min}-${GARAGE_DOOR.height.max} m tall, default ${GARAGE_DOOR.defaults.height}; ${GARAGE_DOOR.jamb} m of wall at each side for its tracks), with no hinge or side; set_doors raises and lowers it in 3D.`,
     input: args({
       wallId: ref,
       t: openingT,
@@ -592,6 +650,7 @@ export const TOOLS: ToolDef[] = [
       height: openingHeight.optional(),
       hinge: hinge.optional(),
       side: swingSide.optional(),
+      style: doorStyle.optional(),
     }),
     execute: (i, { dispatch }) => dispatch({ type: "add_door", ...i }),
   }),
@@ -651,7 +710,7 @@ export const TOOLS: ToolDef[] = [
     name: "add_room",
     title: "Add a room",
     description:
-      `Add a room — its floor, name and finish — of any shape: a rectangle, a polygon (an L, a wedge) or one with curved edges. ${ROOM_SHAPE_HELP} label names it; floor is its finish (${FLOOR_FINISHES.join(" | ")}; default ${DEFAULT_FLOOR}). Returns its id and area. ${LEVEL_HELP}`,
+      `Add a room — its floor, name and finish — of any shape: a rectangle, a polygon (an L, a wedge) or one with curved edges. ${ROOM_SHAPE_HELP} label names it; floor is its finish (${FLOOR_FINISHES.join(" | ")}; default ${DEFAULT_FLOOR}). open: true makes it an open space — a carport, a porch, a terrace under the house — whose sides need no walls (the checker asks it for none, nor a door); its floor is ${OPEN_FLOOR} unless given. Returns its id and area. ${LEVEL_HELP}`,
     // Published as one object, every shape's fields optional; the body takes exactly one shape
     input: args({
       x: coord.optional(),
@@ -663,9 +722,11 @@ export const TOOLS: ToolDef[] = [
       fit: planPoint.optional(),
       label,
       floor: floorFinish.optional(),
+      open: z.boolean().optional(),
       level: levelArg,
     }),
-    execute: async ({ points, arcs, fit, ...i }, { dispatch }) => {
+    execute: async ({ points, arcs, fit, open, ...rest }, { dispatch }) => {
+      const i = open === undefined ? rest : { ...rest, kind: open ? "open" : "enclosed" };
       if (arcs !== undefined && points === undefined) return { ok: false, summary: "arcs bend the edges of `points`: give the corners too." };
       if (fit !== undefined) {
         if (points !== undefined || [i.x, i.y, i.w, i.h].some((v) => v !== undefined)) return { ok: false, summary: "Give a room exactly one shape: a rectangle, points, or fit." };
@@ -683,7 +744,7 @@ export const TOOLS: ToolDef[] = [
   defineTool({
     name: "update_room",
     title: "Update a room",
-    description: `Update a room by id or label (e.g. "bedroom"): reshape, move, resize, relabel, or change floor finish. \`points\` (with optional \`arcs\`, as add_room takes them) replaces its outline; fit: true fills again the space its walls close off around it; w, h stretch its outline from its bounds' top-left corner to that size (a rectangle's width and depth); x, y move that corner there. ${MOVE_HELP} the room.`,
+    description: `Update a room by id or label (e.g. "bedroom"): reshape, move, resize, relabel, or change floor finish. \`points\` (with optional \`arcs\`, as add_room takes them) replaces its outline; fit: true fills again the space its walls close off around it; w, h stretch its outline from its bounds' top-left corner to that size (a rectangle's width and depth); x, y move that corner there; open: true makes it an open space (a carport, a porch: no walls needed), false an enclosed room again. ${MOVE_HELP} the room.`,
     input: args({
       id: ref,
       x: coord.optional(),
@@ -695,11 +756,13 @@ export const TOOLS: ToolDef[] = [
       fit: z.boolean().optional(),
       label: label.optional(),
       floor: floorFinish.optional(),
+      open: z.boolean().optional(),
       level: levelArg,
     }),
     // `id` addresses the room and is never part of the patch: passing the whole input let it
     // overwrite the room's real id with whatever label the agent used to find it
-    execute: async ({ id, level, points, arcs, fit, ...patch }, { dispatch }) => {
+    execute: async ({ id, level, points, arcs, fit, open, ...rest }, { dispatch }) => {
+      const patch = open === undefined ? rest : { ...rest, kind: open ? "open" : "enclosed" };
       if (arcs !== undefined && points === undefined) return { ok: false, summary: "arcs bend the edges of `points`: give the corners too." };
       if (fit) {
         if (points !== undefined) return { ok: false, summary: "Give points or fit, not both: each sets the whole outline." };
@@ -838,7 +901,7 @@ export const TOOLS: ToolDef[] = [
     name: "remove_level",
     title: "Remove a storey",
     description:
-      "Remove a level (by id or name) and everything on it: its walls with their doors and windows, its rooms, its furniture and the stairs that start on it. The plan's last level cannot be removed. Needs the human's approval.",
+      "Remove a level (by id or name) and everything on it: its walls with their doors and windows, its rooms, its furniture, its columns and the stairs that start on it. The plan's last level cannot be removed. Needs the human's approval.",
     input: args({ id: ref }),
     annotations: { destructiveHint: true },
     resolve: ({ id }, { model }) => {
@@ -857,6 +920,7 @@ export const TOOLS: ToolDef[] = [
         plural(c.rooms.length, "room"),
         plural(c.items.length, "item"),
         plural(c.stairs.length, "stair"),
+        plural(c.columns.length, "column"),
       ];
       return {
         ok: true,
@@ -865,7 +929,7 @@ export const TOOLS: ToolDef[] = [
         targets: [{ type: "level", id: level.id, label: level.name }],
         effects: [`Also removes everything on it: ${contents.join(", ")}.`, ...rerouted.map((r) => `${rerouteText(model, r, "ahead")}.`)],
         // the level, all it holds and the stairs it reroutes: a change to any of them while the request waits is a different request
-        entities: [level, ...c.walls, ...c.openings, ...c.rooms, ...c.items, ...c.stairs, ...rerouted.map((r) => r.stair)],
+        entities: [level, ...c.walls, ...c.openings, ...c.rooms, ...c.items, ...c.stairs, ...c.columns, ...rerouted.map((r) => r.stair)],
       };
     },
     execute: ({ id }, { dispatch }) => dispatch({ type: "remove_level", id }),
@@ -942,6 +1006,82 @@ export const TOOLS: ToolDef[] = [
     execute: ({ id }, { dispatch }) => dispatch({ type: "remove_stair", id }),
   }),
 
+  // ------------------------------------------------------------------ columns
+  defineTool({
+    name: "add_column",
+    title: "Add a column",
+    description:
+      `Add a structural column (not furniture) that carries the floor above, as a wall does — e.g. pilotis holding an upper storey over an open carport. (x, y) is its centre in metres, or give \`room\` (id or label) instead to centre it in that room. shape: ${COLUMN_SHAPES.map((s) => `"${s}"`).join(" | ")} (default "${COLUMN.defaults.shape}"); w is its width (a circle's diameter) and d a rectangle's depth, ${COLUMN.size.min}-${COLUMN.size.max} m (default ${COLUMN.defaults.size}); rotation turns it, degrees, place_item's convention. It stands from its floor to the underside of the slab over its level unless \`height\` is set. A column standing in a wall's thickness is part of that wall. \`grid\` { rows, cols, spacing } adds rows × cols columns (${COLUMN_GRID.count.min}-${COLUMN_GRID.count.max} each way, ${COLUMN_GRID.spacing.min}-${COLUMN_GRID.spacing.max} m apart, turned with rotation) centred on the point, in one undo step; with \`room\`, every one of them must stand inside it. Returns the ids. get_issues reports a floor above with nothing under it within ${SUPPORT.span / 2} m, and a column in a door's way or a car's clearance. ${LEVEL_HELP}`,
+    input: args({
+      x: coord.optional(),
+      y: coord.optional(),
+      room: ref.optional(),
+      shape: columnShape.optional(),
+      w: columnSize.optional(),
+      d: columnSize.optional(),
+      rotation: rotation.optional(),
+      height: columnHeight.optional(),
+      grid: columnGridSpec.optional(),
+      level: levelArg,
+    }),
+    execute: ({ x, y, room, ...spec }, { dispatch }) => {
+      if (room === undefined) {
+        if (x === undefined || y === undefined) return { ok: false, summary: "Give the column's centre (x and y), or a room to centre it in." };
+        return dispatch({ type: "add_column", spec: { ...spec, x, y } });
+      }
+      if (x !== undefined || y !== undefined) return { ok: false, summary: "Give the column's centre (x, y) or a room to centre it in, not both." };
+      const model = store.getState().model;
+      const found = lookupRoom(model, room);
+      if (!found.ok) return notResolved(found);
+      const r = found.entity;
+      // a rectangle's middle, else the room's own interior point (the anchor get_model reports): inside it, curved or L-shaped
+      const centre = insideOf(r);
+      const at = spec.grid ? columnGrid(centre, spec.grid.rows, spec.grid.cols, spec.grid.spacing, spec.rotation ?? 0) : [centre];
+      const out = at.find((p) => !pointInOutline(p, r.points));
+      if (out) return { ok: false, summary: `A column at (${out.x.toFixed(2)}, ${out.y.toFixed(2)}) would stand outside "${r.label}": make the grid smaller or its spacing closer.` };
+      return dispatch({ type: "add_column", spec: { ...spec, level: spec.level ?? r.levelId, x: centre.x, y: centre.y } });
+    },
+  }),
+  defineTool({
+    name: "update_column",
+    title: "Change a column",
+    description: `Move, turn, resize or reshape a column by id: any of x, y (its centre), rotation, shape, w, d, as add_column takes them; height sets how tall it stands, and height: null lets it reach the slab over its level again. ${MOVE_HELP} the column.`,
+    input: args({
+      id: ref,
+      x: coord.optional(),
+      y: coord.optional(),
+      shape: columnShape.optional(),
+      w: columnSize.optional(),
+      d: columnSize.optional(),
+      rotation: rotation.optional(),
+      height: columnHeight.nullable().optional(),
+      level: levelArg,
+    }),
+    execute: ({ id, level, ...patch }, { dispatch }) => dispatch({ type: "update_column", id, patch: withLevel(patch, level) }),
+  }),
+  defineTool({
+    name: "remove_column",
+    title: "Remove a column",
+    description: "Remove a column by id; get_issues then reports any floor above it left with nothing under it. Needs the human's approval.",
+    input: args({ id: ref }),
+    annotations: { destructiveHint: true },
+    resolve: ({ id }, { model }) => {
+      const found = lookupColumn(model, id);
+      if (!found.ok) return notResolved(found);
+      const c = found.entity;
+      const above = model.levels.findIndex((l) => l.id === c.levelId) + 1;
+      return {
+        ok: true,
+        input: { id: c.id },
+        request: `Remove column ${c.id}`,
+        targets: [{ type: "column", id: c.id, label: `${c.shape === "rectangle" ? `${c.w.toFixed(2)} × ${c.d.toFixed(2)} m` : `${c.w.toFixed(2)} m`} ${c.shape}` }],
+        effects: above < model.levels.length ? [`The floor of ${model.levels[above].name} over it loses this support.`] : [],
+        entities: [c],
+      };
+    },
+    execute: ({ id }, { dispatch }) => dispatch({ type: "remove_column", id }),
+  }),
+
   // ------------------------------------------------------------------ model / view
   defineTool({
     name: "set_plan_name",
@@ -953,7 +1093,7 @@ export const TOOLS: ToolDef[] = [
   defineTool({
     name: "clear_model",
     title: "Erase the whole plan",
-    description: "Clear the whole plan (walls, openings, rooms, furniture, the kinds it added to the catalogue, the underlay, notes). Use when the user asks to start over.",
+    description: "Clear the whole plan (walls, openings, rooms, furniture, stairs, columns, its levels, the kinds it added to the catalogue, the underlay, notes). Use when the user asks to start over.",
     input: noArgs,
     annotations: { destructiveHint: true },
     resolve: (input, { model, notes }) => {
@@ -966,6 +1106,7 @@ export const TOOLS: ToolDef[] = [
       ];
       const effects = [`Erases ${contents.join(", ")}.`];
       if (model.stairs.length > 0) effects.push(`Erases the plan's ${plural(model.stairs.length, "stair")}.`);
+      if (model.columns.length > 0) effects.push(`Erases the plan's ${plural(model.columns.length, "column")}.`);
       if (model.levels.length > 1) effects.push(`Leaves one empty ground level in place of its ${model.levels.length} levels.`);
       if (model.kinds.length > 0) effects.push(`Drops the ${plural(model.kinds.length, "kind")} this plan added to the catalogue.`);
       if (model.underlay) effects.push("Removes the blueprint underlay.");
@@ -1013,7 +1154,7 @@ export const TOOLS: ToolDef[] = [
     name: "set_doors",
     title: "Open or shut the doors in 3D",
     description:
-      "Swing the door leaves in the 3D scene open or shut (build_3d must have run). state: \"open\", \"closed\" or \"toggle\". Pass an opening id to act on one door, or omit it to act on every door in the plan. The human can do the same by clicking a leaf in the 3D view.",
+      "Swing the door leaves in the 3D scene open or shut, and raise or lower the garage doors (build_3d must have run). state: \"open\", \"closed\" or \"toggle\". Pass an opening id to act on one door, or omit it to act on every door in the plan. The human can do the same by clicking a leaf in the 3D view.",
     input: args({ state: doorState, id: ref.optional() }),
     execute: (i) => {
       const model = store.getState().model;
@@ -1069,7 +1210,7 @@ export const TOOLS: ToolDef[] = [
         summary:
           `${ifc.schema} file "${ifc.fileName}" (${kb} kB) downloaded for the human: ${plural(e.storeys, "storey")}, ${plural(e.walls, "wall")}, ` +
           `${plural(e.doors, "door")}, ${plural(e.windows, "window")}, ${plural(e.spaces, "space")}, ${plural(e.slabs, "slab")}, ` +
-          `${plural(e.stairs, "stair")}, ${plural(e.furniture, "piece", "pieces")} of furniture.`,
+          `${plural(e.stairs, "stair")}, ${plural(e.columns, "column")}, ${plural(e.furniture, "piece", "pieces")} of furniture.`,
         ifc,
       };
     },

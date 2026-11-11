@@ -495,6 +495,63 @@ export const FURNITURE_STYLE = Object.freeze({
    */
   fridge: Object.freeze({ plinth: 0.09, cap: 0.03, doorThickness: 0.05, split: 0.36, gap: 0.006, radius: 0.02, pullFraction: 0.6, display: Object.freeze({ widthFraction: 0.26, height: 0.072, dropFraction: 0.15 }) }),
 
+  /**
+   * the car, a reference object kept low-poly (furniture.ts car): a body and a glasshouse, each a
+   * side profile extruded across it, a roof panel over the glass, four wheels (axles a share of
+   * half its length either side of its middle) with hubs, and two lamps on its nose
+   */
+  car: Object.freeze({
+    /** the body's side profile, [share of half its length (+ toward the nose), share of its height] */
+    body: Object.freeze([
+      [-0.99, 0.16],
+      [-0.99, 0.42],
+      [-0.94, 0.6],
+      [0.34, 0.6],
+      [0.92, 0.5],
+      [0.99, 0.42],
+      [0.99, 0.18],
+      [0.93, 0.11],
+      [-0.94, 0.11],
+    ] as const),
+    /** the glasshouse's profile: from inside the body's top, raked to the roof */
+    glass: Object.freeze([
+      [-0.84, 0.56],
+      [0.4, 0.56],
+      [0.06, 0.965],
+      [-0.6, 0.965],
+    ] as const),
+    /**
+     * the roof panel's ends, shares of half the length: the glasshouse's top, so the roof closes
+     * it rather than sitting on it like a lid; and how far it stands past the glass at the sides,
+     * just enough that its sides and the glass's are never one plane
+     */
+    roof: Object.freeze([-0.6, 0.06] as const),
+    roofThickness: 0.06,
+    roofOverhang: 0.008,
+    /**
+     * the pillars between its windows, in the body's paint: each a share of half the car's length
+     * wide, standing `pillarProud` metres out of the glass's sides (half the roof's overhang, so
+     * neither shares a plane with the roof's side); the middle one at `pillarB` along the glass's top
+     */
+    pillarWidth: 0.05,
+    pillarProud: 0.004,
+    pillarB: -0.27,
+    /** the tyres stand this far proud of the body's sides */
+    wheelProud: 0.04,
+    wheelRadius: 0.32,
+    wheelWidth: 0.21,
+    axleFraction: 0.62,
+    hubRadius: 0.17,
+    hubDepth: 0.02,
+    /** the hubs stand this far out of the tyres, at the car's width */
+    hubProud: 0.006,
+    cabinWidthFraction: 0.88,
+    /** a lamp's width (share of the body's), height and foot (shares of the car's), set in from the side; the lamps are the front of the car, the body's nose just behind them */
+    lamp: Object.freeze([0.18, 0.06, 0.4] as const),
+    lampDepth: 0.03,
+    lampInset: 0.08,
+  }),
+
   /** a kind with no builder and no parts: blocked out from its footprint */
   generic: Object.freeze({ plinth: 0.06, plinthInset: 0.03, topFraction: 0.06, radius: 0.02 }),
 

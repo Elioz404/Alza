@@ -21,7 +21,8 @@
   .editor-svg[data-tool="place"],
   .editor-svg[data-tool="door"],
   .editor-svg[data-tool="window"],
-  .editor-svg[data-tool="stair"] { cursor: crosshair; }
+  .editor-svg[data-tool="stair"],
+  .editor-svg[data-tool="column"] { cursor: crosshair; }
   .editor-svg[data-tool="select"] .pl-room,
   .editor-svg[data-tool="select"] .pl-item { cursor: move; }
   .editor-svg[data-tool="select"] .pl-wall-hit { cursor: pointer; }
@@ -59,6 +60,39 @@
   .pl-swing { stroke: var(--plan-door-swing); stroke-width: var(--pen-fine); fill: none; }
   .pl-window { stroke: var(--plan-window-frame); stroke-width: var(--pen-fine); fill: var(--plan-paper); }
   .pl-glass { stroke: var(--plan-window-glass); stroke-width: var(--pen-fine); fill: none; }
+  /* a garage door: its closed panels in the wall, and (dashed, overhead) where they lie raised under the ceiling */
+  .pl-garage-panel { stroke: var(--plan-door-leaf); stroke-width: var(--pen-bold); stroke-linecap: butt; fill: none; }
+  .pl-garage-overhead { stroke: var(--plan-overhead); stroke-width: var(--pen-fine); stroke-dasharray: var(--dash-overhead); fill: none; }
+
+  /* columns: solid poché in section, as the walls they stand with (one solid with a wall they are in) */
+  .pl-column { fill: var(--plan-column); stroke: var(--plan-column); stroke-width: var(--pen-hair); stroke-linejoin: miter; pointer-events: none; }
+  .pl-column--hover { fill: var(--plan-line); stroke: var(--plan-line); }
+  .pl-column--selected { fill: var(--plan-selection); stroke: var(--plan-selection); }
+  .pl-column-reach { fill: transparent; }
+  .editor-svg[data-tool="select"] .pl-column-hit { cursor: move; }
+  .pl-ghost-column { pointer-events: none; }
+  .pl-ghost-column .pl-column { fill: var(--plan-selection-muted); stroke: var(--plan-preview); stroke-width: var(--pen-firm); stroke-dasharray: var(--dash-ghost); }
+  .pl-ghost-column[data-refused] .pl-column { fill: var(--plan-destructive-muted); stroke: var(--plan-destructive); }
+  /* refused: crossed out as well, so the refusal is in the shape and not only the colour */
+  .pl-ghost-refused { fill: none; stroke: var(--plan-destructive); stroke-width: var(--pen-firm); stroke-linecap: round; }
+  .pl-snap-guide { stroke: var(--plan-preview); stroke-width: var(--pen-fine); stroke-dasharray: var(--dash-ghost); fill: none; }
+
+  /* open spaces (a carport, a porch): a lighter hatch over the floor; no walls need close them off */
+  .pl-open-hatch { stroke: var(--plan-open-hatch); stroke-width: var(--pen-fine); fill: none; }
+  /* its open sides, where no wall's poché marks its edge: the floor's edge, a fine line */
+  .pl-open { pointer-events: none; }
+  .pl-open-rim { fill: none; stroke: var(--plan-line); stroke-width: var(--pen-fine); stroke-linecap: butt; }
+
+  /* a car's parking clearance, while it is selected or placed */
+  .pl-parking { fill: none; stroke: var(--plan-preview); stroke-width: var(--pen-fine); stroke-dasharray: var(--dash-ghost); pointer-events: none; }
+
+  /* what is overhead: the slab of the level above where it stands over open ground */
+  .pl-overhead { pointer-events: none; }
+  .pl-overhead-rim { fill: none; stroke: var(--plan-overhead); stroke-width: var(--pen-medium); stroke-dasharray: var(--dash-overhead); stroke-linecap: butt; }
+  /* an upper floor nothing under it carries: hatched in the warning colour */
+  .pl-unsupported { pointer-events: none; }
+  .pl-unsupported-area { fill: var(--color-warning-muted); fill-opacity: var(--opacity-quiet); stroke: none; }
+  .pl-warn-hatch { stroke: var(--plan-unsupported); stroke-width: var(--pen-medium); fill: none; }
 
   /* furniture symbols */
   .pl-f { fill: var(--plan-furniture); stroke: var(--plan-line); stroke-width: var(--pen-medium); }

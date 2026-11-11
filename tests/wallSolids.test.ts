@@ -12,7 +12,7 @@ import { addInkEdges, INK_EDGE } from "../src/three/edges";
 import { blocked, blockersFor } from "../src/three/walk";
 import { markBox, outlinePositions } from "../src/three/marks";
 import { PlanScene } from "../src/three/planScene";
-import { CONTACT, FLOOR_TOP, MARKS, WALL_SOLID } from "../src/three/config";
+import { CONTACT, FLOOR_TOP, MARKS, OPENING_PIECES, WALL_SOLID } from "../src/three/config";
 import { surface } from "../src/three/surfaces";
 import { bulgeFromSagitta, outlineArea, rectOutline, roomArea, tessellateOutline, wallArc, wallLength, wallPointAt } from "../src/model/shapes";
 import { emptyModel, type Opening, type PlanModel, type Room, type Wall } from "../src/model/types";
@@ -202,7 +202,7 @@ describe("curved walls", () => {
       for (const k of [0, 1, 2]) expect(pos.getY(i + k)).toBeCloseTo(1.2, 6);
     }
     // the wall's footprint, less the window (its width along the arc by the thickness), plus its two jambs
-    const expected = 0.2 * wallLength(curve) - 0.2 * window_.width + 2 * 0.05 * (0.2 + 0.02);
+    const expected = 0.2 * wallLength(curve) - 0.2 * window_.width + 2 * OPENING_PIECES.windowFrame * (0.2 + 2 * OPENING_PIECES.frameProud);
     expect(area).toBeCloseTo(expected, 2);
   });
 

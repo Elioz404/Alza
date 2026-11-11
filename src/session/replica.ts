@@ -44,7 +44,7 @@ export interface Write {
 }
 
 /** The plan's collections, in the order the plan lists them. */
-export const COLLECTIONS = ["levels", "walls", "openings", "rooms", "items", "stairs", "kinds", "notes"] as const;
+export const COLLECTIONS = ["levels", "walls", "openings", "rooms", "items", "stairs", "columns", "kinds", "notes"] as const;
 export type Collection = (typeof COLLECTIONS)[number];
 
 /** The settings of the plan as a whole that the session keeps. */
@@ -91,7 +91,7 @@ export function registersOf(s: PlanState, c: number, t: string): Write[] {
 }
 
 const EMPTY: PlanState = {
-  model: { version: PLAN_FORMAT_VERSION, id: "", name: "", levels: [], walls: [], openings: [], rooms: [], items: [], stairs: [], kinds: [], underlay: null },
+  model: { version: PLAN_FORMAT_VERSION, id: "", name: "", levels: [], walls: [], openings: [], rooms: [], items: [], stairs: [], columns: [], kinds: [], underlay: null },
   notes: [],
 };
 
@@ -147,6 +147,7 @@ export function materialize(registers: ReadonlyMap<string, Write>, current: Plan
       rooms: list<PlanModel["rooms"][number]>("rooms").filter((r) => onLevel.has(r.levelId)),
       items: list<PlanModel["items"][number]>("items").filter((i) => onLevel.has(i.levelId)),
       stairs: list<PlanModel["stairs"][number]>("stairs").filter((s) => onLevel.has(s.levelId)),
+      columns: list<PlanModel["columns"][number]>("columns").filter((c) => onLevel.has(c.levelId)),
       kinds: list<PlanModel["kinds"][number]>("kinds"),
       underlay: current.model.underlay,
     },

@@ -11,7 +11,7 @@
 
 import type { PlanModel } from "./types";
 import { rectCorners } from "./geometry";
-import { stairwellsOf } from "./levels";
+import { levelBelow, levelSlice, stairwellsOf } from "./levels";
 import { wallFootprint } from "./joints";
 import { tessellateOutline } from "./shapes";
 import type { Poly } from "./region";
@@ -30,4 +30,34 @@ export function slabOutline(slice: Pick<PlanModel, "rooms" | "walls">): Poly[] {
   const rooms = slice.rooms.map((r): Poly => tessellateOutline(r.points));
   const walls = slice.walls.flatMap((w): Poly[] => (Math.hypot(w.bx - w.ax, w.by - w.ay) === 0 ? [] : [tessellateOutline(wallFootprint(w, slice.walls).outline)]));
   return [...rooms, ...walls];
+}
+
+/** A region of the plan: what `include` covers less what `exclude` does (region.ts). */
+export interface SlabRegion {
+  readonly include: readonly Poly[];
+  readonly exclude: readonly Poly[];
+}
+
+/**
+ * The slab under level `levelId`: its rooms' and walls' outline (slabOutline) less the stairwells
+ * from the level below. The one region the 3D view's floors and the IFC export's slabs are cut
+ * from. On the ground level it is the ground floor's own floor (there is no stair under it).
+ */
+export function slabRegion(model: PlanModel, levelId: string): SlabRegion {
+  return { include: slabOutline(levelSlice(model, levelId)), exclude: stairwellPolys(model, levelId) };
+}
+
+/**
+ * The part of level `levelId`'s slab that stands over open ground: over no enclosed room and no
+ * wall of the level below — over an open room (a carport, a porch) or over nothing at all. Its
+ * underside, the soffit, is seen from below there, and the slab's edge round it; the plan of the
+ * level below draws its rim dashed, the convention for what is overhead. Empty for the ground
+ * level, and for a floor every part of which stands over enclosed rooms.
+ */
+export function overhangOf(model: PlanModel, levelId: string): SlabRegion {
+  const below = levelBelow(model, levelId);
+  if (!below) return { include: [], exclude: [] };
+  const under = levelSlice(model, below.level.id);
+  const enclosed = slabOutline({ rooms: under.rooms.filter((r) => r.kind !== "open"), walls: under.walls });
+  return { include: slabOutline(levelSlice(model, levelId)), exclude: [...stairwellPolys(model, levelId), ...enclosed] };
 }

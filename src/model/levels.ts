@@ -3,14 +3,14 @@
  *
  * A plan lists its levels from the ground up. Each one stores its floor-to-floor height; where
  * its floor stands follows from the ones below it (levelsOf), so moving or resizing a level can
- * never leave an elevation behind. Walls, rooms, items and stairs name their level; an opening
+ * never leave an elevation behind. Walls, rooms, items, stairs and columns name their level; an opening
  * is on its wall's level. A stair stands on its level and arrives on the one above.
  *
  * Every function here is pure over the plan, and the ones a render may call on every frame
  * (levelsOf, levelSlice) keep their answer per plan object.
  */
 
-import type { Item, Level, Opening, PlanModel, Room, Stair, Wall } from "./types";
+import type { Column, Item, Level, Opening, PlanModel, Room, Stair, Wall } from "./types";
 import { LEVEL_NAMES, SLAB_THICKNESS, WALL_SLAB_TOLERANCE } from "./limits";
 import { stairGeometry, type StairGeometry } from "./stairs";
 import { roomArea } from "./shapes";
@@ -72,6 +72,24 @@ export const slabUnderside = (height: number): number => height - SLAB_THICKNESS
 /** Whether a wall `wallHeight` tall meets the slab over a level `levelHeight` floor to floor. */
 export const meetsSlab = (wallHeight: number, levelHeight: number): boolean =>
   Math.abs(wallHeight - slabUnderside(levelHeight)) <= WALL_SLAB_TOLERANCE + 1e-9;
+
+/**
+ * How a wall or a column `height` tall stands against the slab over a level `levelHeight` floor to
+ * floor: "meets" its underside (within WALL_SLAB_TOLERANCE), stops "short" of it, or runs up
+ * "through" it. One definition for the walls and the columns, the checker and the support test.
+ */
+export function slabFit(height: number, levelHeight: number): "meets" | "short" | "through" {
+  const gap = slabUnderside(levelHeight) - height;
+  if (Math.abs(gap) <= WALL_SLAB_TOLERANCE + 1e-9) return "meets";
+  return gap > 0 ? "short" : "through";
+}
+
+/**
+ * Whether a wall or a column `height` tall reaches the underside of the slab over a level
+ * `levelHeight` floor to floor, and so can carry it: it meets it or runs past it (the checker
+ * reports one that runs through the slab on its own). One that stops short carries nothing.
+ */
+export const reachesSlab = (height: number, levelHeight: number): boolean => slabFit(height, levelHeight) !== "short";
 
 /** What a level at `index` (0 = ground) is called by its place: "First floor", or "Level N" past the named ones. */
 export const defaultLevelName = (index: number): string => LEVEL_NAMES[index] ?? `Level ${index + 1}`;
@@ -145,7 +163,7 @@ export const openingLevelId = (model: Pick<PlanModel, "walls">, opening: Opening
 
 /** The level any entity of the plan is on, by its id; undefined when no entity has that id. */
 export function levelIdOf(model: PlanModel, id: string): string | undefined {
-  for (const list of [model.walls, model.rooms, model.items, model.stairs] as const) {
+  for (const list of [model.walls, model.rooms, model.items, model.stairs, model.columns] as const) {
     const found = (list as readonly { id: string; levelId: string }[]).find((e) => e.id === id);
     if (found) return found.levelId;
   }
@@ -161,10 +179,11 @@ export interface LevelContents {
   rooms: Room[];
   items: Item[];
   stairs: Stair[];
+  columns: Column[];
 }
 
 /**
- * Everything on level `levelId`: its walls and their openings, its rooms, items and stairs. An
+ * Everything on level `levelId`: its walls and their openings, its rooms, items, stairs and columns. An
  * opening whose wall is gone stands on no level; it is counted with the plan's first level, so
  * it is still seen (and reported) somewhere rather than nowhere.
  */
@@ -179,6 +198,7 @@ export function levelContents(model: PlanModel, levelId: string): LevelContents 
     rooms: model.rooms.filter((r) => r.levelId === levelId),
     items: model.items.filter((i) => i.levelId === levelId),
     stairs: model.stairs.filter((s) => s.levelId === levelId),
+    columns: model.columns.filter((c) => c.levelId === levelId),
   };
 }
 
@@ -186,7 +206,7 @@ const sliceCache = new WeakMap<PlanModel, Map<string, PlanModel>>();
 
 /**
  * The plan as one level sees it: the same plan with only that level's walls, openings, rooms,
- * items and stairs (the levels, the kinds and the underlay are the plan's). Kept per plan object
+ * items, stairs and columns (the levels, the kinds and the underlay are the plan's). Kept per plan object
  * and level, so a view that reads it on every render gets the same object until the plan
  * changes — and a plan whose every entity is on that level is its own slice.
  */
@@ -200,7 +220,8 @@ export function levelSlice(model: PlanModel, levelId: string): PlanModel {
     contents.openings.length === model.openings.length &&
     contents.rooms.length === model.rooms.length &&
     contents.items.length === model.items.length &&
-    contents.stairs.length === model.stairs.length;
+    contents.stairs.length === model.stairs.length &&
+    contents.columns.length === model.columns.length;
   const slice = whole ? model : { ...model, ...contents };
   if (!byLevel) sliceCache.set(model, (byLevel = new Map()));
   byLevel.set(levelId, slice);
@@ -239,6 +260,9 @@ export interface LevelStats {
   rooms: number;
   items: number;
   stairs: number;
+  columns: number;
+  /** open rooms (carports, porches) among its rooms */
+  openRooms: number;
   /** floor area of its rooms, square metres */
   area: number;
 }
@@ -252,6 +276,8 @@ export function levelStats(model: PlanModel, levelId: string): LevelStats {
     rooms: c.rooms.length,
     items: c.items.length,
     stairs: c.stairs.length,
+    columns: c.columns.length,
+    openRooms: c.rooms.filter((r) => r.kind === "open").length,
     area: c.rooms.reduce((sum, r) => sum + roomArea(r), 0),
   };
 }

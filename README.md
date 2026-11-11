@@ -76,13 +76,13 @@ More stills in [`shots/showcase/`](shots/showcase/).
 1. Open the live app (link at the top of this repo).
 2. **In ChatGPT desktop:** open the URL in the in-app browser. WebMCP works out of the box.
    **In Google Chrome 149+:** enable `chrome://flags/#enable-webmcp-testing` and restart.
-   The agent status in the top bar turns green: **Agent tools on** (43 tools registered).
+   The agent status in the top bar turns green: **Agent tools on** (46 tools registered).
 3. Ask your agent, for example:
    - *"Add a 3 × 2.5 m study next to the bedroom, with a door and a window."*
    - *"The sofa placement feels off. Check the plan and fix any issues."*
    - *"Build the 3D and give me a walkthrough."*
 4. No WebMCP runtime? The app is still complete. Open **Activity → Developer tools** in the side
-   panel and run the exact same 44 tools manually; every call is logged in Activity.
+   panel and run the exact same 47 tools manually; every call is logged in Activity.
 
 ## Trace your own plan with the agent
 
@@ -115,15 +115,16 @@ document.modelContext.registerTool({
 });
 ```
 
-## The 43 tools (+ 1 dynamic)
+## The 46 tools (+ 1 dynamic)
 
 | Group | Tools |
 |---|---|
 | **Read** (readOnly) | `get_model` · `get_issues` · `get_item_catalog` · `get_editor_state` · `measure` · `get_underlay` |
 | **Blueprint** | `calibrate_underlay`, scales the uploaded plan image to real meters from one known dimension |
 | **Structure** | `add_wall` · `edit_wall` · `remove_wall`; a wall may be curved: `curve` takes a bulge, a sagitta (how far its middle stands off its chord) or a point it passes, and `edit_wall` bends or straightens it |
-| **Openings** | `add_door` · `add_window` · `move_opening` · `remove_opening` · `set_door_swing` (hinge side + swing direction) |
-| **Rooms** | `add_room` · `update_room` · `remove_room`; a room is a rectangle (`x`, `y`, `w`, `h`), an outline of 3 to 100 `points` with `arcs` on any edge (by sagitta out of the room, or a point the arc passes), or `fit` (the outline the walls close off round a point, to their inner faces). An agent reshapes a room by giving `update_room` its whole outline |
+| **Openings** | `add_door` · `add_window` · `move_opening` · `remove_opening` · `set_door_swing` (hinge side + swing direction); `add_door` with `style: "garage"` adds a sectional overhead garage door (2.4-5.5 m wide, 2.0-2.5 m tall, no swing) |
+| **Rooms** | `add_room` · `update_room` · `remove_room`; a room is a rectangle (`x`, `y`, `w`, `h`), an outline of 3 to 100 `points` with `arcs` on any edge (by sagitta out of the room, or a point the arc passes), or `fit` (the outline the walls close off round a point, to their inner faces). An agent reshapes a room by giving `update_room` its whole outline. `open: true` makes it an open space (a carport, a porch) that needs no walls, floored in concrete unless told otherwise |
+| **Structure** | `add_column` (square, rectangular or round, 0.25-0.6 m; at a point, centred in a `room`, or a `grid` of rows × cols) · `update_column` · `remove_column` (needs approval); a column stands to the underside of the slab over its level unless given a height, and carries the floor above as a wall does |
 | **Furniture** | `place_item` · `move_item` · `remove_item` · `define_item_kind`, model a piece the catalogue lacks, from primitives |
 | **Levels & stairs** | `list_levels` · `add_level` · `update_level` (rename, floor-to-floor height — the walls that met the slab follow it unless `walls: "keep"` — or its place in the stack) · `remove_level` (needs approval) · `set_active_level` · `add_stair` (straight or L-shaped; risers and going derived from the storey height) · `update_stair` · `remove_stair` (needs approval) |
 | **Model & view** | `set_plan_name` · `clear_model` · `build_3d` · `set_camera` (orbit/top/walk) · `set_3d_style` (ink edges, dollhouse cutaway at a height) · `set_doors` (swing the leaves open/shut) |
@@ -214,11 +215,21 @@ Metric precision is the product. The checker validates:
   stair with no level above, risers or goings out of range, the 2R + G comfort rule, headroom
   under the slab, a wall in the stair or over its stairwell, a blocked landing at either end,
   a stairwell outside every room, furniture on a stair or over a stairwell, overlapping stairs.
+- **Structure** (a sanity check, not engineering): an upper floor with neither a wall nor a
+  column under it within half of a 6 m span (the floor is sampled every 25 cm, coarser on a
+  floor too large for 40,000 samples, and each unsupported zone is reported with its bounds;
+  only walls and columns that reach the slab's underside carry it), a column under a level above
+  that stops short of its slab or runs up through it, a column with nothing under it on the level
+  below, a column off every room and wall, in a door's swing, a garage door's drive or a window,
+  on a stair, on another column or in furniture, a car without 0.6 m clear at its sides and
+  0.4 m at its ends (a column in it, a wall through it, past its garage's walls), and a garage
+  door too wide for its wall with its jambs. An open space is never asked for walls or a door.
 
 The bundled **Sunset Loft** demo is audited to **0 issues** and kept that way by a
 regression test, as is **Crescent House** (Plan menu), the free-shapes demo: two storeys with a
 curved facade on both, a wing turned off the house at an angle under a roof terrace, an
-L-shaped kitchen round a pantry, and a stair.
+L-shaped kitchen round a pantry, a stair, and a studio standing out on three columns over an
+open carport, with a car parked under it and a sectional garage door.
 
 ## Storeys, stairs and the plan format
 
@@ -231,11 +242,13 @@ stair stores only where it starts, which way it climbs, its width and shape; its
 going, landing and clear zones are worked out from the storey height, the same way for the
 plan, the model, the walker and the checker.
 
-Plans are saved in **format 3** (`version: 3`, `model/planFormat.ts`), where a room is its
-outline (`points`, each corner carrying the bulge of the edge it starts) and a wall may carry a
-`bulge` and be an arc. Older plans load losslessly: a format-2 room's rectangle becomes its four
-corners and every wall stays straight (no bulge), and a format-1 plan (one storey, no levels)
-first becomes a single "Ground floor" holding everything. A bow too slight to be an arc (its
+Plans are saved in **format 4** (`version: 4`, `model/planFormat.ts`), where a room is its
+outline (`points`, each corner carrying the bulge of the edge it starts), a wall may carry a
+`bulge` and be an arc, the plan lists its `columns` (each on its level), a room may be `kind:
+"open"` and a door `style: "garage"`. Older plans load losslessly: a format-3 plan gets an
+empty list of columns, and its rooms stay enclosed and its doors swinging, as they were drawn; a
+format-2 room's rectangle becomes its four corners and every wall stays straight (no bulge), and
+a format-1 plan (one storey, no levels) first becomes a single "Ground floor" holding everything. A bow too slight to be an arc (its
 middle under 0.01 mm off its chord, the IFC export's precision) is stored straight. A plan from
 a newer format, or one that names a level it does not have, is refused and the current plan
 stays.
@@ -341,7 +354,9 @@ where a network relay could carry the same messages between machines.
 ```
 src/
   model/    types.ts · geometry.ts (snap, SAT, segment math) · issues.ts (checker rules)
-            catalog.ts (32 built-in kinds + the plan's own kinds) · resolve.ts (id/name lookup)
+            catalog.ts (33 built-in kinds, the car among them, + the plan's own kinds) · resolve.ts (id/name lookup)
+            columns.ts (a column's section, height, the walls it is part of, placing snaps, grids)
+            supports.ts (what carries an upper floor: the span check and its unsupported zones)
             store.ts (shared actions, undo, activity) · commands.ts (dispatch: the one change path)
             assets.ts (underlay images, kept while the plan or its undo history names them)
             sceneBus.ts · seed.ts · demoCrescent.ts (the free-shapes demo; loaded when chosen)
@@ -376,7 +391,14 @@ src/
             roomDraft.ts (the room tool's outline, corner by corner, from the pointer or the
             keyboard's cross) · ShapeHandles.tsx (corner and edge handles, bending a wall) and
             WallPoche.tsx (each wall's mitred footprint; a parapet below the cut in outline),
-            both loaded after the first paint
+            both loaded after the first paint · columns (P) in solid poché like the walls they
+            stand in, with no cross (a cross marks a void), snapped to wall corners, wall axes
+            and other columns' axes, by pointer or by the arrows and Enter · ColumnShape.tsx ·
+            ColumnMarks.tsx (outline, section pill, the tool's aim, the columns' axes dimensioned
+            as a structural grid) and SlabMarks.tsx (the level above's slab edge dashed over open
+            ground; an upper floor nothing carries hatched), loaded after the first paint · an
+            open space hatched lighter, a garage door's panels with its raised position dashed
+            (no swing), the car's top view with its parking clearance when selected
   three/    (loaded on demand: the 2D editor's first chunk has no three.js)
             build.ts (extrusion with real openings, resolved joints, floors) · wallSolids.ts
             (walls extruded from their footprints, cut square to the arc at their openings)
@@ -402,7 +424,7 @@ src/
             presence) · replica.ts (the plan as last-writer-wins registers, Lamport clocks)
             messages.ts (every message's zod schema) · transport.ts (BroadcastChannel, in-page,
             and the seam for a network relay)
-  mcp/      registry.ts (registration + uniform logging) · tools.ts (43 + 1 dynamic) · presenceTools.ts (get_presence, point_at; their answers load on first use)
+  mcp/      registry.ts (registration + uniform logging) · tools.ts (46 + 1 dynamic) · presenceTools.ts (get_presence, point_at; their answers load on first use)
             bootstrap.ts (runtime detection, dynamic tool lifecycle, toolchange)
   ui/       App · theme/ (design tokens, Astryx theme, fonts) · primitives/ (buttons, fields, icons)
             shell/ (top bar, tool rail, canvas, side panel: Properties/Library/Issues/Notes + Activity)
@@ -437,8 +459,10 @@ scripts/
               the cutaway's slider, a wall selected by a click on the model, a pending removal
               hatched on it), the drawer and bottom-sheet layouts, the shared session (the
               agent's marker, get_presence, an edit held for the hand, two tabs of one browser
-              syncing and seeing each other's pointer); asserts zero console
-              errors — 213 checks (2 skip on Chrome builds
+              syncing and seeing each other's pointer), structure (an open carport under a
+              storey built by the tools alone, its columns placed by the plan's tool, the
+              soffit seen from under it, a format-3 plan loaded); asserts zero console
+              errors — 296 checks (2 skip on Chrome builds
               without navigator.modelContextTesting, 3 when the partner origin does not
               answer; with either one there, a failure is a FAIL, never a skip)
   trace.mjs   the demo plan as data: walls, openings, rooms, furniture, and the kinds the

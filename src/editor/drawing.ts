@@ -8,10 +8,10 @@
  * design tokens.
  */
 
-import type { Opening, Wall } from "../model/types";
+import type { Column, Opening, Room, Wall } from "../model/types";
 import { openingSpan } from "../model/issues";
 import type { Pt } from "../model/geometry";
-import { edgeArc, edgePathTo, piecesOf, pointOnEdge, subEdge, tangentOnEdge, wallEdge, type Edge } from "../model/shapes";
+import { chordNormal, edgeArc, edgePathTo, piecesOf, pointInOutline, pointOnEdge, subEdge, tangentOnEdge, wallEdge, type Edge } from "../model/shapes";
 import { QUARTER_TURN, SNAP, headingOf } from "../model/limits";
 import { FONT_SIZE } from "../ui/theme/tokens";
 
@@ -165,6 +165,8 @@ export const FLOOR_PATTERN = Object.freeze({
   plankJoints: Object.freeze([0.3, 1.5, 0.9, 2.0]),
   /** a floor tile's side */
   tile: 0.3,
+  /** the spacing of an open space's hatch (a carport, a porch) */
+  openHatch: 0.25,
 });
 
 /** A revision cloud around a pixel rectangle: scallops that bulge outward, drawn clockwise. */
@@ -314,3 +316,20 @@ export const ARROW_CLIMB: Readonly<Record<string, number>> = Object.freeze(Objec
 
 /** Which way a stair at `rotation` climbs on the sheet, in a word: the nearest quarter turn's. */
 export const climbWord = (rotation: number): string => CLIMB_WAYS[Math.round(headingOf(rotation) / QUARTER_TURN) % CLIMB_WAYS.length].word;
+
+/** "0.30 × 0.30 m", "Ø 0.35 m": a column's section as the plan letters it. */
+export const columnSectionText = (c: Pick<Column, "shape" | "w" | "d">): string => (c.shape === "circle" ? `Ø ${metres(c.w)} m` : `${metres(c.w)} × ${metres(c.d)} m`);
+
+/**
+ * Which way a garage door's panels rise into, from its vano's chord p0 → p1: the side of the wall
+ * a room of its level is on (the garage, the carport), +1 along the chord's normal (shapes.ts
+ * chordNormal) or -1. Probed `faceOff` (the wall's half thickness) plus half the door's height
+ * `depth` in, where the raised panels lie; +1 when neither side is a room.
+ */
+export function garageInside(p0: Pt, p1: Pt, faceOff: number, depth: number, rooms: readonly Pick<Room, "points">[]): 1 | -1 {
+  const n = chordNormal(p0, p1);
+  const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+  const reach = faceOff + depth / 2;
+  const inRoom = (sign: number) => rooms.some((r) => pointInOutline({ x: mid.x + n.x * reach * sign, y: mid.y + n.y * reach * sign }, r.points));
+  return inRoom(1) || !inRoom(-1) ? 1 : -1;
+}

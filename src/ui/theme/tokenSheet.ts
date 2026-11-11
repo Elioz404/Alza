@@ -113,6 +113,15 @@ export const LIGHT_TOKENS: TokenSheet = Object.freeze({
   "--plan-destructive-hatch": sheet.destructiveHatch,
   /** the level below the one being worked on, as a ghost to line up with */
   "--plan-ghost": sheet.ghost,
+  /** an open space's hatch: a carport, a porch, a terrace under the house (no walls close it off) */
+  "--plan-open-hatch": sheet.openHatch,
+  /** what stands overhead of the plan shown: the slab of the level above over open ground, a raised garage door */
+  "--plan-overhead": ref("--plan-line"),
+  /** a structural column in section: solid poché, as the walls it stands with */
+  "--plan-column": ref("--plan-ink"),
+  /** an upper floor with nothing under it near enough to carry it (the checker's slab_unsupported) */
+  // a non-text cue: the warning's ink (3:1 on the paper and the floors), not its pale swatch
+  "--plan-unsupported": ref("--color-icon-warning"),
   /** the shared session's other tabs: a cursor and its name (ui/session/participants.ts, tabColour) */
   ...Object.fromEntries(sheet.tabs.map((c, i) => [`--plan-tab-${i + 1}`, c])),
   /** a stair's treads: furniture-white, so the linework reads over any floor */
@@ -133,6 +142,9 @@ export const LIGHT_TOKENS: TokenSheet = Object.freeze({
   "--dash-hidden": "5 3",
   /** the level below's walls, under the one being worked on: a dash-dot reference line */
   "--dash-level-below": "8 3 2 3",
+  /** what is overhead (the slab of the level above over open ground, a garage door raised under it): long dashes */
+  "--dash-overhead": "10 4",
+
   // the 3D view
   "--scene-backdrop": scene.backdrop,
   "--scene-ink": scene.ink,
@@ -275,6 +287,9 @@ export const DARK_TOKENS: TokenSheet = Object.freeze({
   "--plan-floor-carpet": dark.floorCarpet,
   "--plan-floor-tile": dark.floorTile,
   "--plan-ghost": dark.ghost,
+  "--plan-open-hatch": dark.openHatch,
+  // on the dark paper the warning's own swatch is the stronger ink
+  "--plan-unsupported": ref("--color-warning"),
   ...Object.fromEntries(dark.tabs.map((c, i) => [`--plan-tab-${i + 1}`, c])),
   "--shadow-low": `inset 0 0 0 1px ${dark.ringLow.css}`,
   "--shadow-med": `inset 0 0 0 1px ${dark.ringMed.css}`,

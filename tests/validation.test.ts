@@ -30,7 +30,9 @@ const schema = (name: string) => inputSchemaOf(tool(name)) as { properties: Prop
  * property names with their JSON types, and the required list. Agents depend on exactly these.
  * Free shapes added to them, and only added: a wall's `curve` (one of two forms, so "anyOf"), and
  * a room's `points`, `arcs` and `fit` — which made add_room's rectangle one of its shapes, so its
- * x, y, w, h are no longer required (a call that passes them is read as it always was).
+ * x, y, w, h are no longer required (a call that passes them is read as it always was). Structure
+ * added to them, and only added: a door's `style` (a garage door), a room's `open` flag, and the
+ * three column tools.
  */
 const N = "number", S = "string", B = "boolean", A = "array", ANY = "anyOf";
 const CONTRACT: Record<string, [Record<string, string>, string[]]> = {
@@ -44,13 +46,13 @@ const CONTRACT: Record<string, [Record<string, string>, string[]]> = {
   add_wall: [{ ax: N, ay: N, bx: N, by: N, thickness: N, height: N, curve: ANY, level: S }, ["ax", "ay", "bx", "by"]],
   edit_wall: [{ id: S, ax: N, ay: N, bx: N, by: N, thickness: N, height: N, curve: ANY, level: S }, ["id"]],
   remove_wall: [{ id: S }, ["id"]],
-  add_door: [{ wallId: S, t: N, width: N, height: N, hinge: S, side: S }, ["wallId", "t"]],
+  add_door: [{ wallId: S, t: N, width: N, height: N, hinge: S, side: S, style: S }, ["wallId", "t"]],
   set_door_swing: [{ id: S, hinge: S, side: S }, ["id"]],
   add_window: [{ wallId: S, t: N, width: N, sill: N, height: N }, ["wallId", "t"]],
   move_opening: [{ id: S, t: N }, ["id", "t"]],
   remove_opening: [{ id: S }, ["id"]],
-  add_room: [{ x: N, y: N, w: N, h: N, points: A, arcs: A, fit: A, label: S, floor: S, level: S }, ["label"]],
-  update_room: [{ id: S, x: N, y: N, w: N, h: N, points: A, arcs: A, fit: B, label: S, floor: S, level: S }, ["id"]],
+  add_room: [{ x: N, y: N, w: N, h: N, points: A, arcs: A, fit: A, label: S, floor: S, open: B, level: S }, ["label"]],
+  update_room: [{ id: S, x: N, y: N, w: N, h: N, points: A, arcs: A, fit: B, label: S, floor: S, open: B, level: S }, ["id"]],
   remove_room: [{ id: S }, ["id"]],
   place_item: [{ kind: S, x: N, y: N, rotation: N, level: S }, ["kind", "x", "y"]],
   define_item_kind: [{ kind: S, label: S, w: N, d: N, h: N, color: S, category: S, parts: "array" }, ["kind", "label", "w", "d", "h"]],
@@ -64,6 +66,9 @@ const CONTRACT: Record<string, [Record<string, string>, string[]]> = {
   add_stair: [{ x: N, y: N, rotation: N, width: N, shape: S, turn: S, split: "integer", risers: "integer", tread: N, level: S }, ["x", "y"]],
   update_stair: [{ id: S, x: N, y: N, rotation: N, width: N, shape: S, turn: S, split: "integer", risers: "integer", tread: N, level: S }, ["id"]],
   remove_stair: [{ id: S }, ["id"]],
+  add_column: [{ x: N, y: N, room: S, shape: S, w: N, d: N, rotation: N, height: N, grid: "object", level: S }, []],
+  update_column: [{ id: S, x: N, y: N, shape: S, w: N, d: N, rotation: N, height: ANY, level: S }, ["id"]],
+  remove_column: [{ id: S }, ["id"]],
   set_plan_name: [{ name: S }, ["name"]],
   clear_model: [{}, []],
   build_3d: [{}, []],
@@ -101,7 +106,10 @@ describe("published input schemas", () => {
     expect(schema("extend_selected_wall").properties.end.enum).toEqual(["a", "b"]);
     expect(schema("add_room").properties.floor.enum).toEqual([...FLOOR_FINISHES]);
     expect(schema("update_room").properties.floor.enum).toEqual([...FLOOR_FINISHES]);
-    expect(schema("define_item_kind").properties.category.enum).toEqual(["living", "bedroom", "kitchen", "bath", "office", "decor"]);
+    expect(schema("define_item_kind").properties.category.enum).toEqual(["living", "bedroom", "kitchen", "bath", "office", "decor", "garage"]);
+    expect(schema("add_door").properties.style.enum).toEqual(["swing", "garage"]);
+    expect(schema("add_column").properties.shape.enum).toEqual(["square", "rectangle", "circle"]);
+    expect(schema("update_column").properties.shape.enum).toEqual(["square", "rectangle", "circle"]);
   });
 
   it("publishes the domain ranges and resource limits", () => {

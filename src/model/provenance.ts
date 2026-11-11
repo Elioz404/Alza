@@ -22,8 +22,8 @@ import { store, type AppState } from "./store";
 import type { ActivitySource, PlanModel } from "./types";
 
 /** The plan's entity collections, by the name a revision lists them under. */
-export type EntityCollection = "levels" | "walls" | "openings" | "rooms" | "items" | "stairs";
-const COLLECTIONS: readonly EntityCollection[] = ["levels", "walls", "openings", "rooms", "items", "stairs"];
+export type EntityCollection = "levels" | "walls" | "openings" | "rooms" | "items" | "stairs" | "columns";
+const COLLECTIONS: readonly EntityCollection[] = ["levels", "walls", "openings", "rooms", "items", "stairs", "columns"];
 
 export interface EntityChange {
   /** ids that are new or changed, and still in the plan */

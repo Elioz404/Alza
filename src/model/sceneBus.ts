@@ -72,15 +72,16 @@ export interface SceneStats {
   moving: boolean;
   /** the plan's levels, and the ids of those the view shows, ground first */
   levels: { total: number; shown: string[] };
-  /** the stairs and the upper levels' floor slabs in the scene */
+  /** the stairs, the upper levels' floor slabs and the columns in the scene */
   stairs: number;
   slabs: number;
+  columns: number;
   /** walking: the level the walker is on, the height of the floor or tread under it, and its eye's; otherwise null */
   walker: { level: string; floor: number; eye: number } | null;
 }
 
 /** What the probe can find on the canvas. */
-export type SceneLocatable = "wall" | "room" | "item" | "stair";
+export type SceneLocatable = "wall" | "room" | "item" | "stair" | "column";
 
 /**
  * Where the mounted 3D view, if any, answers what it holds, where an entity shows, and takes a

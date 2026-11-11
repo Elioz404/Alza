@@ -24,7 +24,7 @@ export type PlacedType = Exclude<TargetType, "level" | "plan" | "file">;
 export interface EntityInfo {
   type: PlacedType;
   id: string;
-  /** a room's label, a piece's catalogue name; none for walls, openings and stairs */
+  /** a room's label, a piece's catalogue name; none for walls, openings, stairs and columns */
   label?: string;
 }
 
@@ -41,13 +41,14 @@ export function entityInfo(model: PlanModel, id: string): EntityInfo | null {
     return { type: "item", id, label: def ? kindName(def) : item.kind };
   }
   if (model.stairs.some((s) => s.id === id)) return { type: "stair", id };
+  if (model.columns.some((c) => c.id === id)) return { type: "column", id };
   return null;
 }
 
 /**
  * The middle of what `id` names on the plan: a wall's midpoint, an opening's centre on its wall,
  * a room's anchor (its most interior point, where its name goes: shapes.ts outlineAnchor), a
- * piece's centre, the middle of a stair's footprint. Null when it names none.
+ * piece's centre, the middle of a stair's footprint, a column's centre. Null when it names none.
  */
 export function placeOf(model: PlanModel, id: string): Place | null {
   const at = (x: number, y: number): Place => ({ x, y, levelId: levelIdOf(model, id) });
@@ -69,6 +70,8 @@ export function placeOf(model: PlanModel, id: string): Place | null {
   }
   const it = model.items.find((x) => x.id === id);
   if (it) return at(it.x, it.y);
+  const col = model.columns.find((x) => x.id === id);
+  if (col) return at(col.x, col.y);
   const st = model.stairs.find((x) => x.id === id);
   const g = st ? stairGeometryIn(model, st) : null;
   return g ? at((g.box.minX + g.box.maxX) / 2, (g.box.minY + g.box.maxY) / 2) : null;

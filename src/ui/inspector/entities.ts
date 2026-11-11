@@ -10,9 +10,9 @@ import { catalogOf } from "../../model/catalog";
 import { activeLevelId, pageActions, store } from "../../model/store";
 import { EVENTS } from "../../model/sceneBus";
 import { levelIdOf } from "../../model/levels";
-import type { Item, Opening, PlanModel, Room, Stair, Wall } from "../../model/types";
+import type { Column, Item, Opening, PlanModel, Room, Stair, Wall } from "../../model/types";
 
-export type EntityType = "wall" | "door" | "window" | "room" | "item" | "stair";
+export type EntityType = "wall" | "door" | "window" | "room" | "item" | "stair" | "column";
 
 /** One thing on the plan, as the person sees it. */
 export interface EntityRef {
@@ -115,6 +115,8 @@ export function itemName(model: Pick<PlanModel, "kinds">, item: Item): string {
 
 export const stairName = (model: Pick<PlanModel, "stairs">, s: Stair): string => `Stair ${model.stairs.indexOf(s) + 1}`;
 
+export const columnName = (model: Pick<PlanModel, "columns">, c: Column): string => `Column ${model.columns.indexOf(c) + 1}`;
+
 /** "Straight stair", "L-shaped stair": what kind of stair it is, in words. */
 export const stairKind = (s: Pick<Stair, "shape">): string => (s.shape === "l" ? "L-shaped stair" : "Straight stair");
 
@@ -142,6 +144,8 @@ export function entityById(model: PlanModel, id: string): EntityRef | null {
   if (item) return { type: "item", id, name: itemName(model, item) };
   const stair = model.stairs.find((x) => x.id === id);
   if (stair) return { type: "stair", id, name: stairName(model, stair) };
+  const column = model.columns.find((x) => x.id === id);
+  if (column) return { type: "column", id, name: columnName(model, column) };
   return null;
 }
 
@@ -172,6 +176,9 @@ export function selectEntity(model: PlanModel, ref: { type: EntityType | "level"
       return;
     case "stair":
       pageActions.selectStair(ref.id);
+      return;
+    case "column":
+      pageActions.selectColumn(ref.id);
       return;
     case "level":
       // naming a level is going to it: done above

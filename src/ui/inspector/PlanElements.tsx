@@ -25,6 +25,7 @@ import {
   roomArea,
   selectEntity,
   squareMetres,
+  columnName,
   stairKind,
   stairName,
   wallLength,
@@ -68,6 +69,10 @@ function groupsOf(model: PlanModel, plan: PlanModel): Group[] {
     {
       title: "Stairs",
       elements: model.stairs.map((st) => ({ ref: { type: "stair", id: st.id, name: stairName(plan, st) }, detail: stairKind(st) })),
+    },
+    {
+      title: "Columns",
+      elements: model.columns.map((c) => ({ ref: { type: "column", id: c.id, name: columnName(plan, c) }, detail: c.shape === "circle" ? `Ø ${metres(c.w)}` : `${c.w.toFixed(2)} × ${metres(c.d)}` })),
     },
   ];
   return groups.filter((g) => g.elements.length > 0);

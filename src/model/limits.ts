@@ -133,6 +133,33 @@ export const DOOR_SWING_DEFAULTS = Object.freeze({ hinge: "a", side: "right" } a
 /** What set_doors can do to the leaves in the 3D scene. */
 export const DOOR_STATES = ["open", "closed", "toggle"] as const;
 export type DoorState = (typeof DOOR_STATES)[number];
+/**
+ * How a door opens: a hinged leaf that swings ("swing", the default, absent on a plan), or a
+ * sectional overhead garage door ("garage") whose panels run up under the ceiling on tracks, so it
+ * sweeps no floor. The plan draws a garage door as the dashed overhead symbol, with no swing arc.
+ */
+export const DOOR_STYLES = ["swing", "garage"] as const;
+export type DoorStyle = (typeof DOOR_STYLES)[number];
+/**
+ * A garage door: its clear width and height (a single car's door to a double garage's), the size
+ * it gets when none is given, the jamb it needs at each side of the vano (its tracks), how much
+ * floor inside it keeps clear as its threshold (nothing parks on its line), and how far either side
+ * of it the drive must be free of columns (a car comes through it).
+ *
+ * In an exported building model it is an IfcDoor whose PredefinedType is DOOR and whose
+ * OperationType is USERDEFINED, with UserDefinedOperationType `ifcOperation`: IFC4's
+ * IfcDoorTypeOperationEnum has no sectional overhead door (its nearest, ROLLINGUP, is a roller
+ * shutter), so the user-defined value names it.
+ */
+export const GARAGE_DOOR = Object.freeze({
+  width: range(2.4, 5.5),
+  height: range(2.0, 2.5),
+  defaults: Object.freeze({ width: 2.5, height: 2.1 }),
+  jamb: 0.1,
+  threshold: 0.3,
+  approach: 1.0,
+  ifcOperation: "SECTIONAL",
+});
 
 // ---------------------------------------------------------------------------- rooms
 
@@ -163,6 +190,15 @@ export const ROOM_SHAPE = Object.freeze({
 export const FLOOR_FINISHES = ["oak", "tile", "carpet", "concrete"] as const;
 export type FloorFinish = (typeof FLOOR_FINISHES)[number];
 export const DEFAULT_FLOOR: FloorFinish = "oak";
+/**
+ * What a room is: a space its walls enclose ("enclosed", the default, absent on a plan), or an
+ * open one ("open") — a carport, a porch, a terrace under the house — whose sides may have no
+ * walls at all: the checker does not ask it for enclosing walls or a door, and it is exported as
+ * an external space. An open room is floored in `OPEN_FLOOR` unless another finish is given.
+ */
+export const ROOM_KINDS = ["enclosed", "open"] as const;
+export type RoomKind = (typeof ROOM_KINDS)[number];
+export const OPEN_FLOOR: FloorFinish = "concrete";
 
 // ---------------------------------------------------------------------------- furniture
 
@@ -215,10 +251,66 @@ export const PART_MATERIALS = [
   "plastic",
 ] as const;
 export type PartMaterial = (typeof PART_MATERIALS)[number];
-export const ITEM_CATEGORIES = ["living", "bedroom", "kitchen", "bath", "office", "decor"] as const;
+export const ITEM_CATEGORIES = ["living", "bedroom", "kitchen", "bath", "office", "decor", "garage"] as const;
 export type ItemCategory = (typeof ITEM_CATEGORIES)[number];
 /** Fallback colour for a custom kind defined without one. */
 export const DEFAULT_ITEM_COLOR = "#9a9186";
+
+/**
+ * The floor a parked car needs round it, metres: `side` to open a door and get out on either side,
+ * `end` to walk past its nose and its tail. A catalogue kind marked `parking` (the car) is judged
+ * with it: it must fit its room with this much clear, and no column may stand in it.
+ */
+export const PARKING = Object.freeze({ side: 0.6, end: 0.4 });
+
+// ---------------------------------------------------------------------------- columns
+
+/**
+ * A column's section: a square, a rectangle (width along its rotation's x, depth along its y) or
+ * a circle (its width is the diameter).
+ */
+export const COLUMN_SHAPES = ["square", "rectangle", "circle"] as const;
+export type ColumnShape = (typeof COLUMN_SHAPES)[number];
+/**
+ * Columns: the sizes a section may have, a new one's, the height it may be set to (by default it
+ * stands from its floor to the underside of the slab over it, slabUnderside), and the most a plan
+ * holds. `inWall` is how far into a wall's thickness its centre must stand to be part of that
+ * wall (drawn as one poché with it, joined by it); `snap` is how near, metres, a column is pulled
+ * onto a wall's axis, a wall's corner or another column's axis as it is placed; `circleSides` is
+ * how many sides a circular section is cut into where a polygon is needed (the checker, the plan).
+ * A column's centre is kept to `precision` metres, not to the plan's grid: one on the axis of a
+ * wall at an angle stands where that axis runs.
+ */
+export const COLUMN = Object.freeze({
+  size: range(0.25, 0.6),
+  precision: 0.001,
+  defaults: Object.freeze({ shape: "square" as ColumnShape, size: 0.3 }),
+  height: range(0.3, 10),
+  inWall: 0.5,
+  snap: 0.25,
+  circleSides: 24,
+});
+export const MAX_COLUMNS = 200;
+/**
+ * A column grid as add_column lays one out: rows × cols columns, `spacing` metres apart each way.
+ */
+export const COLUMN_GRID = Object.freeze({ count: range(1, 12, ""), spacing: range(1, 12) });
+
+/**
+ * What the floor of a level above is checked against (a sanity check, not engineering): a slab
+ * spans at most `span` metres between the walls and columns under it, so no point of it may stand
+ * more than half of that from one; the floor is sampled every `sample` metres to find where. An
+ * unsupported zone smaller than `minArea` m² (a corner's sliver) is not reported. A column on a
+ * level above should stand on a column or a wall of the level below, within `stack` metres.
+ * Only a wall or a column that reaches the slab's underside carries it (levels.ts reachesSlab).
+ *
+ * The work is bounded for any floor the plan allows: a floor is sampled at no more than
+ * `maxSamples` points (the step grows past `sample` on a very large floor); a zone's furthest
+ * point is measured at up to `reachSamples` of its samples, spread evenly over it (every one of
+ * them on a zone that small); the zones of the last `memo` floors checked are kept, by what they
+ * depend on, so an edit elsewhere on the plan does not sample a floor again.
+ */
+export const SUPPORT = Object.freeze({ span: 6, sample: 0.25, minArea: 0.5, stack: 0.05, maxSamples: 40_000, reachSamples: 1024, memo: 32 });
 
 // ---------------------------------------------------------------------------- kinds of things
 
@@ -243,8 +335,10 @@ export type KindSource = (typeof KIND_SOURCES)[number];
  *   2 — levels (storeys) and stairs; every wall, room and item names its level
  *   3 — free shapes: a room is a polygon (`points`, each corner with the bulge of the edge it
  *       starts) instead of a rectangle (x, y, w, h), and a wall may be an arc (`bulge`)
+ *   4 — structure: columns (`columns`), open rooms (a room's `kind`) and garage doors (a door's
+ *       `style`)
  */
-export const PLAN_FORMAT_VERSION = 3;
+export const PLAN_FORMAT_VERSION = 4;
 
 /** The id of the level a fresh plan (and a migrated single-storey one) stands on. */
 export const GROUND_LEVEL_ID = "level_ground";
@@ -476,8 +570,8 @@ export const MAX_CANDIDATES = 10;
 export const SESSION = Object.freeze({
   /** the BroadcastChannel the tabs of this origin meet on */
   channel: "alza-session",
-  /** the message format; a message in any other is ignored (2: rooms as polygons, walls with a bulge) */
-  protocol: 2,
+  /** the message format; a message in any other is ignored (3: columns, open rooms, garage doors) */
+  protocol: 3,
   /** how long a new tab listens for a tab that already holds the plan before it holds its own */
   joinWaitMs: 400,
   /** at most this often a tab tells the others where its pointer is */

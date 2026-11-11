@@ -78,6 +78,14 @@ export const IconStair = make(
     <path d="M12 19V5.5M10 7.5l2-2 2 2" />
   </>,
 );
+/** A column: its section in solid poché under the slab it carries, with the floor it stands on. */
+export const IconColumn = make(
+  "column",
+  <>
+    <path d="M3 5h18M3 20h18" />
+    <rect x="9.5" y="5" width="5" height="15" fill="currentColor" />
+  </>,
+);
 /** Levels: storeys stacked, as a section shows them. */
 export const IconLevels = make(
   "levels",

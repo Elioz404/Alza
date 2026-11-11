@@ -27,21 +27,29 @@
 
 import { outlineBox } from "../model/shapes";
 import * as THREE from "three";
-import type { KindDef, Opening, PlanModel, Stair, Wall } from "../model/types";
+import type { Column, KindDef, Opening, PlanModel, Stair, Wall } from "../model/types";
 import { levelSlice, levelsOf, stairGeometryIn } from "../model/levels";
 import { catalogOf } from "../model/catalog";
 import type { SetDoorsPayload } from "../model/sceneBus";
 import {
+  buildColumn,
   buildFloor,
   buildGround,
   buildPendant,
   buildWall,
   ceilingOf,
+  columnCutCap,
   CURTAINS,
   wallCutCap,
   curtainedWindows,
+  garageSides,
   openingsByWall,
+  poseGarageDoor,
+  wallPosts,
+  type WallFit,
 } from "./build";
+import { columnHeight } from "../model/columns";
+import { isOpenRoom } from "../model/issues";
 import { bandsSignature, wallBands, type WallBands } from "./wallSolids";
 import { buildFurniture } from "./furniture";
 import { MaterialCache, disposeObject } from "./materials";
@@ -63,11 +71,16 @@ export interface ReconcileStats {
   kept: number;
 }
 
-/** One hinged leaf in the scene; a double door has two with the same id. */
+/**
+ * One hinged leaf in the scene (a double door has two with the same id), or a garage door's
+ * sections, which run up and back on their track instead of swinging (their swing is 0).
+ */
 export interface DoorLeaf {
   readonly hinge: THREE.Object3D;
   readonly doorId: string;
   readonly swing: number;
+  /** put the leaf where its door is, open by `open` (0 shut, 1 open) */
+  readonly pose: (open: number) => void;
 }
 
 interface Entity {
@@ -86,17 +99,20 @@ interface Entity {
 
 /** What a click on the model picked: the plan entity a mesh belongs to, as the store selects it. */
 export interface Picked {
-  type: "wall" | "room" | "item" | "stair";
+  type: "wall" | "room" | "item" | "stair" | "column";
   id: string;
   /** the level it stands on */
   levelId: string;
 }
 
 /** An entity's key, by the store's selection: a floor and its pendant are the room's. */
-const PICK_TYPE: Readonly<Record<string, Picked["type"]>> = Object.freeze({ wall: "wall", floor: "room", pendant: "room", item: "item", stair: "stair" });
+const PICK_TYPE: Readonly<Record<string, Picked["type"]>> = Object.freeze({ wall: "wall", floor: "room", pendant: "room", item: "item", stair: "stair", column: "column" });
 
-/** What an entity's ink stops at, as the entity does: a stair's at the cut and its storey's top. */
-const inkClipOf = (key: string): InkClip => (key.startsWith("stair:") ? "stair" : "none");
+/** What an entity's ink stops at, as the entity does: a stair's at the cut and its storey's top, a column's at the cut, as a wall's. */
+const inkClipOf = (key: string): InkClip => (key.startsWith("stair:") ? "stair" : key.startsWith("column:") ? "cut" : "none");
+
+/** What a column is built from: its section and the height it stands. */
+const columnSignature = (c: Column, height: number) => JSON.stringify([c.shape, c.x, c.y, c.w, c.d, c.rotation, height]);
 
 /** What a stair is built from: its own numbers and the height it climbs. */
 const stairSignature = (s: Stair, rise: number) => JSON.stringify([s.shape, s.x, s.y, s.rotation, s.width, s.turn ?? "", s.split ?? "", s.risers ?? "", s.tread ?? "", rise]);
@@ -116,11 +132,12 @@ const defId = (def: KindDef): number => {
   return id;
 };
 
-const openingSignature = (o: Opening, curtained: ReadonlySet<string>) =>
-  [o.id, o.kind, o.t, o.width, o.sill, o.height, o.hinge ?? "", o.side ?? "", curtained.has(o.id)];
+const openingSignature = (o: Opening, curtained: ReadonlySet<string>, fit: WallFit) =>
+  [o.id, o.kind, o.t, o.width, o.sill, o.height, o.hinge ?? "", o.side ?? "", o.style ?? "", fit.inside.get(o.id) ?? 0, curtained.has(o.id)];
 
-const wallSignature = (w: Wall, openings: readonly Opening[], bands: WallBands, curtained: ReadonlySet<string>) =>
-  JSON.stringify([w.ax, w.ay, w.bx, w.by, w.bulge ?? 0, w.thickness, w.height, bandsSignature(bands), openings.map((o) => openingSignature(o, curtained))]);
+/** A wall's signature: its own numbers, its footprint's bands, its openings and the columns it stops at. */
+const wallSignature = (w: Wall, openings: readonly Opening[], bands: WallBands, curtained: ReadonlySet<string>, fit: WallFit) =>
+  JSON.stringify([w.ax, w.ay, w.bx, w.by, w.bulge ?? 0, w.thickness, w.height, bandsSignature(bands), openings.map((o) => openingSignature(o, curtained, fit)), fit.posts]);
 
 export class PlanScene {
   /** Everything the plan puts in the scene, ground included: add it to the scene, export it as OBJ. */
@@ -207,12 +224,20 @@ export class PlanScene {
       const slice = levelSlice(model, level);
       const before = stats.added + stats.rebuilt;
       const curtained = curtainedWindows(slice, byWall);
+      const inside = garageSides(slice, byWall);
       for (const w of slice.walls) {
         const openings = byWall.get(w.id) ?? [];
         const bands = wallBands(w, slice.walls);
-        put(`wall:${w.id}`, wallSignature(w, openings, bands, curtained), () => buildWall(w, openings, bands, curtained), (at) =>
-          wallCutCap(w, openings, bands, at),
+        const fit: WallFit = { posts: wallPosts(w, slice.columns, model), inside };
+        put(`wall:${w.id}`, wallSignature(w, openings, bands, curtained, fit), () => buildWall(w, openings, bands, curtained, fit), (at) =>
+          wallCutCap(w, openings, bands, at, fit.posts),
         );
+      }
+      // the columns, from the floor to the underside of the slab over them; cut with the walls
+      for (const c of slice.columns) {
+        const height = columnHeight(model, c);
+        if (height === undefined) continue;
+        put(`column:${c.id}`, columnSignature(c, height), () => buildColumn(c, height), (at) => columnCutCap(c, height, at));
       }
       if (stats.added + stats.rebuilt > before) wallsChanged = true;
       const wells = info.index > 0 ? stairwellPolys(model, level) : [];
@@ -227,7 +252,8 @@ export class PlanScene {
         const b = outlineBox(r.points);
         const near = wells.filter((w) => w.some((p) => p.x > b.minX - 1e-9) && w.some((p) => p.x < b.maxX + 1e-9) && w.some((p) => p.y > b.minY - 1e-9) && w.some((p) => p.y < b.maxY + 1e-9));
         put(`floor:${r.id}`, JSON.stringify([r.points, r.floor, polysSignature(near)]), () => buildFloor(r, this.materials, near));
-        put(`pendant:${r.id}`, JSON.stringify([r.points, ceiling]), () => buildPendant(r, ceiling));
+        // an open space (a carport, a porch) is out of doors: no pendant hangs in it
+        if (!isOpenRoom(r)) put(`pendant:${r.id}`, JSON.stringify([r.points, ceiling]), () => buildPendant(r, ceiling));
       }
       for (const st of slice.stairs) {
         const g = stairGeometryIn(model, st);
@@ -371,19 +397,24 @@ export class PlanScene {
     return true;
   }
 
-  /** Ink every wall afresh, against the walls it meets now: the walls on its own floor. */
+  /**
+   * Ink every wall afresh, against the walls it meets now and the columns it runs into: those on
+   * its own floor (an edge where a wall stops at a column lies on the column's face, a seam).
+   */
   private reink(): void {
-    const byLevel = new Map<string, THREE.Object3D[]>();
+    const byLevel = new Map<string, { walls: THREE.Object3D[]; around: THREE.Object3D[] }>();
     for (const [key, { object, level }] of this.entities) {
-      if (!key.startsWith("wall:")) continue;
-      const list = byLevel.get(level);
-      if (list) list.push(object);
-      else byLevel.set(level, [object]);
+      const wall = key.startsWith("wall:");
+      if (!wall && !key.startsWith("column:")) continue;
+      let entry = byLevel.get(level);
+      if (!entry) byLevel.set(level, (entry = { walls: [], around: [] }));
+      if (wall) entry.walls.push(object);
+      entry.around.push(object);
     }
-    for (const walls of byLevel.values()) {
+    for (const { walls, around } of byLevel.values()) {
       for (const wall of walls) {
         removeInkEdges(wall);
-        addInkEdges(wall, true, walls);
+        addInkEdges(wall, true, around);
       }
     }
   }
@@ -437,15 +468,17 @@ export class PlanScene {
     return found;
   }
 
-  /** How many stairs and slabs the scene holds. */
-  get counts(): { stairs: number; slabs: number } {
+  /** How many stairs, slabs and columns the scene holds. */
+  get counts(): { stairs: number; slabs: number; columns: number } {
     let stairs = 0;
     let slabs = 0;
+    let columns = 0;
     for (const key of this.entities.keys()) {
       if (key.startsWith("stair:")) stairs++;
       else if (key.startsWith("slab:")) slabs++;
+      else if (key.startsWith("column:")) columns++;
     }
-    return { stairs, slabs };
+    return { stairs, slabs, columns };
   }
 
   private drop(entity: Entity): void {
@@ -460,13 +493,16 @@ export class PlanScene {
     for (const [key, { object }] of this.entities) {
       if (!key.startsWith("wall:")) continue;
       object.traverse((o) => {
-        if (o.userData?.doorHinge) leaves.push({ hinge: o, doorId: o.userData.doorId as string, swing: o.userData.swing as number });
+        if (!o.userData?.doorHinge) return;
+        const swing = o.userData.swing as number;
+        const pose = o.userData.garage ? (open: number) => poseGarageDoor(o, open) : (open: number) => (o.rotation.y = open * swing);
+        leaves.push({ hinge: o, doorId: o.userData.doorId as string, swing, pose });
       });
     }
     this.leaves = leaves;
     const doors = new Set(model.openings.filter((o) => o.kind === "door").map((o) => o.id));
     for (const id of this.doorState.keys()) if (!doors.has(id)) this.doorState.delete(id);
-    for (const leaf of leaves) leaf.hinge.rotation.y = (this.doorState.get(leaf.doorId)?.current ?? 0) * leaf.swing;
+    this.poseLeaves();
   }
 
   /** The door leaves in the scene now. */
@@ -498,7 +534,7 @@ export class PlanScene {
       if (Math.abs(state.target - state.current) > DOORS.settleEpsilon) moving = true;
       if (instant) state.current = state.target;
     }
-    if (instant && moving) for (const leaf of this.leaves) leaf.hinge.rotation.y = (this.doorState.get(leaf.doorId)?.current ?? 0) * leaf.swing;
+    if (instant && moving) this.poseLeaves();
     return moving;
   }
 
@@ -513,8 +549,13 @@ export class PlanScene {
       state.current += (state.target - state.current) * Math.min(1, dt * DOORS.easeRate);
       moving = true;
     }
-    if (moving) for (const leaf of this.leaves) leaf.hinge.rotation.y = (this.doorState.get(leaf.doorId)?.current ?? 0) * leaf.swing;
+    if (moving) this.poseLeaves();
     return moving;
+  }
+
+  /** Put every leaf where its door is: a hinged one swung, a garage door's sections run along their track. */
+  private poseLeaves(): void {
+    for (const leaf of this.leaves) leaf.pose(this.doorState.get(leaf.doorId)?.current ?? 0);
   }
 
   /** How far a door is open, 0 (shut) to 1 (open). */

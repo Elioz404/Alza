@@ -7,7 +7,7 @@
  * and tested on its own, and a new one is added by writing it and listing it in RULES.
  */
 
-import type { Issue, Item, KindDef, Opening, OpeningKind, PlanModel, Room, Wall } from "./types";
+import type { Column, Issue, Item, KindDef, Opening, OpeningKind, PlanModel, Room, Wall } from "./types";
 import {
   areCollinear,
   boxOf,
@@ -49,9 +49,11 @@ import {
 } from "./shapes";
 import { sharedArea } from "./region";
 import { catalogOf, kindName, type Catalog } from "./catalog";
-import { ARC_TESSELLATION, BULGE, DOOR_SWING_DEFAULTS, DOOR_SWINGS_TOUCH, DOUBLE_DOOR_CLEAR, ROOM_SHAPE, ROOM_SIZE, SLAB_THICKNESS, STAIR, WALL_MIN_LENGTH, WALL_SLAB_TOLERANCE } from "./limits";
-import { levelAbove, levelInfo, levelSlice, levelsOf, slabUnderside, stairwellsOf, type LevelInfo, type Stairwell } from "./levels";
+import { ARC_TESSELLATION, BULGE, DOOR_SWING_DEFAULTS, DOOR_SWINGS_TOUCH, DOUBLE_DOOR_CLEAR, GARAGE_DOOR, PARKING, ROOM_SHAPE, ROOM_SIZE, SLAB_THICKNESS, STAIR, SUPPORT, WALL_MIN_LENGTH } from "./limits";
+import { levelAbove, levelBelow, levelInfo, levelSlice, levelsOf, reachesSlab, slabFit, slabUnderside, stairwellsOf, type LevelInfo, type Stairwell } from "./levels";
 import { stairGeometry } from "./stairs";
+import { columnBox, columnDistance, columnFootprint, columnHeight, columnHitsRect, columnsHit, columnWalls } from "./columns";
+import { unsupportedZones } from "./supports";
 
 const ENDPOINT_SNAP = 0.08; // endpoints closer than this count as connected
 const DOOR_CLEAR = 0.1; // furniture must keep this margin in front of openings
@@ -123,6 +125,21 @@ function leafSweep(leaf: DoorLeaf): Pt[] {
     pts.push({ x: leaf.hinge.x + leaf.r * Math.cos(a), y: leaf.hinge.y + leaf.r * Math.sin(a) });
   }
   return pts;
+}
+
+/** Whether an opening is a garage door: a sectional door that rises overhead and sweeps no floor. */
+export const isGarageDoor = (o: Pick<Opening, "kind" | "style">): boolean => o.kind === "door" && o.style === "garage";
+
+/**
+ * Why a garage door `width` wide does not fit its wall, or null: with the jamb its tracks need at
+ * either side (GARAGE_DOOR.jamb), it must be no wider than the wall is long.
+ */
+export function garageDoorFitError(wall: Wall, width: number): string | null {
+  const len = wallLength(wall);
+  const need = width + 2 * GARAGE_DOOR.jamb;
+  return need <= len + 1e-9
+    ? null
+    : `A ${width.toFixed(2)} m garage door needs ${need.toFixed(2)} m of wall with its ${(GARAGE_DOOR.jamb * 100).toFixed(0)} cm jambs, and wall ${wall.id} is ${len.toFixed(2)} m long. Make the door narrower or the wall longer.`;
 }
 
 /** Clamp an opening's t so the whole vano stays inside the wall. Returns null if the wall is too short. */
@@ -204,18 +221,29 @@ export interface CheckContext {
   /** the hosted openings of each wall, by wall id */
   readonly hostedOn: ReadonlyMap<string, readonly HostedOpening[]>;
   readonly placed: readonly PlacedItem[];
+  /** the columns standing on this level, with their bounds */
+  readonly columns: readonly PlacedColumn[];
+}
+
+/** A column with its bounds. */
+export interface PlacedColumn {
+  readonly column: Column;
+  readonly box: Box;
 }
 
 /** One check over the plan. */
 export type Rule = (ctx: CheckContext) => Issue[];
 
-/** The floor in front of an opening furniture must keep clear: a door's swing, a window's reach. */
+/**
+ * The floor in front of an opening furniture must keep clear: a door's swing, a window's reach, a
+ * garage door's threshold (its panels rise overhead, so a car may park right behind it).
+ */
 function clearanceOf(wall: Wall, o: Opening, center: Pt): ORect {
   return {
     cx: center.x,
     cy: center.y,
     hw: o.width / 2 + DOOR_CLEAR,
-    hd: wall.thickness / 2 + (o.kind === "door" ? 0.8 : 0.4),
+    hd: wall.thickness / 2 + (isGarageDoor(o) ? GARAGE_DOOR.threshold : o.kind === "door" ? 0.8 : 0.4),
     rot: (() => {
       const u = wallTangentAt(wall, o.t);
       return Math.atan2(u.y, u.x);
@@ -267,7 +295,8 @@ export function checkContext(model: PlanModel, plan: PlanModel = model, levelId:
       placed.push({ item, def, rect, box: boxOf(rectCorners(rect)) });
     }
   }
-  return { model, plan, level, above, stairs, wells, wallById, catalog, walls, hosted, hostedOn, placed };
+  const columns = model.columns.map((column): PlacedColumn => ({ column, box: columnBox(column) }));
+  return { model, plan, level, above, stairs, wells, wallById, catalog, walls, hosted, hostedOn, placed, columns };
 }
 
 /** The edges of a room's outline, straight or arcs. */
@@ -351,19 +380,20 @@ export const wallArcTooTight: Rule = ({ model }) =>
     return why ? [{ severity: "error", code: "wall_arc_too_tight", message: why, refs: [w.id] }] : [];
   });
 
-/** An endpoint that touches nothing (T-junctions count as connected). */
-export const wallLooseEnds: Rule = ({ walls }) => {
-  if (walls.length <= 1) return [];
+/** An endpoint that touches nothing (T-junctions count as connected, and so does a column it ends on). */
+export const wallLooseEnds: Rule = ({ walls, columns }) => {
+  if (walls.length + columns.length <= 1) return [];
   const issues: Issue[] = [];
   for (const { wall: w, a, b } of walls) {
     for (const end of [a, b] as const) {
-      const connected = walls.some(
-        (other) =>
-          other.wall.id !== w.id &&
-          (dist(end, other.a) < ENDPOINT_SNAP ||
-            dist(end, other.b) < ENDPOINT_SNAP ||
-            wallDistance(end, other.wall) <= ENDPOINT_SNAP),
-      );
+      const connected =
+        walls.some(
+          (other) =>
+            other.wall.id !== w.id &&
+            (dist(end, other.a) < ENDPOINT_SNAP ||
+              dist(end, other.b) < ENDPOINT_SNAP ||
+              wallDistance(end, other.wall) <= ENDPOINT_SNAP),
+        ) || columns.some(({ column }) => columnDistance(end, column) <= ENDPOINT_SNAP);
       if (!connected) {
         issues.push({
           severity: "warning",
@@ -499,11 +529,14 @@ export const roomOutline: Rule = ({ model }) =>
     return issues;
   });
 
-/** No wall near any corner of the room. */
+/** Whether a room is an open space (a carport, a porch): it is not asked for enclosing walls or a door. */
+export const isOpenRoom = (r: Pick<Room, "kind">): boolean => r.kind === "open";
+
+/** No wall near any corner of the room. An open space needs none. */
 export const roomFloating: Rule = ({ model: { rooms }, walls }) => {
   if (walls.length === 0) return [];
   return rooms
-    .filter((r) => !r.points.some((p) => walls.some((s) => wallDistance(p, s.wall) < 0.25)))
+    .filter((r) => !isOpenRoom(r) && !r.points.some((p) => walls.some((s) => wallDistance(p, s.wall) < 0.25)))
     .map((r): Issue => ({
       severity: "warning",
       code: "room_floating",
@@ -512,12 +545,13 @@ export const roomFloating: Rule = ({ model: { rooms }, walls }) => {
     }));
 };
 
-/** At least one door must sit on the room's boundary, once the plan has openings at all. */
+/** At least one door must sit on the room's boundary, once the plan has openings at all. An open space is entered from its open sides. */
 export const roomNoDoor: Rule = ({ model: { rooms, openings }, hosted }) => {
   if (openings.length === 0) return [];
   const doorCenters = hosted.filter((h) => h.opening.kind === "door").map((h) => h.center);
   return rooms
     .filter((r) => {
+      if (isOpenRoom(r)) return false;
       const edges = roomEdges(r);
       return !doorCenters.some((c) => edges.some((e) => closestOnEdge(e, c).distance < 0.3));
     })
@@ -590,7 +624,9 @@ export const itemBlocksOpening: Rule = ({ hosted, placed }) => {
         issues.push({
           severity: "error",
           code: "item_blocks_door",
-          message: `${kindName(def)} blocks the swing path of door ${o.id}.`,
+          message: isGarageDoor(o)
+            ? `${kindName(def)} stands in the threshold of garage door ${o.id}: keep ${GARAGE_DOOR.threshold} m behind it clear.`
+            : `${kindName(def)} blocks the swing path of door ${o.id}.`,
           refs: [item.id, o.id],
         });
       } else if (def.h > o.sill) {
@@ -612,7 +648,8 @@ export const itemBlocksOpening: Rule = ({ hosted, placed }) => {
  */
 export const doorsSwingTogether: Rule = ({ hosted }) => {
   const doors = hosted
-    .filter(({ opening: o }) => o.kind === "door")
+    // a garage door rises overhead: it sweeps no floor
+    .filter(({ opening: o }) => o.kind === "door" && !isGarageDoor(o))
     .map(({ opening, wall }) => {
       const sweeps = doorLeaves(wall, opening).map(leafSweep);
       return { opening, sweeps, box: boxOf(sweeps.flat()) };
@@ -850,6 +887,196 @@ export const stairsOverlap: Rule = ({ stairs }) => {
   return issues;
 };
 
+// ---------------------------------------------------------------------------- columns and parking
+// A column is checked on the level it stands on (what it is in, what it is in the way of) and
+// against the level below (what it stands on); a floor is checked against the level below it
+// (what carries it). Sanity checks with the numbers in limits.ts, not engineering.
+
+/** The floor a parked car needs: its footprint grown by PARKING's side and end clearances. */
+export const parkingClearance = (rect: ORect): ORect => ({ ...rect, hw: rect.hw + PARKING.side, hd: rect.hd + PARKING.end });
+
+/**
+ * What a column must keep out of at an opening: the drive through a garage door (its width,
+ * GARAGE_DOOR.approach either side of the wall); a hinged door's or a window's vano (a hinged
+ * door's leaves are tested on their own, columnInSwing). A column beside the jamb, in the wall,
+ * is in none of them.
+ */
+function columnKeepOut({ opening: o, wall, center, clearance }: HostedOpening): ORect {
+  if (isGarageDoor(o)) return { ...clearance, hw: o.width / 2, hd: wall.thickness / 2 + GARAGE_DOOR.approach };
+  return { ...clearance, cx: center.x, cy: center.y, hw: o.width / 2, hd: wall.thickness / 2 };
+}
+
+/** Whether a column stands in the floor a hinged door's leaves sweep (doorLeaves, leafSweep), sharing more than DOOR_SWINGS_TOUCH of it. */
+function columnInSwing(c: Column, { opening: o, wall }: HostedOpening): boolean {
+  if (o.kind !== "door" || isGarageDoor(o)) return false;
+  const section = columnFootprint(c);
+  const box = boxOf(section);
+  return doorLeaves(wall, o)
+    .map(leafSweep)
+    .some((sweep) => !boxesApart(box, boxOf(sweep)) && sharedArea(section, sweep) > DOOR_SWINGS_TOUCH);
+}
+
+const columnWord = (c: Column): string => `Column ${c.id}`;
+
+/** A column should stand on its level's floor: in one of its rooms (or on its edge), or in one of its walls. */
+export const columnOffFloor: Rule = ({ model, columns }) => {
+  if (model.rooms.length === 0 && model.walls.length === 0) return [];
+  return columns
+    .filter(({ column: c }) => !model.rooms.some((r) => inRoomNear(r, c, 0.05)) && columnWalls(model.walls, c).length === 0)
+    .map(({ column: c }): Issue => ({
+      severity: "warning",
+      code: "column_off_floor",
+      message: `${columnWord(c)} at (${c.x.toFixed(2)}, ${c.y.toFixed(2)}) stands in no room and no wall of its level: it is off the floor.`,
+      refs: [c.id],
+    }));
+};
+
+/**
+ * On a level above the ground, a column carries its load down: under it there should be a column
+ * of the level below (their sections overlapping, within SUPPORT.stack) or a wall of it, one that
+ * reaches the slab between them (levels.ts reachesSlab): a stub or a low partition carries nothing.
+ */
+export const columnUnsupported: Rule = ({ plan, level, columns }) => {
+  const below = levelBelow(plan, level.level.id);
+  if (!below || columns.length === 0) return [];
+  const h = below.level.height;
+  const walls = plan.walls.filter((w) => w.levelId === below.level.id && reachesSlab(w.height, h));
+  const under = plan.columns.filter((c) => c.levelId === below.level.id && reachesSlab(columnHeight(plan, c) ?? 0, h));
+  return columns
+    .filter(({ column: c }) => {
+      const onColumn = under.some((u) => columnDistance(c, u) <= SUPPORT.stack || columnsHit(c, u));
+      const onWall = walls.some((w) => wallDistance(c, w) <= w.thickness / 2 + SUPPORT.stack);
+      return !onColumn && !onWall;
+    })
+    .map(({ column: c }): Issue => ({
+      severity: "warning",
+      code: "column_unsupported",
+      message: `${columnWord(c)} stands on nothing on ${below.level.name}: put a column or a wall under it there, so its load reaches the ground.`,
+      refs: [c.id],
+    }));
+};
+
+/** A column in a door's way (its vano, its leaves' swing, a garage door's drive) or in a window's vano. */
+export const columnBlocksOpening: Rule = ({ hosted, columns }) => {
+  const issues: Issue[] = [];
+  for (const { column: c, box } of columns) {
+    for (const h of hosted) {
+      const zone = columnKeepOut(h);
+      const inVano = !boxesApart(box, boxOf(rectCorners(zone))) && columnHitsRect(c, zone, 0.01);
+      if (!inVano && !columnInSwing(c, h)) continue;
+      const o = h.opening;
+      issues.push(
+        o.kind === "door"
+          ? {
+              severity: "error",
+              code: "column_blocks_door",
+              message: isGarageDoor(o)
+                ? `${columnWord(c)} stands in the drive through garage door ${o.id}: keep ${GARAGE_DOOR.approach} m either side of it clear across its ${o.width.toFixed(2)} m width.`
+                : inVano
+                  ? `${columnWord(c)} stands in the doorway of door ${o.id}.`
+                  : `${columnWord(c)} blocks the swing path of door ${o.id}.`,
+              refs: [c.id, o.id],
+            }
+          : { severity: "error", code: "column_in_opening", message: `${columnWord(c)} stands in window ${o.id}.`, refs: [c.id, o.id] },
+      );
+    }
+  }
+  return issues;
+};
+
+/** A column on top of another one, a stair's flight, or a piece of furniture (a rug lies round it). */
+export const columnCollisions: Rule = ({ columns, stairs, placed }) => {
+  const issues: Issue[] = [];
+  for (let i = 0; i < columns.length; i++) {
+    const a = columns[i];
+    for (let j = i + 1; j < columns.length; j++) {
+      const b = columns[j];
+      if (!boxesApart(a.box, b.box) && columnsHit(a.column, b.column, 0.01)) {
+        issues.push({ severity: "error", code: "columns_overlap", message: `Columns ${a.column.id} and ${b.column.id} overlap.`, refs: [a.column.id, b.column.id] });
+      }
+    }
+    for (const { stair, geometry: g } of stairs) {
+      if (!boxesApart(a.box, g.box) && g.footprint.some((r) => columnHitsRect(a.column, r, 0.01))) {
+        issues.push({ severity: "error", code: "column_on_stair", message: `${columnWord(a.column)} stands in stair ${stair.id}.`, refs: [a.column.id, stair.id] });
+      }
+    }
+    for (const { item, def, rect, box } of placed) {
+      if (def.isRug || boxesApart(a.box, box) || !columnHitsRect(a.column, rect, 0.01)) continue;
+      issues.push({ severity: "error", code: "item_hits_column", message: `${kindName(def)} runs into ${columnWord(a.column).toLowerCase()}.`, refs: [item.id, a.column.id] });
+    }
+  }
+  return issues;
+};
+
+/**
+ * A parked car (a kind marked `parking`) needs PARKING's clear floor round it: no column in it,
+ * no wall through it, and, in an enclosed room, all of it inside that room — the garage it is in.
+ * An open space's open sides are where its people get out, so only its walls and columns count.
+ */
+export const parkingClear: Rule = ({ model: { rooms }, placed, walls, columns }) => {
+  const issues: Issue[] = [];
+  for (const { item, def, rect } of placed) {
+    if (!def.parking) continue;
+    const zone = parkingClearance(rect);
+    const zoneBox = boxOf(rectCorners(zone));
+    for (const { column: c, box } of columns) {
+      if (!boxesApart(box, zoneBox) && columnHitsRect(c, zone, 0.01)) {
+        issues.push({
+          severity: "error",
+          code: "column_blocks_parking",
+          message: `${columnWord(c)} stands in the ${PARKING.side} m clearance ${kindName(def)} needs at its sides (${PARKING.end} m at its ends): the doors would not open.`,
+          refs: [c.id, item.id],
+        });
+      }
+    }
+    const wall = walls.find((s) => !boxesApart(s.box, zoneBox) && wallHits(s, zone, 0.02));
+    const room = rooms.find((r) => pointInOutline(item, r.points));
+    const outside = room && !isOpenRoom(room) && !rectCorners(zone).every((p) => inRoomNear(room, p, 0.05));
+    if (wall || outside) {
+      issues.push({
+        severity: "error",
+        code: "car_does_not_fit",
+        message: `${kindName(def)} does not fit ${room ? `"${room.label}"` : "where it stands"}: with ${PARKING.side} m at its sides and ${PARKING.end} m at its ends it ${wall ? `runs into wall ${wall.wall.id}` : "reaches past the room's walls"}.`,
+        refs: wall ? [item.id, wall.wall.id] : room ? [item.id, room.id] : [item.id],
+      });
+    }
+  }
+  return issues;
+};
+
+/** A garage door wider than its wall can hold with its jambs, or sized outside a garage door's range. */
+export const garageDoorFit: Rule = ({ hosted }) =>
+  hosted.flatMap(({ opening: o, wall }): Issue[] => {
+    if (!isGarageDoor(o)) return [];
+    const wide = garageDoorFitError(wall, o.width);
+    if (wide) return [{ severity: "error", code: "garage_door_too_wide", message: wide, refs: [o.id, wall.id] }];
+    const { width, height } = GARAGE_DOOR;
+    if (o.width < width.min - 1e-9 || o.width > width.max + 1e-9 || o.height < height.min - 1e-9 || o.height > height.max + 1e-9) {
+      return [
+        {
+          severity: "warning",
+          code: "garage_door_size",
+          message: `Garage door ${o.id} is ${o.width.toFixed(2)} × ${o.height.toFixed(2)} m; a garage door is ${width.min}-${width.max} m wide and ${height.min}-${height.max} m tall.`,
+          refs: [o.id],
+        },
+      ];
+    }
+    return [];
+  });
+
+/**
+ * An upper floor must be carried: every point of its rooms within SUPPORT.span / 2 of a wall or a
+ * column of the level below (model/supports.ts). Each stretch that is not is reported once, with
+ * where it is, so a column can be put under it.
+ */
+export const slabUnsupported: Rule = ({ plan, level }) =>
+  unsupportedZones(plan, level.level.id).map((z): Issue => ({
+    severity: "warning",
+    code: "slab_unsupported",
+    message: `${z.area.toFixed(2)} m² of the floor of ${level.level.name} (x ${z.box.minX.toFixed(2)} to ${z.box.maxX.toFixed(2)}, y ${z.box.minY.toFixed(2)} to ${z.box.maxY.toFixed(2)}, around (${z.centre.x.toFixed(2)}, ${z.centre.y.toFixed(2)})) has no wall or column under it within ${(SUPPORT.span / 2).toFixed(2)} m ${Number.isFinite(z.reach) ? `(its furthest point ${z.reach.toFixed(2)} m)` : "(nothing on the level below reaches its slab)"}: put a column or a wall under it on the level below.`,
+    refs: z.rooms,
+  }));
+
 // ---------------------------------------------------------------------------- storeys
 
 /**
@@ -861,9 +1088,10 @@ export const wallSlabFit: Rule = ({ model, level, above }) => {
   if (!above) return [];
   const underside = slabUnderside(level.level.height);
   return model.walls.flatMap((w): Issue[] => {
+    const fit = slabFit(w.height, level.level.height);
+    if (fit === "meets") return [];
     const gap = underside - w.height;
-    if (Math.abs(gap) <= WALL_SLAB_TOLERANCE + 1e-9) return [];
-    return gap > 0
+    return fit === "short"
       ? [
           {
             severity: "warning",
@@ -878,6 +1106,40 @@ export const wallSlabFit: Rule = ({ model, level, above }) => {
             code: "wall_through_slab",
             message: `Wall ${w.id} is ${w.height.toFixed(2)} m tall and runs ${(-gap).toFixed(2)} m up through the floor of ${above.level.name} (the slab's underside is ${underside.toFixed(2)} m up). Lower it to ${underside.toFixed(2)} m.`,
             refs: [w.id],
+          },
+        ];
+  });
+};
+
+/**
+ * Under a level above, a column with a height of its own should reach the underside of the slab,
+ * as a wall should (wallSlabFit, the same tolerance): one that stops short carries nothing (the
+ * floor over it is checked as if it were not there), and one that runs past it stands up through
+ * that floor. A column without a height reaches the slab by definition; the top level has no slab.
+ */
+export const columnSlabFit: Rule = ({ plan, level, above, columns }) => {
+  if (!above) return [];
+  const underside = slabUnderside(level.level.height);
+  return columns.flatMap(({ column: c }): Issue[] => {
+    const height = columnHeight(plan, c);
+    if (height === undefined) return [];
+    const fit = slabFit(height, level.level.height);
+    if (fit === "meets") return [];
+    return fit === "short"
+      ? [
+          {
+            severity: "warning",
+            code: "column_short_of_slab",
+            message: `${columnWord(c)} is ${height.toFixed(2)} m tall and stops ${(underside - height).toFixed(2)} m under the ${SLAB_THICKNESS} m slab of ${above.level.name} (its underside is ${underside.toFixed(2)} m up): it carries nothing. Clear its height so it reaches the slab.`,
+            refs: [c.id],
+          },
+        ]
+      : [
+          {
+            severity: "error",
+            code: "column_through_slab",
+            message: `${columnWord(c)} is ${height.toFixed(2)} m tall and runs ${(height - underside).toFixed(2)} m up through the floor of ${above.level.name} (the slab's underside is ${underside.toFixed(2)} m up). Clear its height so it stops at the slab.`,
+            refs: [c.id],
           },
         ];
   });
@@ -917,6 +1179,14 @@ export const RULES: readonly Rule[] = Object.freeze([
   itemOnStair,
   itemOverStairwell,
   stairsOverlap,
+  columnOffFloor,
+  columnUnsupported,
+  columnSlabFit,
+  columnBlocksOpening,
+  columnCollisions,
+  parkingClear,
+  garageDoorFit,
+  slabUnsupported,
 ]);
 
 /**

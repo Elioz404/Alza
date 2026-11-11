@@ -33,6 +33,7 @@
 
 import { edgeBox, isCurved, outlineAnchor, outlineBox, outlineRect, tessellateOutline, wallEdge, wallPointAt } from "../model/shapes";
 import { wallFootprint } from "../model/joints";
+import { columnFootprint, columnHeight, isRound } from "../model/columns";
 import * as THREE from "three";
 import { ScreenLineMaterial, screenLines } from "./screenLines";
 import type { ApprovalTarget, PlanModel } from "../model/types";
@@ -84,7 +85,7 @@ export interface Focused {
 
 /** The entity the store has selected, if any. */
 export interface Selected {
-  type: "wall" | "room" | "item" | "stair";
+  type: "wall" | "room" | "item" | "stair" | "column";
   id: string;
 }
 
@@ -197,6 +198,14 @@ function flatBox(type: ApprovalTarget["type"], id: string, model: PlanModel): Ma
       }
       const { minX, minY, maxX, maxY } = g.box;
       return { cx: (minX + maxX) / 2, cz: (minY + maxY) / 2, w: maxX - minX, d: maxY - minY, y0: FLOOR_TOP, y1: FLOOR_TOP + g.rise, ry: 0 };
+    }
+    case "column": {
+      const c = model.columns.find((x) => x.id === id);
+      const h = c && columnHeight(model, c);
+      if (!c || h === undefined) return null;
+      // a round one is marked by its own outline, as it is drawn
+      if (isRound(c)) return ringBox(columnFootprint(c), 0, h, c);
+      return { cx: c.x, cz: c.y, w: c.w, d: c.d, y0: 0, y1: h, ry: (c.rotation * Math.PI) / 180 };
     }
     // a level: the extent of what stands on it, as the plan's is drawn
     case "level":

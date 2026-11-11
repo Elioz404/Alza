@@ -10,7 +10,7 @@
 
 import type { PlanModel, TargetType } from "../../model/types";
 import { catalogOf, kindName } from "../../model/catalog";
-import { openingName, stairName, wallName, type EntityRef as NamedEntityRef } from "../inspector/entities";
+import { columnName, openingName, stairName, wallName, type EntityRef as NamedEntityRef } from "../inspector/entities";
 import { placeOf as placeOfEntity } from "../../model/places";
 
 /** Something on the plan a line can point at: an entity, or one of its levels. */
@@ -31,6 +31,7 @@ export const TYPE_WORD: Record<TargetType, string> = {
   room: "room",
   item: "item",
   stair: "stair",
+  column: "column",
   level: "level",
   plan: "plan",
   file: "file",
@@ -64,6 +65,10 @@ export function entityName(model: PlanModel, ref: EntityRef): string | null {
       const st = model.stairs.find((x) => x.id === ref.id);
       return st ? stairName(model, st) : null;
     }
+    case "column": {
+      const c = model.columns.find((x) => x.id === ref.id);
+      return c ? columnName(model, c) : null;
+    }
     case "level":
       return model.levels.find((x) => x.id === ref.id)?.name ?? null;
   }
@@ -80,6 +85,7 @@ function indexOf(model: PlanModel): Map<string, EntityRef> {
   for (const r of model.rooms) map.set(r.id, { type: "room", id: r.id });
   for (const it of model.items) map.set(it.id, { type: "item", id: it.id });
   for (const st of model.stairs) map.set(st.id, { type: "stair", id: st.id });
+  for (const c of model.columns) map.set(c.id, { type: "column", id: c.id });
   for (const l of model.levels) map.set(l.id, { type: "level", id: l.id });
   indexes.set(model, map);
   return map;
@@ -94,7 +100,7 @@ export const refOf = (model: PlanModel, id: string): EntityRef | null => indexOf
  * identifier in snake_case (wall_e, item_mwa30iob_b, extend_selected_wall).
  */
 const TOKEN =
-  /\b(?:Room|room) "([^"]+)"|\b(Wall|wall|Door|door|Window|window|Item|item|Room|room|Stair|stair|Level|level) ([\w:.-]*\w)|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g;
+  /\b(?:Room|room) "([^"]+)"|\b(Wall|wall|Door|door|Window|window|Item|item|Room|room|Stair|stair|Column|column|Level|level) ([\w:.-]*\w)|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/g;
 
 const SNAKE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
 

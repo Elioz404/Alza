@@ -1,13 +1,15 @@
 /**
  * Properties for a selected wall: its geometry in metres (length, thickness, height, angle, and
  * the two end points), the doors and windows in it, each editable in place, adding a door or a
- * window, and removing the wall. Every field is one edit_wall, move_opening, set_door_swing or
- * remove_opening, the same commands an agent calls.
+ * window or a garage door, and removing the wall. Every field is one edit_wall, move_opening,
+ * update_opening, set_door_swing or remove_opening, the same commands an agent calls. A door opens
+ * on a hinged leaf or as a garage door (a sectional overhead door, which has no hinge or swing).
  */
 
 import { useId } from "react";
 import { pageActions, type WallPatch } from "../../model/store";
-import { COORD, SNAP, WALL_HEIGHT, WALL_MIN_LENGTH, WALL_THICKNESS, type Hinge, type SwingSide } from "../../model/limits";
+import { COORD, GARAGE_DOOR, OPENING_HEIGHT, OPENING_WIDTH, SNAP, WALL_HEIGHT, WALL_MIN_LENGTH, WALL_THICKNESS, type DoorStyle, type Hinge, type SwingSide } from "../../model/limits";
+import { isGarageDoor } from "../../model/issues";
 import type { Opening, Wall } from "../../model/types";
 import { useAppStore } from "../useAppStore";
 import { useNotify } from "../shell/useNotify";
@@ -27,6 +29,7 @@ import { isCurved, sagittaOf, wallArc, wallEdge } from "../../model/shapes";
 import { MeasureField, PointFields } from "./measure";
 import {
   metres,
+  openingKindName,
   openingName,
   openingOffset,
   openingTFor,
@@ -48,6 +51,15 @@ function OpeningEditor({ wall, opening, onDone }: { wall: Wall; opening: Opening
   const notify = useNotify();
   const name = useAppStore((s) => openingName(s.model, opening));
   const isDoor = opening.kind === "door";
+  const garage = isGarageDoor(opening);
+  const widths = garage ? GARAGE_DOOR.width : OPENING_WIDTH;
+  const heights = garage ? GARAGE_DOOR.height : OPENING_HEIGHT;
+  const restyle = (style: DoorStyle) => {
+    // a garage door is sized as one: a hinged door's width and height are brought into its range
+    const fit = (v: number, r: { min: number; max: number }) => Math.min(r.max, Math.max(r.min, v));
+    const size = style === "garage" ? { width: fit(opening.width, GARAGE_DOOR.width), height: fit(opening.height, GARAGE_DOOR.height) } : {};
+    commit({ type: "update_opening", id: opening.id, patch: { style, ...size } });
+  };
   const remove = () => {
     const r = commit({ type: "remove_opening", id: opening.id });
     if (r.ok) notify({ body: `${name} removed`, undoable: true });
@@ -62,7 +74,23 @@ function OpeningEditor({ wall, opening, onDone }: { wall: Wall; opening: Opening
         step={SNAP}
         onCommit={(v) => commit({ type: "move_opening", id: opening.id, t: openingTFor(wall, opening, v) })}
       />
+      <div className="insp-grid">
+        {/* named for the opening, so they never read as the wall's own Height beside them */}
+        <MeasureField label={`${openingKindName(opening)} width`} value={opening.width} min={widths.min} max={widths.max} step={SNAP} onCommit={(v) => commit({ type: "update_opening", id: opening.id, patch: { width: v } })} />
+        <MeasureField label={`${openingKindName(opening)} height`} value={opening.height} min={heights.min} max={heights.max} step={SNAP} onCommit={(v) => commit({ type: "update_opening", id: opening.id, patch: { height: v } })} />
+      </div>
       {isDoor ? (
+        <div className="insp-choice">
+          <span className="insp-choice__label" aria-hidden="true">
+            Opens as
+          </span>
+          <SegmentedControl label="Opens as" size="sm" layout="fill" value={garage ? "garage" : "swing"} onChange={(v) => restyle(v as DoorStyle)}>
+            <SegmentedControlItem value="swing" label="Hinged door" />
+            <SegmentedControlItem value="garage" label="Garage door" />
+          </SegmentedControl>
+        </div>
+      ) : null}
+      {isDoor && !garage ? (
         <div className="insp-grid">
           <div className="insp-choice">
             <span className="insp-choice__label" aria-hidden="true">
@@ -97,8 +125,11 @@ function OpeningEditor({ wall, opening, onDone }: { wall: Wall; opening: Opening
         </div>
       ) : null}
       <p className="insp-help">
-        {isDoor ? "Left and right as seen walking from the wall's start to its end. " : ""}
-        Width and height are set when it is added.
+        {garage
+          ? `A sectional door: it rises overhead, so it has no hinge or swing. Between ${metres(GARAGE_DOOR.width.min)} and ${metres(GARAGE_DOOR.width.max)} wide.`
+          : isDoor
+            ? "Left and right as seen walking from the wall's start to its end."
+            : "Its sill is set when it is added."}
       </p>
       <div className="insp-row insp-row--spread">
         <Button size="sm" variant="danger-quiet" icon={IconTrash} onClick={remove}>
@@ -138,6 +169,7 @@ function OpeningsOnWall({ wall }: { wall: Wall }) {
                   <span className="insp-opening__main">
                     <span className="insp-opening__name">{openingName(all, o)}</span>
                     <span className="insp-opening__meta num">
+                      {isGarageDoor(o) ? "Garage door, " : ""}
                       {metres(o.width)} wide, {metres(Math.max(0, openingOffset(wall, o)))} from the start
                       {o.kind === "window" ? `, sill ${metres(o.sill)}` : ""}
                     </span>
@@ -154,7 +186,7 @@ function OpeningsOnWall({ wall }: { wall: Wall }) {
                   </Button>
                 </div>
                 {open ? (
-                  <div id={`${editorId}-${o.id}`}>
+                  <div id={`${editorId}-${o.id}`} role="group" aria-label={openingName(all, o)}>
                     <OpeningEditor wall={wall} opening={o} onDone={() => setEditing(null)} />
                   </div>
                 ) : null}
@@ -169,6 +201,9 @@ function OpeningsOnWall({ wall }: { wall: Wall }) {
         </Button>
         <Button size="sm" icon={IconPlus} onClick={() => commit({ type: "add_window", wallId: wall.id, t: 0.5 })}>
           Window
+        </Button>
+        <Button size="sm" icon={IconPlus} onClick={() => commit({ type: "add_door", wallId: wall.id, t: 0.5, style: "garage" })}>
+          Garage door
         </Button>
       </div>
     </Section>

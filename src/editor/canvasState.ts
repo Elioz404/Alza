@@ -1,7 +1,7 @@
 /**
  * The plan canvas's own state, outside any component: where the view looks (pan and zoom), the
  * size of the canvas, the tools the editor adds to the store's draw modes (pan, door, window,
- * stair),
+ * stair, column),
  * and whether the agent's revision marks are shown.
  *
  * It lives here rather than in Editor.tsx so the canvas overlays (zoom, hint bar, legend) and
@@ -19,6 +19,8 @@ import { bus, EVENTS } from "../model/sceneBus";
 import { centreOf, type EntityRef } from "../ui/activity/entities";
 import { stairGeometryIn } from "../model/levels";
 import { outlineBox } from "../model/shapes";
+import { columnBox } from "../model/columns";
+import { snap } from "../model/geometry";
 
 /** The view: the world point at the canvas's top-left corner and the zoom, in pixels per metre. */
 export interface PlanView {
@@ -46,7 +48,7 @@ const FIT_MARGIN_PX = 96;
  * The tools the editor has beyond the store's draw modes. While one is set, the store's draw
  * mode is "select"; choosing a draw mode clears it.
  */
-export type PlanTool = "pan" | "door" | "window" | "stair";
+export type PlanTool = "pan" | "door" | "window" | "stair" | "column";
 
 /** The tool in use, whichever of the two places holds it. */
 export type ActiveTool = "select" | "wall" | "room" | "place" | PlanTool;
@@ -72,6 +74,8 @@ export interface CanvasState {
   roomDraft: readonly Pt[] | null;
   /** the room tool's keyboard cross: where C puts the next corner; null until an arrow moves it */
   roomCursor: Pt | null;
+  /** the column tool's keyboard cross: where Enter puts the next column; null until an arrow moves it */
+  columnCursor: Pt | null;
 }
 
 interface Pt {
@@ -90,6 +94,7 @@ export const canvasStore = createStore<CanvasState>(() => ({
   stairRotation: 0,
   roomDraft: null,
   roomCursor: null,
+  columnCursor: null,
 }));
 
 /** Read a slice of the canvas state from React. */
@@ -114,6 +119,8 @@ store.subscribe((s, prev) => {
   }
   // a whole plan arriving on an empty sheet (the demo, a loaded plan) is shown whole; a first
   // wall or room drawn by hand is one entity and leaves the view where the hand is
+  // the column tool's cross belongs to the level it was moved on
+  if (s.editor.activeLevelId !== prev.editor.activeLevelId && canvasStore.getState().columnCursor) canvasStore.setState({ columnCursor: null });
   if (!canvasStore.getState().size) return;
   const loaded = s.activity !== prev.activity && s.activity.at(-1)?.tool === "load_model" && s.activity.at(-1)?.ok;
   if (loaded || (s.model !== prev.model && entityCount(prev.model) === 0 && entityCount(s.model) > 1)) fitPlan(s.model);
@@ -125,7 +132,8 @@ export const activeTool = (drawMode: ActiveTool, tool: PlanTool | null): ActiveT
 /** Pick one of the editor's own tools (or none, which leaves the store's draw mode in charge). */
 export function setPlanTool(tool: PlanTool | null): void {
   if (tool) pageActions.setDrawMode("select");
-  canvasStore.setState({ tool });
+  // the column tool's cross is the tool's: it goes when the tool is put down
+  canvasStore.setState(tool === "column" ? { tool } : { tool, columnCursor: null });
 }
 
 export const usePlanTool = (): PlanTool | null => useCanvas((s) => s.tool);
@@ -204,6 +212,11 @@ export function planBounds(model: PlanModel): { minX: number; minY: number; maxX
     const reach = k ? Math.hypot(k.w, k.d) / 2 : 0;
     xs.push(it.x - reach, it.x + reach);
     ys.push(it.y - reach, it.y + reach);
+  }
+  for (const c of model.columns) {
+    const b = columnBox(c);
+    xs.push(b.minX, b.maxX);
+    ys.push(b.minY, b.maxY);
   }
   for (const st of model.stairs) {
     const g = stairGeometryIn(model, st);
@@ -296,6 +309,38 @@ export function placeStairAt(x: number, y: number): boolean {
   setPlanTool(null);
   if (typeof r.id === "string") pageActions.selectStair(r.id);
   return true;
+}
+
+/**
+ * Put a column down centred at (x, y) on the level being worked on, as the human, with the
+ * default section (limits.ts COLUMN). The column tool stays in hand, so a row goes down click by
+ * click. Returns the new column's id, or null when it was refused.
+ */
+export function placeColumnAt(x: number, y: number): string | null {
+  const r = dispatch({ type: "add_column", spec: { x, y } }, { actor: "human" });
+  return r.ok && typeof r.id === "string" ? r.id : null;
+}
+
+/** The middle of the plan as it is shown, on the plan's grid. */
+export function viewCentre(): { x: number; y: number } {
+  const { view, size } = canvasStore.getState();
+  // until the canvas has been laid out, the middle of the plan itself
+  const c = size && size.w > 0 && size.h > 0 ? worldAt(view, size.w / 2, size.h / 2) : planCentre(store.getState().model);
+  return { x: snap(c.x), y: snap(c.y) };
+}
+
+/**
+ * The column tool picked from the keyboard (P, by the plan's listener or the shell's): its cross
+ * starts in the middle of the view, so its aim is drawn and lettered before the first Enter.
+ */
+export function pickColumnToolByKey(): void {
+  setPlanTool("column");
+  setColumnCursor(viewCentre());
+}
+
+/** Move the column tool's keyboard cross (null puts it away). */
+export function setColumnCursor(at: Pt | null): void {
+  if (canvasStore.getState().columnCursor !== at) canvasStore.setState({ columnCursor: at });
 }
 
 /** Ask the view that is showing (the plan or the 3D view) to put the held piece in its middle. */

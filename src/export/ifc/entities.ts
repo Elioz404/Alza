@@ -24,8 +24,10 @@ type Placement3 = Ref<"IFCAXIS2PLACEMENT3D">;
 type Placement2 = Ref<"IFCAXIS2PLACEMENT2D">;
 export type LocalPlacement = Ref<"IFCLOCALPLACEMENT">;
 export type Context = Ref<"IFCGEOMETRICREPRESENTATIONCONTEXT"> | Ref<"IFCGEOMETRICREPRESENTATIONSUBCONTEXT">;
-type Profile = Ref<"IFCRECTANGLEPROFILEDEF"> | Ref<"IFCARBITRARYCLOSEDPROFILEDEF">;
+type Profile = Ref<"IFCRECTANGLEPROFILEDEF"> | Ref<"IFCARBITRARYCLOSEDPROFILEDEF"> | Ref<"IFCCIRCLEPROFILEDEF">;
 type Solid = Ref<"IFCEXTRUDEDAREASOLID">;
+/** A body made by subtracting solids from a solid (IfcBooleanResult, DIFFERENCE). */
+export type Csg = Ref<"IFCBOOLEANRESULT">;
 type Curve = Ref<"IFCPOLYLINE"> | Ref<"IFCINDEXEDPOLYCURVE">;
 type Representation = Ref<"IFCSHAPEREPRESENTATION">;
 export type ProductShape = Ref<"IFCPRODUCTDEFINITIONSHAPE">;
@@ -127,6 +129,19 @@ export class IfcEntities {
     return this.file.add("IFCRECTANGLEPROFILEDEF", [enumv("AREA"), UNSET, this.placement2(centre, refDirection), positiveLength(xDim, "XDim"), positiveLength(yDim, "YDim")]);
   }
 
+  /** IfcCircleProfileDef: ProfileType, ProfileName, Position, Radius. */
+  circle(centre: readonly [number, number], radius: number): Profile {
+    return this.file.add("IFCCIRCLEPROFILEDEF", [enumv("AREA"), UNSET, this.placement2(centre), positiveLength(radius, "Radius")]);
+  }
+
+  /**
+   * IfcBooleanResult: Operator, FirstOperand, SecondOperand — `from` less every one of `less`,
+   * one DIFFERENCE each, the first operand of each the result of the one before.
+   */
+  difference(from: Solid | Csg, less: readonly Solid[]): Solid | Csg {
+    return less.reduce<Solid | Csg>((first, second) => this.file.add("IFCBOOLEANRESULT", [enumv("DIFFERENCE"), first, second]), from);
+  }
+
   /**
    * IfcArbitraryClosedProfileDef: ProfileType, ProfileName, OuterCurve: the area inside a
    * closed polyline through `corners` (at least three, in order, the last joined to the first).
@@ -167,7 +182,7 @@ export class IfcEntities {
   }
 
   /** IfcShapeRepresentation: ContextOfItems, RepresentationIdentifier, RepresentationType, Items. */
-  shapeRepresentation(context: Context, identifier: string, type: string, items: readonly (Solid | Curve)[]): Representation {
+  shapeRepresentation(context: Context, identifier: string, type: string, items: readonly (Solid | Csg | Curve)[]): Representation {
     return this.file.add("IFCSHAPEREPRESENTATION", [context, str(identifier), str(type), list(items)]);
   }
 
@@ -225,8 +240,8 @@ export class IfcEntities {
   }
 
   /** IfcSpace: IfcProduct's seven, LongName, CompositionType, PredefinedType, ElevationWithFlooring. */
-  space(guid: string, name: string, longName: string, placement: LocalPlacement, shape: ProductShape): Ref<"IFCSPACE"> {
-    return this.file.add("IFCSPACE", [...rooted(guid, name), ...product(undefined, placement, shape), boundedText(longName, "LongName"), enumv("ELEMENT"), enumv("SPACE"), UNSET]);
+  space(guid: string, name: string, longName: string, placement: LocalPlacement, shape: ProductShape, type = "SPACE"): Ref<"IFCSPACE"> {
+    return this.file.add("IFCSPACE", [...rooted(guid, name), ...product(undefined, placement, shape), boundedText(longName, "LongName"), enumv("ELEMENT"), enumv(type), UNSET]);
   }
 
   // ------------------------------------------------------------------ elements
@@ -247,8 +262,10 @@ export class IfcEntities {
   }
 
   /** IfcDoor: IfcElement's eight, OverallHeight, OverallWidth, PredefinedType, OperationType, UserDefinedOperationType. */
-  door(e: ElementHead, height: number, width: number, operation: string): Ref<"IFCDOOR"> {
-    return this.file.add("IFCDOOR", [...elementHead(e), positiveLength(height, "OverallHeight"), positiveLength(width, "OverallWidth"), enumv("DOOR"), enumv(operation), UNSET]);
+  /** `userDefined` names an operation IFC4 has no value for: OperationType is then USERDEFINED. */
+  door(e: ElementHead, height: number, width: number, operation: string, userDefined?: string): Ref<"IFCDOOR"> {
+    const op = userDefined === undefined ? enumv(operation) : enumv("USERDEFINED");
+    return this.file.add("IFCDOOR", [...elementHead(e), positiveLength(height, "OverallHeight"), positiveLength(width, "OverallWidth"), enumv("DOOR"), op, opt(userDefined, (u) => boundedText(u, "UserDefinedOperationType"))]);
   }
 
   /** IfcWindow: IfcElement's eight, OverallHeight, OverallWidth, PredefinedType, PartitioningType, UserDefinedPartitioningType. */
@@ -272,6 +289,9 @@ export class IfcEntities {
   }
 
   /** IfcFurniture: IfcElement's eight, PredefinedType. */
+  column(e: ElementHead, type: string): Ref<"IFCCOLUMN"> {
+    return this.file.add("IFCCOLUMN", [...elementHead(e), enumv(type)]);
+  }
   furniture(e: ElementHead, type: string): Ref<"IFCFURNITURE"> {
     return this.file.add("IFCFURNITURE", [...elementHead(e), enumv(type)]);
   }

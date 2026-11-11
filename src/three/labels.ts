@@ -4,7 +4,7 @@
  * paper chip that keeps it legible over any finish or piece — the selected room's in the accent,
  * and a room a pending request would remove flagged as the plan flags it. The name stands a
  * little along the room's longer side from its centre (LABELS.pendantClear), clear of where the
- * pendant hangs.
+ * pendant hangs, and off any car parked in the room, which would otherwise wear it on its roof.
  *
  * They are HTML over the canvas, not textures in the scene: crisp at any zoom, set in the page's
  * own drawing face, and free of any canvas text rendering. Each one is placed after a frame is
@@ -22,10 +22,12 @@
  * already have, with the rooms themselves, in the 2D view and the panels.
  */
 
-import { outlineAnchor, outlineBounds, outlineRect } from "../model/shapes";
+import { outlineAnchor, outlineBounds, outlineDistance, outlineRect, pointInOutline } from "../model/shapes";
 import * as THREE from "three";
 import type { PendingApproval, PlanModel, Room } from "../model/types";
 import { elevationOf } from "../model/levels";
+import { catalogOf } from "../model/catalog";
+import { pointInORect, type ORect } from "../model/geometry";
 import { FLOOR_TOP, LABELS } from "./config";
 
 /** Where one name goes on screen, in CSS pixels from the canvas's top left, and whether it shows. */
@@ -45,9 +47,42 @@ const scratch = {
 
 /**
  * Where on the plan a room's name stands: LABELS.pendantClear from the room's centre along its
- * longer side (toward its east or south end), never past LABELS.maxShift of its half-length.
+ * longer side (toward its east or south end), never past LABELS.maxShift of its half-length; and,
+ * where that is on a car parked in it (`parked`, parkedIn), the nearest point clear of the cars.
  */
-export function labelAnchor(room: Room): { x: number; z: number } {
+export function labelAnchor(room: Room, parked: readonly ORect[] = []): { x: number; z: number } {
+  const at = centreAnchor(room);
+  if (parked.length === 0) return at;
+  const grown = parked.map((r) => ({ ...r, hw: r.hw + LABELS.itemClear, hd: r.hd + LABELS.itemClear }));
+  const clear = (p: { x: number; y: number }) => !grown.some((r) => pointInORect(p, r));
+  if (clear({ x: at.x, y: at.z })) return at;
+  // the nearest point of the room clear of the cars and of its edge, on a grid
+  const box = outlineBounds(room.points);
+  const step = LABELS.searchStep;
+  let best: { x: number; z: number; d: number } | null = null;
+  for (let x = box.x + step / 2; x < box.x + box.w; x += step) {
+    for (let y = box.y + step / 2; y < box.y + box.h; y += step) {
+      const p = { x, y };
+      if (!clear(p) || !pointInOutline(p, room.points) || outlineDistance(p, room.points) < LABELS.wallClear) continue;
+      const d = Math.hypot(x - at.x, y - at.z);
+      if (!best || d < best.d) best = { x, z: y, d };
+    }
+  }
+  return best ? { x: best.x, z: best.z } : at;
+}
+
+/** The cars parked in a room (a kind marked `parking`, standing in it): their footprints, which its name keeps off. */
+export function parkedIn(model: PlanModel, room: Room): ORect[] {
+  const catalog = catalogOf(model);
+  return model.items.flatMap((i): ORect[] => {
+    const def = catalog.get(i.kind);
+    if (!def?.parking || i.levelId !== room.levelId || !pointInOutline(i, room.points)) return [];
+    return [{ cx: i.x, cy: i.y, hw: def.w / 2, hd: def.d / 2, rot: (-i.rotation * Math.PI) / 180 }];
+  });
+}
+
+/** The name's spot by the room's shape alone. */
+function centreAnchor(room: Room): { x: number; z: number } {
   const r = outlineRect(room.points);
   if (!r) {
     // any other outline: its most interior point, the pendant's spot (build.ts roomMiddle), moved
@@ -79,8 +114,8 @@ export function placeLabel(
   cut: number | null,
   level: number = FLOOR_TOP + LABELS.lift,
   textHeight = 0,
+  at: { x: number; z: number } = labelAnchor(room),
 ): LabelSpot {
-  const at = labelAnchor(room);
   const anchor = scratch.anchor.set(at.x, level, at.z);
   const hidden: LabelSpot = { x: 0, y: 0, visible: false };
   camera.updateMatrixWorld();
@@ -138,6 +173,8 @@ interface LabelNode {
   width: number;
   height: number;
   room: Room;
+  /** where on the plan its name stands (labelAnchor, off any car parked there) */
+  anchor: { x: number; z: number };
   /** how far up the room's floor stands: its level's elevation */
   floor: number;
   x: number;
@@ -176,10 +213,11 @@ export class RoomLabels {
         el.append(name, flag);
         el.hidden = true;
         this.layer.appendChild(el);
-        node = { el, name, flag, text: "", width: 0, height: 0, room, floor: 0, x: NaN, y: NaN, visible: false };
+        node = { el, name, flag, text: "", width: 0, height: 0, room, anchor: { x: 0, z: 0 }, floor: 0, x: NaN, y: NaN, visible: false };
         this.nodes.set(room.id, node);
       }
       node.room = room;
+      node.anchor = labelAnchor(room, parkedIn(model, room));
       node.floor = elevationOf(model, room.levelId);
       if (node.text !== room.label) {
         node.text = room.label;
@@ -225,8 +263,8 @@ export class RoomLabels {
       }
       const floor = node.floor + FLOOR_TOP + LABELS.lift;
       const lid = typeof top === "number" ? (cut ?? top) : top(node.room);
-      let spot = placeLabel(node.room, camera, width, height, node.width, this.raycaster, occluders, cut, floor, node.height);
-      if (!spot.visible && lid !== null) spot = placeLabel(node.room, camera, width, height, node.width, this.raycaster, occluders, cut, lid + LABELS.lift, node.height);
+      let spot = placeLabel(node.room, camera, width, height, node.width, this.raycaster, occluders, cut, floor, node.height, node.anchor);
+      if (!spot.visible && lid !== null) spot = placeLabel(node.room, camera, width, height, node.width, this.raycaster, occluders, cut, lid + LABELS.lift, node.height, node.anchor);
       if (spot.visible !== node.visible) {
         node.visible = spot.visible;
         node.el.hidden = !spot.visible;

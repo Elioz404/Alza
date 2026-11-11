@@ -23,6 +23,7 @@ const NOUN: Record<ApprovalTarget["type"], string> = {
   room: "room",
   item: "item",
   stair: "stair",
+  column: "column",
   level: "level",
   plan: "plan",
   file: "file",

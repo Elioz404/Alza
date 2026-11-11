@@ -494,7 +494,7 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
   const drawn = (h: THREE.Intersection): boolean => {
     const cut = cutLevel();
     const type = cut !== null && h.point.y > cut ? plan.entityOf(h.object)?.type : undefined;
-    if (type === "wall" || type === "stair") return false;
+    if (type === "wall" || type === "stair" || type === "column") return false;
     for (let n: THREE.Object3D | null = h.object; n; n = n.parent) if (!n.visible) return false;
     return true;
   };
@@ -532,6 +532,7 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       if (entity?.type === "wall") pageActions.selectWall(entity.id);
       else if (entity?.type === "room") pageActions.selectRoom(entity.id);
       else if (entity?.type === "stair") pageActions.selectStair(entity.id);
+      else if (entity?.type === "column") pageActions.selectColumn(entity.id);
       else pageActions.selectItem(entity?.id ?? null);
       return;
     }
@@ -638,8 +639,7 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     edges: style.edges,
     moving: move.active,
     levels: { total: model.levels.length, shown: [...shownIds] },
-    stairs: plan.counts.stairs,
-    slabs: plan.counts.slabs,
+    ...plan.counts,
     walker: mode === "walk" ? { level: walkerLevel(), floor: walker.height, eye: walkPos.y } : null,
   });
   sceneProbe.read = stats;

@@ -157,7 +157,7 @@ describe("storeys in the scene", () => {
     const [ground, first] = levelsOf(m);
     expect(scene.levelGroups.get(ground.level.id)!.position.y).toBe(0);
     expect(scene.levelGroups.get(first.level.id)!.position.y).toBeCloseTo(first.elevation);
-    expect(scene.counts).toEqual({ stairs: 1, slabs: 1 });
+    expect(scene.counts).toEqual({ stairs: 1, slabs: 1, columns: 0 });
     const stair = m.stairs[0];
     const g = stairGeometryIn(m, stair)!;
     // beside the stairwell, the landing's floor; over the stairwell, down through the void to a tread
@@ -263,7 +263,7 @@ describe("storeys in the scene", () => {
     const scene = new PlanScene();
     const m = seedLoft();
     scene.update(m);
-    expect(scene.counts).toEqual({ stairs: 0, slabs: 0 });
+    expect(scene.counts).toEqual({ stairs: 0, slabs: 0, columns: 0 });
     expect(scene.levelGroups.size).toBe(1);
     scene.dispose();
   });

@@ -9,7 +9,7 @@
 
 import type { PlanModel } from "./types";
 import { outlineBounds } from "./shapes";
-import { BULGE, COORD, FURNITURE_DIM, LEVEL_HEIGHT, OPENING_HEIGHT, OPENING_SILL, OPENING_T, OPENING_WIDTH, ROOM_SIZE, ROTATION, STAIR, WALL_HEIGHT, WALL_THICKNESS, rangeError, type Range } from "./limits";
+import { BULGE, COLUMN, COORD, FURNITURE_DIM, LEVEL_HEIGHT, OPENING_HEIGHT, OPENING_SILL, OPENING_T, OPENING_WIDTH, ROOM_SIZE, ROTATION, STAIR, WALL_HEIGHT, WALL_THICKNESS, rangeError, type Range } from "./limits";
 
 type Check = readonly [field: string, value: number | undefined, range: Range];
 
@@ -82,6 +82,16 @@ export function planRangeErrors(model: PlanModel): string[] {
       ["risers", s.risers, STAIR.risers],
       ["split", s.split, STAIR.risers],
       ["tread", s.tread, STAIR.treadSet],
+    ]);
+  }
+  for (const c of model.columns) {
+    check(`column ${c.id}`, [
+      ["x", c.x, COORD],
+      ["y", c.y, COORD],
+      ["w", c.w, COLUMN.size],
+      ["d", c.d, COLUMN.size],
+      ["rotation", c.rotation, ROTATION],
+      ["height", c.height, COLUMN.height],
     ]);
   }
   return out;

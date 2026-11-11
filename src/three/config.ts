@@ -463,6 +463,14 @@ export const LABELS = Object.freeze({
   pendantClear: 0.6,
   /** the anchor never moves further from the centre than this share of the room's half-length */
   maxShift: 0.5,
+  /**
+   * off a parked car: a name that would stand on one moves to the nearest point of its room at
+   * least `itemClear` from the car's footprint and `wallClear` from the room's edge, looked for on
+   * a grid of `searchStep` metres
+   */
+  itemClear: 0.3,
+  wallClear: 0.3,
+  searchStep: 0.1,
 });
 
 /**
@@ -560,6 +568,71 @@ export const WALL_SOLID = Object.freeze({
   skirtingHeight: 0.09,
   capProud: 0.01,
   capHeight: 0.03,
+  /**
+   * the shortest stretch of a wall built, metres, along it or up it: a column whose post comes
+   * within it of the wall's end takes the end, so no sliver of wall is left past its face
+   */
+  minPiece: 0.005,
+});
+
+/**
+ * The pieces a door or a window is built of in its vano (build.ts): all of them inside the rough
+ * opening, under its lintel and over its sill, so no two of them share a face's plane — the head
+ * hangs under the lintel, a window's stone sill lies under its frame's foot and the masonry under
+ * the window stops at the stone's underside (no coplanar faces fighting for depth at a distance).
+ *
+ * A frame's jambs and head are `doorFrame` or `windowFrame` wide and stand `frameProud` past each
+ * face of the wall: past the skirting (WALL_SOLID.skirtingProud), which dies into the architrave.
+ * A window's head and foot run between its jambs. Its pane is `pane.thickness` thick, `pane.inset`
+ * inside the frame. The stone sill is `sill.thickness` deep, reaches `sill.overhang` past the vano
+ * at each end (into the masonry beside it) and stands `sill.proud` past each face. A door leaf
+ * hangs between the jambs, `leafGap` under the head.
+ *
+ * A window's curtains (where nothing stands in front of it) hang from a rod `rodOver` over its
+ * head, `rodBeyond` past the vano at each end; each panel is `slats` slats `slat` wide, `step`
+ * apart, at two depths `fold` apart, reaching `panelOut` past the vano, from `drop` under the
+ * rod down to `hem` over the floor, hung `clear` in front of the stone sill.
+ */
+export const OPENING_PIECES = Object.freeze({
+  windowFrame: 0.05,
+  doorFrame: 0.06,
+  frameProud: 0.02,
+  pane: Object.freeze({ thickness: 0.02, inset: 0.02 }),
+  sill: Object.freeze({ thickness: 0.045, overhang: 0.07, proud: 0.08 }),
+  leafGap: 0.01,
+  curtain: Object.freeze({
+    rodOver: 0.16,
+    rodBeyond: 0.22,
+    rodRadius: 0.017,
+    rodSides: 10,
+    slats: 4,
+    slat: 0.085,
+    slatDepth: 0.055,
+    step: 0.082,
+    fold: 0.06,
+    panelOut: 0.19,
+    drop: 0.05,
+    hem: 0.06,
+    clear: 0.01,
+  }),
+});
+
+/**
+ * A sectional garage door as the model builds it (build.ts): horizontal sections about `section`
+ * tall (as many as the door's height holds), `thickness` thick, `gap` apart, between the jambs and
+ * under the head, standing `inset` in from the wall's inside face; each section carries a rib
+ * `rib.height` tall standing `rib.proud` off its outside face, `rib.inset` in from its ends. Opened
+ * (set_doors), the sections run up their tracks and back under the ceiling, into the garage: the
+ * inside is the side of the wall a room is on (an enclosed one first), found `insideProbe` metres
+ * past the wall's face.
+ */
+export const GARAGE_DOOR_MODEL = Object.freeze({
+  section: 0.53,
+  thickness: 0.045,
+  gap: 0.006,
+  inset: 0.01,
+  rib: Object.freeze({ height: 0.05, proud: 0.006, inset: 0.1 }),
+  insideProbe: 0.5,
 });
 
 /** A pointer that travels further than this between press and click was a drag, not a click. */

@@ -84,6 +84,8 @@ const sheet = {
   floorTile: oklch(95.4, 0.006, 230),
   floorTileJoint: oklch(88, 0.009, 230),
   floorConcrete: oklch(92.6, 0.003, 85),
+  /** an open space's hatch (a carport, a porch: no walls close it off), lighter than any floor's linework */
+  openHatch: oklch(84, 0.006, 85),
   agentHatch: oklch(80, 0.05, 192),
   destructiveHatch: oklch(80, 0.07, 27),
   /**
@@ -135,6 +137,7 @@ const dark = {
   floorOak: oklch(27, 0.02, 70),
   floorCarpet: oklch(26, 0.015, 145),
   floorTile: oklch(26, 0.01, 230),
+  openHatch: oklch(33, 0.008, 85),
   ghost: oklch(56, 0.03, 220),
   /** the session's tabs, lightened to hold 4.5:1 on the graphite paper as the light ones do on theirs */
   tabs: [oklch(73, 0.13, 300), oklch(75, 0.12, 65), oklch(73, 0.14, 340), oklch(74, 0.12, 140)],

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { boundedText, encodeString, formatReal, positiveLength, StepFile, str, real, int, enumv, UNSET, DERIVED, list, typed, bool } from "../src/export/ifc/step";
 import { compressGuid, ifcGuid, GuidRegistry, IFC_GUID } from "../src/export/ifc/guid";
 import { IfcExportRefused, writeIfc } from "../src/export/ifc";
-import { doorFacing, doorOperation, wallIsExternal } from "../src/export/ifc/model";
+import { columnIsExternal, doorFacing, doorOperation, wallIsExternal } from "../src/export/ifc/model";
 import { cleanText } from "../src/model/text";
 import { exportFileName } from "../src/export/download";
 import { seedLoft, seedTownhouse, FIRST_LEVEL_ID } from "../src/model/seed";
@@ -24,6 +24,8 @@ import { runTool } from "../src/mcp/tools";
 import { resetStore, flush } from "./support/store";
 import { isCurved, outlineAnchor, outlineBounds, outlinePerimeter, outlineRect, rectOutline, roomArea, wallArc, wallLength, wallPointAt } from "../src/model/shapes";
 import { seedCrescent, CRESCENT_FIRST_LEVEL_ID } from "../src/model/demoCrescent";
+import { columnFootprint, columnWalls } from "../src/model/columns";
+import { wallPosts } from "../src/model/columnCuts";
 
 /** a moment in local time: the header writes the local date and time */
 const NOW = new Date(2026, 10, 10, 9, 30, 0);
@@ -113,12 +115,19 @@ const frameOf = (c: IfcCheck, e: StepEntity): Frame => worldFrame(c, c.deref(c.a
 /** An IFC world direction on the plan (y down the sheet). */
 const onPlan = (x: number, y: number): [number, number] => [x, -y];
 
-/** One extruded solid of a product's body, in the world: its outline seen from above (plan coordinates) and its height range. */
+/**
+ * One extruded solid of a product's body, in the world: its outline seen from above (plan
+ * coordinates) and its height range; for a boolean DIFFERENCE, its first operand's, with the
+ * solids it is less of.
+ */
 interface Solid {
   outline: Poly;
   z0: number;
   z1: number;
+  less: Solid[];
 }
+/** The sides a circle profile is read as. */
+const CIRCLE_SIDES = 96;
 /** `step`: the angle an arc of an indexed curve is cut at, radians (curvePoints). */
 function solidsOf(c: IfcCheck, product: StepEntity, step?: number): Solid[] {
   const frame = frameOf(c, product);
@@ -126,35 +135,45 @@ function solidsOf(c: IfcCheck, product: StepEntity, step?: number): Solid[] {
   if (!shape) return [];
   const body = refs(shape.attrs[2]).map((r) => c.deref(r)!).find((rep) => get(c, rep, "RepresentationIdentifier") === "Body");
   if (!body) return [];
-  return refs(c.attr(body, "Items")).map((r) => {
-    const solid = c.deref(r)!;
-    const position = c.deref(c.attr(solid, "Position"))!;
-    const [px, py, pz] = numbers(c, position.attrs[0]);
-    const at = compose(frame, px, py, pz, 0);
-    const profile = c.deref(c.attr(solid, "SweptArea"))!;
-    let local: [number, number][];
-    if (profile.type === "IFCRECTANGLEPROFILEDEF") {
-      const p2 = c.deref(c.attr(profile, "Position"))!;
-      const [cx, cy] = numbers(c, p2.attrs[0]);
-      const a = angleOf(c, p2.attrs[1]);
-      const hx = (get(c, profile, "XDim") as number) / 2;
-      const hy = (get(c, profile, "YDim") as number) / 2;
-      local = [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]].map(([x, y]) => [cx + x * Math.cos(a) - y * Math.sin(a), cy + x * Math.sin(a) + y * Math.cos(a)]);
-    } else {
-      // a polyline, or an indexed curve with arcs (cut into degrees by the checker)
-      local = curvePoints(c, c.deref(c.attr(profile, "OuterCurve"))!, step);
-    }
-    const outline = local.map(([x, y]) => {
-      const w = compose(at, x, y, 0, 0);
-      const [planX, planY] = onPlan(w.x, w.y);
-      return { x: planX, y: planY };
-    });
-    return { outline, z0: at.z, z1: at.z + (get(c, solid, "Depth") as number) };
-  });
+  return refs(c.attr(body, "Items")).map((r) => solidIn(c, frame, c.deref(r)!, step));
 }
-/** Whether plan point (x, y) at height z is inside a convex outline's prism. */
+function solidIn(c: IfcCheck, frame: Frame, solid: StepEntity, step?: number): Solid {
+  if (solid.type === "IFCBOOLEANRESULT") {
+    expect(get(c, solid, "Operator")).toBe("DIFFERENCE");
+    const first = solidIn(c, frame, c.deref(c.attr(solid, "FirstOperand"))!, step);
+    return { ...first, less: [...first.less, solidIn(c, frame, c.deref(c.attr(solid, "SecondOperand"))!, step)] };
+  }
+  const position = c.deref(c.attr(solid, "Position"))!;
+  const [px, py, pz] = numbers(c, position.attrs[0]);
+  const at = compose(frame, px, py, pz, 0);
+  const profile = c.deref(c.attr(solid, "SweptArea"))!;
+  let local: [number, number][];
+  if (profile.type === "IFCRECTANGLEPROFILEDEF") {
+    const p2 = c.deref(c.attr(profile, "Position"))!;
+    const [cx, cy] = numbers(c, p2.attrs[0]);
+    const a = angleOf(c, p2.attrs[1]);
+    const hx = (get(c, profile, "XDim") as number) / 2;
+    const hy = (get(c, profile, "YDim") as number) / 2;
+    local = [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]].map(([x, y]) => [cx + x * Math.cos(a) - y * Math.sin(a), cy + x * Math.sin(a) + y * Math.cos(a)]);
+  } else if (profile.type === "IFCCIRCLEPROFILEDEF") {
+    const [cx, cy] = numbers(c, c.deref(c.attr(profile, "Position"))!.attrs[0]);
+    const radius = get(c, profile, "Radius") as number;
+    local = Array.from({ length: CIRCLE_SIDES }, (_, i) => [cx + radius * Math.cos((i / CIRCLE_SIDES) * 2 * Math.PI), cy + radius * Math.sin((i / CIRCLE_SIDES) * 2 * Math.PI)]);
+  } else {
+    // a polyline, or an indexed curve with arcs (cut into degrees by the checker)
+    local = curvePoints(c, c.deref(c.attr(profile, "OuterCurve"))!, step);
+  }
+  const outline = local.map(([x, y]) => {
+    const w = compose(at, x, y, 0, 0);
+    const [planX, planY] = onPlan(w.x, w.y);
+    return { x: planX, y: planY };
+  });
+  return { outline, z0: at.z, z1: at.z + (get(c, solid, "Depth") as number), less: [] };
+}
+/** Whether plan point (x, y) at height z is inside a convex outline's prism (and none it is less of). */
 function inside(s: Solid, x: number, y: number, z: number): boolean {
   if (z < s.z0 || z > s.z1) return false;
+  if (s.less.some((l) => inside(l, x, y, z))) return false;
   let sign = 0;
   for (let i = 0; i < s.outline.length; i++) {
     const a = s.outline[i];
@@ -553,6 +572,7 @@ describe("IFC export of the two-storey townhouse", () => {
       stairs: 1,
       stairFlights: 1,
       furniture: 3,
+      columns: 0,
     });
   });
 });
@@ -1064,5 +1084,196 @@ describe("bows too slight to be arcs", () => {
 
   it("writes a bow at the file's precision and past it as arcs the checker accepts", () => {
     for (const sagitta of [STRAIGHT_SAGITTA * 1.1, 1e-4, 1e-3]) expect(exported(bowed(sagitta)).text, `sagitta ${sagitta}`).toMatch(/IFCARCINDEX/);
+  });
+});
+
+describe("IFC export of columns over open ground: the Crescent House's carport", () => {
+  const house = seedCrescent();
+  const c = exported(house);
+  const ground = house.levels[0];
+  /** a product's Body representation */
+  const bodyOf = (check: IfcCheck, e: StepEntity): StepEntity =>
+    refs(check.deref(check.attr(e, "Representation"))!.attrs[2])
+      .map((r) => check.deref(r)!)
+      .find((rep) => get(check, rep, "RepresentationIdentifier") === "Body")!;
+
+  it("writes every column as an IfcColumn: its section extruded to the slab over it, load bearing, in concrete", () => {
+    const columns = all(c, "IFCCOLUMN");
+    expect(columns).toHaveLength(house.columns.length);
+    expect(house.columns.length).toBeGreaterThan(0);
+    expect(writeIfc(house, { now: NOW }).summary.elements.columns).toBe(house.columns.length);
+    const height = slabUnderside(ground.height);
+    for (const col of house.columns) {
+      const e = byTag(c, "IFCCOLUMN", col.id);
+      expect(get(c, e, "PredefinedType")).toBe("COLUMN");
+      expect(c.storeyOf.get(e.id), col.id).toBeDefined();
+      const [solid] = solidsOf(c, e);
+      expect(solid.z0).toBeCloseTo(0, 9);
+      expect(solid.z1).toBeCloseTo(height, 9);
+      // its footprint is the plan's section, where it stands
+      const xs = solid.outline.map((p) => p.x);
+      const ys = solid.outline.map((p) => p.y);
+      expect([Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)].map((v) => Math.round(v * 1e6) / 1e6)).toEqual(
+        [col.x - col.w / 2, col.x + col.w / 2, col.y - col.d / 2, col.y + col.d / 2].map((v) => Math.round(v * 1e6) / 1e6),
+      );
+      expect(propertiesOf(c, e, "Pset_ColumnCommon")).toMatchObject({ Reference: col.id, LoadBearing: true, IsExternal: true });
+      const q = propertiesOf(c, e, "Qto_ColumnBaseQuantities")!;
+      expect(q.Length as number).toBeCloseTo(height, 9);
+      expect(q.CrossSectionArea as number).toBeCloseTo(col.w * col.d, 9);
+      expect(q.GrossVolume as number).toBeCloseTo(col.w * col.d * height, 9);
+    }
+    const rel = all(c, "IFCRELASSOCIATESMATERIAL").find((r) => refs(c.attr(r, "RelatedObjects")).some((o) => c.deref(o)!.type === "IFCCOLUMN"))!;
+    expect(get(c, c.deref(c.attr(rel, "RelatingMaterial"))!, "Name")).toBe("Concrete");
+    expect(refs(c.attr(rel, "RelatedObjects"))).toHaveLength(house.columns.length);
+  });
+
+  it("writes a wall a column stands in less the column: a CSG body, no two bodies overlapping, its footprint less the column's", () => {
+    const inWall = house.columns.find((col) => columnWalls(house.walls, col).length > 0)!;
+    expect(inWall).toBeDefined();
+    const [w] = columnWalls(house.walls, inWall);
+    const e = byTag(c, "IFCWALL", w.id);
+    expect(get(c, bodyOf(c, e), "RepresentationType")).toBe("CSG");
+    const [solid] = solidsOf(c, e);
+    expect(solid.less).toHaveLength(1);
+    // the column's solid reaches past the wall's foot and top, so the boolean leaves no skin
+    expect(solid.less[0].z0).toBeLessThan(solid.z0);
+    expect(solid.less[0].z1).toBeGreaterThan(solid.z1);
+    // at the column's middle, half way up: the column, and not the wall
+    const z = 1.2;
+    expect(solidsAt(c, ["IFCWALL", "IFCCOLUMN"], inWall.x, inWall.y, z).map((x) => x.type)).toEqual(["IFCCOLUMN"]);
+    // a step back along the wall: the wall, and not the column
+    expect(solidsAt(c, ["IFCWALL", "IFCCOLUMN"], inWall.x - inWall.w / 2 - 0.05, inWall.y, z).map((x) => get(c, x, "Tag"))).toEqual([w.id]);
+    // the wall's quantities are the body's: its footprint less the column's share of it
+    const q = propertiesOf(c, e, "Qto_WallBaseQuantities")!;
+    const full = piecesArea(regionPieces([solid.outline]));
+    const shared = full - piecesArea(regionPieces([solid.outline], [solid.less[0].outline]));
+    expect(shared).toBeGreaterThan(0);
+    expect(q.GrossFootprintArea as number).toBeCloseTo(full - shared, 3);
+    // the column takes the wall's whole thickness at its end: the body's run, side and volume are less it too
+    const [post] = wallPosts(w, [inWall], house);
+    const taken = (Math.min(post.t1, 1) - Math.max(post.t0, 0)) * wallLength(w);
+    expect(taken).toBeGreaterThan(0);
+    const run = Math.max(...solid.outline.map((p) => p.x)) - Math.min(...solid.outline.map((p) => p.x));
+    expect(q.Length as number).toBeCloseTo(run - taken, 6);
+    expect(q.GrossSideArea as number).toBeCloseTo((q.Length as number) * w.height, 6);
+    expect(q.GrossVolume as number).toBeCloseTo((q.GrossFootprintArea as number) * w.height, 6);
+    // every other wall is still a plain swept solid
+    expect(all(c, "IFCSHAPEREPRESENTATION").filter((rep) => get(c, rep, "RepresentationType") === "CSG")).toHaveLength(1);
+  });
+
+  it("writes the carport as an outside space where a car parks, under the studio's floor", () => {
+    const carport = house.rooms.find((r) => r.kind === "open")!;
+    const space = (id: string) => all(c, "IFCSPACE").find((x) => get(c, x, "Name") === id)!;
+    expect(get(c, space(carport.id), "PredefinedType")).toBe("PARKING");
+    expect(propertiesOf(c, space(carport.id), "Pset_SpaceCommon")).toMatchObject({ IsExternal: true });
+    // every enclosed room stays a SPACE, inside
+    for (const r of house.rooms.filter((x) => x.kind !== "open")) {
+      expect(get(c, space(r.id), "PredefinedType"), r.id).toBe("SPACE");
+      expect(propertiesOf(c, space(r.id), "Pset_SpaceCommon"), r.id).toMatchObject({ IsExternal: false });
+    }
+    // over the middle of the carport: the first floor's slab, its underside the carport's ceiling
+    const box = outlineBounds(carport.points);
+    const [x, y] = [box.x + box.w / 2, box.y + box.h / 2];
+    const elevation = elevationOf(house, CRESCENT_FIRST_LEVEL_ID);
+    expect(solidsAt(c, ["IFCSLAB"], x, y, elevation - SLAB_THICKNESS / 2).map((e) => get(c, e, "Tag"))).toEqual([CRESCENT_FIRST_LEVEL_ID]);
+    expect(solidsAt(c, ["IFCSLAB"], x, y, elevation - SLAB_THICKNESS - 0.01)).toHaveLength(0);
+  });
+
+  it("writes the sectional garage door as an IfcDoor whose operation IFC4 has no value for, facing its wall", () => {
+    const gd = house.openings.find((o) => o.style === "garage")!;
+    const e = byTag(c, "IFCDOOR", gd.id);
+    expect(get(c, e, "PredefinedType")).toBe("DOOR");
+    expect(get(c, e, "OperationType")).toBe("USERDEFINED");
+    expect(get(c, e, "UserDefinedOperationType")).toBe("SECTIONAL");
+    expect(get(c, e, "OverallWidth") as number).toBeCloseTo(gd.width, 9);
+    expect(get(c, e, "OverallHeight") as number).toBeCloseTo(gd.height, 9);
+    // no swing to face: its placement keeps its opening's axes
+    const placement = c.deref(c.attr(e, "ObjectPlacement"))!;
+    expect(c.deref(placement.attrs[1])!.attrs[2].t).toBe("unset");
+    // every hinged door keeps an operation IFC4 names, and none of its own
+    for (const d of all(c, "IFCDOOR").filter((x) => x !== e)) {
+      expect(get(c, d, "OperationType")).not.toBe("USERDEFINED");
+      expect(get(c, d, "UserDefinedOperationType")).toBeNull();
+    }
+    // the checker holds the two together
+    expect(checkIfc(c.text.replace(/'SECTIONAL'/, "$")).errors.join()).toMatch(/OperationType USERDEFINED with UserDefinedOperationType unset/);
+  });
+
+  it("writes the car as furniture: its catalogue box, its kind its object type", () => {
+    const car = house.items.find((i) => i.kind === "car")!;
+    const e = byTag(c, "IFCFURNITURE", car.id);
+    expect(get(c, e, "ObjectType")).toBe("car");
+    expect(get(c, e, "Name")).toBe("Car");
+    const [solid] = solidsOf(c, e);
+    expect(solid.z1 - solid.z0).toBeCloseTo(1.5, 9);
+    expect(piecesArea(regionPieces([solid.outline]))).toBeCloseTo(1.8 * 4.5, 6);
+  });
+
+  it("cuts a column shorter than its wall only up to its top: the wall stays whole over it, its volume less the column's share up to there", () => {
+    const inWall = house.columns.find((col) => columnWalls(house.walls, col).length > 0)!;
+    const [w] = columnWalls(house.walls, inWall);
+    const short = 1;
+    const plan: PlanModel = { ...house, columns: house.columns.map((col) => (col.id === inWall.id ? { ...col, height: short } : col)) };
+    const s = exported(plan);
+    const e = byTag(s, "IFCWALL", w.id);
+    const [solid] = solidsOf(s, e);
+    expect(solid.less).toHaveLength(1);
+    // from under the wall's foot to the column's own top, and not past it
+    expect(solid.less[0].z0).toBeLessThan(solid.z0);
+    expect(solid.less[0].z1).toBeCloseTo(short, 9);
+    // over the column, the wall; under its top, the column alone
+    expect(solidsAt(s, ["IFCWALL", "IFCCOLUMN"], inWall.x, inWall.y, short + 0.5).map((x) => get(s, x, "Tag"))).toEqual([w.id]);
+    expect(solidsAt(s, ["IFCWALL", "IFCCOLUMN"], inWall.x, inWall.y, short / 2).map((x) => x.type)).toEqual(["IFCCOLUMN"]);
+    const q = propertiesOf(s, e, "Qto_WallBaseQuantities")!;
+    const full = piecesArea(regionPieces([solid.outline]));
+    const shared = full - piecesArea(regionPieces([solid.outline], [solid.less[0].outline]));
+    expect(q.GrossFootprintArea as number).toBeCloseTo(full - shared, 3);
+    expect(q.GrossVolume as number).toBeCloseTo(full * w.height - shared * short, 3);
+    // a wall the column stops in is not shortened: it runs on over the column
+    const run = Math.max(...solid.outline.map((p) => p.x)) - Math.min(...solid.outline.map((p) => p.x));
+    expect(q.Length as number).toBeCloseTo(run, 6);
+  });
+
+  it("writes a column in an inside partition as inside, one in an outside wall or out in the open as outside", () => {
+    const partition = house.walls.find((w) => w.id === "f_x5")!;
+    const plan: PlanModel = {
+      ...house,
+      columns: [
+        ...house.columns,
+        // on the partition between two first-floor rooms, and free in the middle of one
+        { id: "in_partition", levelId: CRESCENT_FIRST_LEVEL_ID, shape: "square", x: partition.ax, y: (partition.ay + partition.by) / 2, w: 0.3, d: 0.3, rotation: 0 },
+      ],
+    };
+    const room = house.rooms.find((r) => r.levelId === GROUND_LEVEL_ID && r.kind !== "open" && outlineAnchor(r.points).clearance > 0.6)!;
+    const anchor = outlineAnchor(room.points);
+    plan.columns.push({ id: "in_room", levelId: GROUND_LEVEL_ID, shape: "circle", x: anchor.x, y: anchor.y, w: 0.3, d: 0.3, rotation: 0 });
+    const s = exported(plan);
+    const external = (id: string) => propertiesOf(s, byTag(s, "IFCCOLUMN", id), "Pset_ColumnCommon")!.IsExternal;
+    expect(wallIsExternal(partition, plan.rooms.filter((r) => r.levelId === partition.levelId))).toBe(false);
+    expect(external("in_partition")).toBe(false);
+    expect(external("in_room")).toBe(false);
+    // the carport's, in its outside wall and out in the open
+    for (const col of house.columns) expect(external(col.id), col.id).toBe(true);
+    expect(columnIsExternal(house.columns[0], house.walls, house.rooms)).toBe(true);
+  });
+
+  it("writes a round column with a circle profile, and a rotated one turned as the plan turns it", () => {
+    const plan: PlanModel = {
+      ...house,
+      columns: [
+        { id: "round", levelId: GROUND_LEVEL_ID, shape: "circle", x: 30, y: 0, w: 0.4, d: 0.4, rotation: 0 },
+        { id: "turned", levelId: GROUND_LEVEL_ID, shape: "rectangle", x: 32, y: 0, w: 0.5, d: 0.25, rotation: 30 },
+      ],
+    };
+    const r = exported(plan);
+    const round = byTag(r, "IFCCOLUMN", "round");
+    const item = r.deref(refs(r.attr(bodyOf(r, round), "Items"))[0])!;
+    const profile = r.deref(r.attr(item, "SweptArea"))!;
+    expect(profile.type).toBe("IFCCIRCLEPROFILEDEF");
+    expect(get(r, profile, "Radius") as number).toBeCloseTo(0.2, 9);
+    expect(propertiesOf(r, round, "Qto_ColumnBaseQuantities")!.CrossSectionArea as number).toBeCloseTo(Math.PI * 0.04, 6);
+    // its corners are the plan's (model/columns.ts columnFootprint), wherever they are listed from
+    const [turned] = solidsOf(r, byTag(r, "IFCCOLUMN", "turned"));
+    for (const corner of columnFootprint(plan.columns[1])) expect(Math.min(...turned.outline.map((p) => Math.hypot(p.x - corner.x, p.y - corner.y)))).toBeLessThan(1e-6);
   });
 });

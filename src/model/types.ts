@@ -1,6 +1,6 @@
 /** Domain model — all units are meters, plan lives on the XY plane (y grows downward in 2D view). */
 
-import type { Actor, FloorFinish, Hinge, ItemCategory, KindSource, NoteAuthor, OpeningKind, StairShape, StairTurn, SwingSide } from "./limits";
+import type { Actor, ColumnShape, DoorStyle, FloorFinish, Hinge, ItemCategory, KindSource, NoteAuthor, OpeningKind, RoomKind, StairShape, StairTurn, SwingSide } from "./limits";
 import { GROUND_LEVEL_ID, LEVEL_DEFAULTS, LEVEL_NAMES, PLAN_FORMAT_VERSION } from "./limits";
 import type { PartInput } from "./schemas";
 import { newPlanId } from "./ids";
@@ -55,6 +55,11 @@ export interface Opening {
    * A endpoint to its B endpoint on the plan (default "right").
    */
   side?: SwingSide;
+  /**
+   * doors only — how it opens: absent (or "swing") for a hinged leaf, "garage" for a sectional
+   * overhead door, which has no hinge or swing side and sweeps no floor (limits.ts, GARAGE_DOOR).
+   */
+  style?: DoorStyle;
 }
 
 /**
@@ -79,6 +84,34 @@ export interface Room {
   points: RoomVertex[];
   label: string;
   floor: FloorFinish;
+  /**
+   * absent (or "enclosed") for a room its walls close off; "open" for an open space — a carport,
+   * a porch — whose sides need no walls (limits.ts, ROOM_KINDS). Stored only when open.
+   */
+  kind?: RoomKind;
+}
+
+/**
+ * A structural column: a square, rectangular or circular section standing on its level, from its
+ * floor up to the underside of the slab over it unless a height is set (model/columns.ts,
+ * columnHeight). It carries the floor above it, as a wall does (model/supports.ts). A column
+ * standing in a wall is part of that wall (columnWalls): one poché, the wall's joints round it.
+ */
+export interface Column {
+  id: string;
+  levelId: string;
+  shape: ColumnShape;
+  /** centre, on the plan */
+  x: number;
+  y: number;
+  /** section width along its own x (a circle's diameter), metres */
+  w: number;
+  /** section depth along its own y; equal to `w` for a square or a circle */
+  d: number;
+  /** degrees counterclockwise, place_item's convention; a circle's is kept as given */
+  rotation: number;
+  /** a set height, metres; absent, it reaches the underside of the slab over its level */
+  height?: number;
 }
 
 export interface Item {
@@ -144,6 +177,11 @@ export interface KindDef {
   readonly source: KindSource;
   /** rugs may overlap other furniture */
   readonly isRug?: boolean;
+  /**
+   * a vehicle, placed to check that it fits: it needs PARKING's clear floor round it, and no
+   * column may stand there (limits.ts). Exported as a furniture-like reference object.
+   */
+  readonly parking?: boolean;
   /** custom kinds only: the primitives it is modelled from; without them it is blocked out */
   readonly parts?: readonly PartSpec[];
 }
@@ -173,7 +211,7 @@ export interface Underlay {
  * The kinds of thing an approval can be about: an entity of the plan, the whole plan, or a file
  * the call would hand the person (its id and label are the file's name).
  */
-export type TargetType = "wall" | "door" | "window" | "room" | "item" | "stair" | "level" | "plan" | "file";
+export type TargetType = "wall" | "door" | "window" | "room" | "item" | "stair" | "column" | "level" | "plan" | "file";
 
 /**
  * One entity a parked call would act on, as the page found it in the model — never as the
@@ -232,6 +270,8 @@ export interface PlanModel {
   rooms: Room[];
   items: Item[];
   stairs: Stair[];
+  /** the structural columns, every level's */
+  columns: Column[];
   /**
    * The kinds this plan adds to the built-in catalogue: agent-defined pieces (with their 3D
    * parts) and adopted supplier products. They live in the plan so it is self-contained — a
@@ -280,6 +320,7 @@ export const emptyModel = (): PlanModel => ({
   rooms: [],
   items: [],
   stairs: [],
+  columns: [],
   kinds: [],
   underlay: null,
 });

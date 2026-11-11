@@ -76,6 +76,7 @@ export const seedLoft = (): PlanModel => ({
     { id: "item_wardrobe", levelId: G, kind: "wardrobe", x: 6.7, y: 3.0, rotation: 180 },
   ],
   stairs: [],
+  columns: [],
   kinds: [],
   underlay: null,
 });
@@ -128,6 +129,7 @@ export const seedTownhouse = (): PlanModel => ({
     // along the west wall, climbing north from y = 5 to the landing hall upstairs
     { id: "stair_main", levelId: G, shape: "straight", x: 0.55, y: 5, rotation: 180, width: 0.9 },
   ],
+  columns: [],
   kinds: [],
   underlay: null,
 });

@@ -78,7 +78,38 @@ export const SHIPPED = Object.freeze({
     // plan's sub-precision bows dropped on load, the hint's lettered cross, the get_issues
     // description's new rule, the approval card's
     // and feed's curved-wall places, and the Shape section's focus handling.
-    js: { min: 564_810, gzip: 185_561 },
+    // Raised again from 564_810 / 185_561 (measured 587_105 / 192_382) for structure: columns,
+    // open spaces, garage doors and the car are the plan model itself, so what the store's
+    // actions, the checker and the tools validate and measure them with runs before the first
+    // paint — the column actions and their refusals, the garage door's sizes and the opening's
+    // update, the open room's kind (store.ts, about 7 kB); the checker's structural rules (a
+    // column off the floor or on nothing, in a door's way or a car's clearance, on a stair, in
+    // furniture, a car that does not fit, a garage door too wide) with the column geometry they
+    // test with (columns.ts) and the sampled span check of an upper floor over its supports
+    // (supports.ts), about 9 kB; the three column tools' schemas and descriptions, the room's
+    // `open`, the door's `style` and get_model's supports (about 5 kB); the format-4 records and
+    // migration. The overhang of a slab over open ground (floors.ts, with the mitred footprints),
+    // the car's 3D model and the demo's carport stay in the chunks fetched with what reads them.
+    // Raised again from 587_105 / 192_382 (measured 595_880 / 195_147) for the
+    // plan's side of it, what the first paint draws and the keys reach: the columns' poché and
+    // touch targets, the column tool's pointer and keyboard paths (its cross, snapping through
+    // columns.ts), the garage door's overhead symbol, the open space's hatch, the car's plan symbol
+    // and parking clearance (Editor.tsx, symbols.tsx, about 6 kB); the rail's column tool, its
+    // hint and its shortcut rows (about 1.5 kB). The column marks a person only sees once a column
+    // is selected or the tool is aimed (outline, section pill, aim, axis dimensions:
+    // ColumnMarks.tsx), the slab overhead and the unsupported floor (SlabMarks.tsx, with
+    // floors.ts) and the column inspector load after the first paint.
+    // Raised again from 595_880 / 195_147 (measured 599_626 / 196_452) for the review of
+    // structure, all of it what the checker and the tools run on every revision: only walls and
+    // columns that reach the slab carry it, and a column short of it or through it is reported
+    // (levels.ts slabFit, the column_short_of_slab / column_through_slab rule, about 1 kB); the
+    // support check bounded for any floor the plan allows — a sample cap, a bucket grid so each
+    // sample measures only the supports near it, zones kept by what they depend on (supports.ts,
+    // about 1 kB); a column tested against a door's leaves rather than a box round it; the column
+    // tool's one aim for its ghost, its lettered hint and its keys (columns.ts columnAim and the
+    // hint's words, about 1 kB); and the approval cards' and tools' columns. The open spaces' rim
+    // is drawn with the slab marks, after the first paint.
+    js: { min: 599_626, gzip: 196_452 },
     // Raised from 110_997 / 18_767 (set at 115c39e; measured 113_203 / 19_153). Levels, the IFC
     // export and the shared session added their first-load rules without a re-measure (the
     // session's indicator and dots, session.css; the level switcher's), and free shapes added a
@@ -86,7 +117,13 @@ export const SHIPPED = Object.freeze({
     // Shape and Bend sections (inspector.css), the canvas's bottom row that keeps the hint beside
     // the zoom dock (shell.css) and a parapet seen below the plan's cut (canvas.css). The
     // handles' and the poché's rules are in shapes.css, which loads with them.
-    css: { min: 113_203, gzip: 19_153 },
+    // Raised again from 113_203 / 19_153 (measured 115_060 / 19_421): the
+    // columns' poché and touch target, the column tool's aim and snap guide, the garage door's
+    // panels and dashed overhead, the open space's hatch, the parking clearance, the slab overhead
+    // and the unsupported floor's hatch (canvas.css), with their tokens.
+    // Raised again from 115_060 / 19_421 (measured 115_346 / 19_460): the open space's rim, the
+    // refused column aim's cross-out (canvas.css), and the phone rail's abutting targets (shell.css).
+    css: { min: 115_346, gzip: 19_460 },
   },
   partner: {
     js: { min: 8_991, gzip: 4_209 },
@@ -136,8 +173,19 @@ export const LAZY_SHIPPED = Object.freeze({
   // of its own (triangulate.ts, under 1 kB, instead of three.js's far larger ShapeUtils, which
   // leaves the three.js chunk as it was), the ink's seam test read off each prism's outline, shaped
   // rooms' and curved walls' marks, and the walker's collisions along arcs. All of it loads with
-  // the 3D view, never with the page
-  scene3d: { min: 136_026, gzip: 51_946 },
+  // the 3D view, never with the page.
+  // raised again from 136_026 / 51_946 (measured 143_646 / 54_907) for columns over open ground in
+  // 3D: columns extruded from their sections and cut with the walls, each wall stopping at the
+  // columns that take its thickness (build.ts wallPosts, the band on its top broken there too), the
+  // sectional garage door and the pose that runs its sections along their track, the car's model
+  // (furniture.ts), the pieces of every door and window rebuilt to stand in their vano with no two
+  // faces in one plane (the stone sill under the frame, the head under the lintel, curtains kept
+  // clear of the sill and of the next window's), columns and the car in the walker's way, and the
+  // columns' selection, marks and picking. All of it loads with the 3D view, never with the page.
+  // raised again from 143_646 / 54_907 (measured 144_486 / 55_281): a column shorter than its wall
+  // cut only up to its top, the wall run on over it (model/columnCuts.ts, shared with the IFC
+  // export), the car's pillars and tail lamps, and room names kept off a parked car (labels.ts)
+  scene3d: { min: 144_486, gzip: 55_281 },
 });
 
 /**

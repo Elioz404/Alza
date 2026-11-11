@@ -13,7 +13,7 @@
 import type { Command } from "./commands";
 import type { PlanModel } from "./types";
 import { levelContents } from "./levels";
-import { lookupItem, lookupLevel, lookupOpening, lookupRoom, lookupStair, lookupWall, type Lookup } from "./resolve";
+import { lookupColumn, lookupItem, lookupLevel, lookupOpening, lookupRoom, lookupStair, lookupWall, type Lookup } from "./resolve";
 
 /** The id `ref` (an id or a name, as a tool takes it) resolves to; the ref itself when it names nothing. */
 const idOf = (model: PlanModel, ref: string, lookup: (m: PlanModel, r: string) => Lookup<{ id: string }>): string => {
@@ -38,6 +38,7 @@ export function touchedBy(command: Command, model: PlanModel): readonly string[]
     }
     case "set_door_swing":
     case "move_opening":
+    case "update_opening":
     case "remove_opening":
       return [idOf(model, command.id, lookupOpening)];
     case "update_room":
@@ -51,12 +52,16 @@ export function touchedBy(command: Command, model: PlanModel): readonly string[]
     case "update_stair":
     case "remove_stair":
       return [idOf(model, command.id, lookupStair)];
+    case "move_column":
+    case "update_column":
+    case "remove_column":
+      return [idOf(model, command.id, lookupColumn)];
     case "update_level":
       return [idOf(model, command.id, lookupLevel)];
     case "remove_level": {
       const id = idOf(model, command.id, lookupLevel);
       const c = levelContents(model, id);
-      return [id, ...[c.walls, c.openings, c.rooms, c.items, c.stairs].flat().map((e) => e.id)];
+      return [id, ...[c.walls, c.openings, c.rooms, c.items, c.stairs, c.columns].flat().map((e) => e.id)];
     }
     case "set_plan_name":
       return [PLAN_NAME];
@@ -76,6 +81,7 @@ export function touchedBy(command: Command, model: PlanModel): readonly string[]
     case "place_supplier_product":
     case "add_level":
     case "add_stair":
+    case "add_column":
     case "leave_note":
       return [];
   }

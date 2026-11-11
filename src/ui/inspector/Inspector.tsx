@@ -17,17 +17,20 @@ const WallInspector = deferred("the wall inspector", () => import("./WallInspect
 const RoomInspector = deferred("the room inspector", () => import("./RoomInspector").then((m) => m.RoomInspector), regionPlaceholder);
 const ItemInspector = deferred("the item inspector", () => import("./ItemInspector").then((m) => m.ItemInspector), regionPlaceholder);
 const StairInspector = deferred("the stair inspector", () => import("./StairInspector").then((m) => m.StairInspector), regionPlaceholder);
+const ColumnInspector = deferred("the column inspector", () => import("./ColumnInspector").then((m) => m.ColumnInspector), regionPlaceholder);
 
 export function Inspector() {
   const wall = useAppStore((s) => (s.editor.selectedWallId ? s.model.walls.find((w) => w.id === s.editor.selectedWallId) : undefined));
   const room = useAppStore((s) => (s.editor.selectedRoomId ? s.model.rooms.find((r) => r.id === s.editor.selectedRoomId) : undefined));
   const item = useAppStore((s) => (s.editor.selectedItemId ? s.model.items.find((i) => i.id === s.editor.selectedItemId) : undefined));
   const stair = useAppStore((s) => (s.editor.selectedStairId ? s.model.stairs.find((i) => i.id === s.editor.selectedStairId) : undefined));
+  const column = useAppStore((s) => (s.editor.selectedColumnId ? s.model.columns.find((i) => i.id === s.editor.selectedColumnId) : undefined));
 
   // keyed by the entity, so a half-typed field never carries over to the next selection
   if (wall) return <WallInspector key={wall.id} wall={wall} />;
   if (room) return <RoomInspector key={room.id} room={room} />;
   if (item) return <ItemInspector key={item.id} item={item} />;
   if (stair) return <StairInspector key={stair.id} stair={stair} />;
+  if (column) return <ColumnInspector key={column.id} column={column} />;
   return <PlanInspector />;
 }

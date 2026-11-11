@@ -288,7 +288,11 @@
     .topbar .topbar__export { display: none; }
     .rail {
       flex-direction: row;
-      /* safe: when the tools are wider than the phone, the row scrolls from its first tool
+      /* the targets abut, each the hit size (44 px, under a coarse pointer as well), so the
+         phone's tools (no Pan) fit 390 px whole and no two targets overlap */
+      --size-rail-button: var(--size-hit);
+      gap: 0;
+      /* safe: should the tools ever be wider than the phone, the row scrolls from its first tool
          instead of centring past both edges */
       justify-content: safe center;
       padding: var(--spacing-1) var(--spacing-2);

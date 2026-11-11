@@ -119,6 +119,29 @@ describe("the palette meets its contrast targets", () => {
     expect(contrast(dark(fg), dark(bg))).toBeGreaterThanOrEqual(min);
   });
 
+  // the plan's marks over floors between storeys: tokens that refer to others, followed to their colour
+  const colourOf = (sheet: "light" | "dark", name: string): string => {
+    let v: unknown = name;
+    for (let hops = 0; typeof v === "string" && hops < 8; hops++) {
+      const key: string = v.startsWith("var(") ? v.slice("var(".length, -1) : v;
+      v = (sheet === "dark" ? DARK_TOKENS[key] : undefined) ?? LIGHT_TOKENS[key];
+    }
+    if (v === undefined || v === null || typeof v !== "object" || !("hex" in v)) throw new Error(`no colour ${name}`);
+    return (v as { hex: string }).hex;
+  };
+  it.each([
+    // unsupported floor's hatch, and the slab's edge overhead: non-text cues at 3:1
+    ["--plan-unsupported", "--plan-paper"],
+    ["--plan-unsupported", "--color-warning-muted"],
+    ["--plan-overhead", "--plan-paper"],
+  ])("%s on %s is at least 3:1, light and dark", (fg, bg) => {
+    expect(contrast(colourOf("light", fg), colourOf("light", bg))).toBeGreaterThanOrEqual(3);
+    expect(contrast(colourOf("dark", fg), colourOf("dark", "--plan-paper"))).toBeGreaterThanOrEqual(3);
+  });
+  it.each(FLOOR_FINISHES.map((f) => [f]))("the unsupported floor's hatch reads on %s", (finish) => {
+    expect(contrast(colourOf("light", "--plan-unsupported"), FLOOR_FILL[finish])).toBeGreaterThanOrEqual(3);
+  });
+
   it.each(FLOOR_FINISHES.map((f) => [f]))("room labels read on %s", (finish) => {
     expect(contrast(PLAN_HEX.label, FLOOR_FILL[finish])).toBeGreaterThanOrEqual(4.5);
     expect(contrast(PLAN_HEX.labelSoft, FLOOR_FILL[finish])).toBeGreaterThanOrEqual(4.5);

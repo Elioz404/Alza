@@ -52,6 +52,7 @@ function selectedOf(editor: EditorState): Selected | null {
   if (editor.selectedRoomId) return { type: "room", id: editor.selectedRoomId };
   if (editor.selectedItemId) return { type: "item", id: editor.selectedItemId };
   if (editor.selectedStairId) return { type: "stair", id: editor.selectedStairId };
+  if (editor.selectedColumnId) return { type: "column", id: editor.selectedColumnId };
   return null;
 }
 
@@ -93,6 +94,7 @@ function SceneView() {
         e.selectedRoomId !== p.selectedRoomId ||
         e.selectedItemId !== p.selectedItemId ||
         e.selectedStairId !== p.selectedStairId ||
+        e.selectedColumnId !== p.selectedColumnId ||
         s.model !== prev.model
       ) {
         viewport.setSelection(selectedOf(e));
@@ -124,8 +126,8 @@ function SceneView() {
         placeInMiddle();
         return;
       }
-      const { selectedWallId, selectedRoomId, selectedItemId, selectedStairId } = store.getState().editor;
-      if (!placing && !selectedWallId && !selectedRoomId && !selectedItemId && !selectedStairId) return;
+      const { selectedWallId, selectedRoomId, selectedItemId, selectedStairId, selectedColumnId } = store.getState().editor;
+      if (!placing && !selectedWallId && !selectedRoomId && !selectedItemId && !selectedStairId && !selectedColumnId) return;
       e.preventDefault();
       if (placing) pageActions.setDrawMode("select");
       else deselectAll();

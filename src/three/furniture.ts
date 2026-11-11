@@ -86,6 +86,8 @@ const CERAMIC = (c: Swatch = F.porcelain) => surf("ceramic", c); // glazed sanit
 const DARK = staticSurface("rubber", F.dark.hex);
 const WATER = staticSurface("water");
 const PANE = staticSurface("glass");
+/** a car's tinted glass: dark and glossy, so its glasshouse reads as glass from outside */
+const GLAZING = staticSurface("ceramic", F.carGlass.hex);
 
 // ============================================================================ the modelling kit
 
@@ -963,6 +965,62 @@ const floorLamp: Builder = (k, { w, d, h }) => {
   );
 };
 
+/** A side profile ([along the car, up] points, convex) extruded `width` across, centred on x = 0: a car's body or its glasshouse. */
+function sideways(profile: Outline, width: number): THREE.BufferGeometry {
+  // plate() extrudes an [x, z] outline up y: turned so its outline is the car's (z, y) and it runs along x
+  return plate(profile, width).applyMatrix4(new THREE.Matrix4().set(0, 1, 0, -width / 2, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1));
+}
+
+/**
+ * The car, a reference object, low-poly: its body and its glasshouse are side profiles extruded
+ * across it (shares of its length and height: a bonnet sloping to the nose, a windscreen and a
+ * rear window raked back to the roof), its roof a panel over the glass, pillars in its paint
+ * either side between the windscreen, the side windows and the rear window, its four wheels proud
+ * of the body's sides with a hub on each, a lamp each side of its nose and a tail lamp each side
+ * of its back. It faces +z.
+ */
+const car: Builder = (k, { w, d, h, color }) => {
+  const c = S.car;
+  const paint = LACQUER(color);
+  const half = d / 2;
+  const at = (points: readonly (readonly [number, number])[]): Outline => points.map(([z, y]) => [z * half, y * h] as const);
+  const body = w - 2 * c.wheelProud;
+  k.stand(paint, sideways(at(c.body), body), 0, 0, 0);
+  const cabin = body * c.cabinWidthFraction;
+  k.stand(GLAZING, sideways(at(c.glass), cabin), 0, 0, 0);
+  // the pillars, each side: up the windscreen's edge (A), across the side windows (B), down the rear window's (C)
+  const [rearFoot, noseFoot, noseTop, rearTop] = c.glass;
+  const pw = c.pillarWidth;
+  const strips: (readonly (readonly [number, number])[])[] = [
+    [noseFoot, noseTop, [noseTop[0] - pw, noseTop[1]], [noseFoot[0] - pw, noseFoot[1]]],
+    [[c.pillarB - pw / 2, noseFoot[1]], [c.pillarB + pw / 2, noseFoot[1]], [c.pillarB + pw / 2, noseTop[1]], [c.pillarB - pw / 2, noseTop[1]]],
+    [rearFoot, [rearFoot[0] + pw, rearFoot[1]], [rearTop[0] + pw, rearTop[1]], rearTop],
+  ];
+  for (const strip of strips) {
+    const pillar = sideways(at(strip), c.pillarProud);
+    for (const side of [-1, 1]) k.stand(paint, pillar.clone(), side * (cabin / 2 + c.pillarProud / 2), 0, 0);
+    pillar.dispose();
+  }
+  // the roof over the glass, wider than it, its top the car's
+  const [r0, r1] = c.roof;
+  k.box(paint, cabin + 2 * c.roofOverhang, c.roofThickness, (r1 - r0) * half, 0, h - c.roofThickness, ((r0 + r1) / 2) * half);
+  // the wheels, axles across the car, their tyres proud of its sides, a hub standing out of each
+  const wx = w / 2 - c.hubProud - c.wheelWidth / 2;
+  for (const z of [-c.axleFraction * half, c.axleFraction * half]) {
+    for (const side of [-1, 1]) {
+      k.cyl(DARK, c.wheelRadius, c.wheelWidth, side * wx, c.wheelRadius - c.wheelWidth / 2, z, S.segments.medium, c.wheelRadius, { rz: Math.PI / 2 });
+      k.cyl(METAL(F.steel), c.hubRadius, c.hubDepth, side * (w / 2 - c.hubDepth / 2), c.wheelRadius - c.hubDepth / 2, z, S.segments.small, c.hubRadius, { rz: Math.PI / 2 });
+    }
+  }
+  // the lamps either side of the nose, and the tail lamps the same either side of its back
+  const [lw, lh, ly] = c.lamp;
+  for (const side of [-1, 1]) {
+    const x = side * (body / 2 - (lw * body) / 2 - c.lampInset);
+    k.slab(CERAMIC(F.porcelain), lw * body, lh * h, c.lampDepth, x, ly * h, half - c.lampDepth / 2);
+    k.slab(CERAMIC(F.carTailLamp), lw * body, lh * h, c.lampDepth, x, ly * h, -half + c.lampDepth / 2);
+  }
+};
+
 export const FURNITURE_BUILDERS: Record<string, Builder> = {
   sofa,
   sofa_3: sofa3,
@@ -996,6 +1054,7 @@ export const FURNITURE_BUILDERS: Record<string, Builder> = {
   towel_rail: towelRail,
   plant,
   floor_lamp: floorLamp,
+  car,
 };
 
 /**

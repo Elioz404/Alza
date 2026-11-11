@@ -15,6 +15,7 @@ import type {
   ActivityEntry,
   ActivitySource,
   ApprovalTarget,
+  Column,
   Item,
   KindDef,
   Level,
@@ -32,7 +33,7 @@ import type {
 import { emptyModel } from "./types";
 import { uid } from "./ids";
 import { imageAssetError, letGoOfAsset, releaseUnreferencedAssets, type AssetId } from "./assets";
-import { clampOpeningT, openingArcError } from "./issues";
+import { clampOpeningT, garageDoorFitError, openingArcError } from "./issues";
 import { segLen, snap } from "./geometry";
 import {
   closestOnEdge,
@@ -63,20 +64,26 @@ import {
   supplierKind,
   type SupplierProductData,
 } from "./catalog";
-import { lookupItem, lookupLevel, lookupOpening, lookupRoom, lookupStair, lookupWall, type Lookup } from "./resolve";
+import { lookupColumn, lookupItem, lookupLevel, lookupOpening, lookupRoom, lookupStair, lookupWall, type Lookup } from "./resolve";
+import { columnCoord, columnGrid, columnHeight, sectionOf } from "./columns";
 import { elevationOf, freeLevelName, levelContents, levelIdOf, levelInfo, levelNameTaken, meetsSlab, slabUnderside, levelRemovalError, rerouteText, stairGeometryIn, stairsRerouted } from "./levels";
 import { migratePlan, type PlanInput } from "./planFormat";
 import { clip, describeIssues, partList, type PartInput } from "./schemas";
 import {
   CALIBRATION_METERS,
   CAMERA_MODES,
+  COLUMN,
+  COLUMN_GRID,
+  COLUMN_SHAPES,
   COORD,
   CUT_HEIGHT,
   DEFAULT_FLOOR,
   DEFAULT_ITEM_COLOR,
   DOOR_DEFAULTS,
+  DOOR_STYLES,
   DOOR_SWING_DEFAULTS,
   FLOOR_FINISHES,
+  GARAGE_DOOR,
   FURNITURE_DIM,
   GROUND_LEVEL_ID,
   HEX_COLOR,
@@ -86,6 +93,7 @@ import {
   LEVEL_DEFAULTS,
   LEVEL_HEIGHT,
   LEVEL_WALLS,
+  MAX_COLUMNS,
   MAX_CUSTOM_KINDS,
   MAX_LEVELS,
   MAX_NOTES,
@@ -95,11 +103,13 @@ import {
   NOTE_AUTHORS,
   NOTE_EXCERPT_CHARS,
   OPACITY,
+  OPEN_FLOOR,
   OPENING_HEIGHT,
   OPENING_SILL,
   OPENING_T,
   OPENING_WIDTH,
   BULGE,
+  ROOM_KINDS,
   ROOM_SHAPE,
   ROOM_SIZE,
   ROTATION,
@@ -121,8 +131,11 @@ import {
   WINDOW_DEFAULTS,
   firstError,
   rangeError,
+  within,
   type Actor,
   type CameraMode,
+  type ColumnShape,
+  type DoorStyle,
   type Hinge,
   type ItemCategory,
   type Range,
@@ -167,6 +180,7 @@ export interface EditorState {
   selectedItemId: string | null;
   selectedRoomId: string | null;
   selectedStairId: string | null;
+  selectedColumnId: string | null;
   /**
    * The level the human is working on: what the plan shows and where a new wall, room, piece or
    * stair goes when none is named. A view setting, never in the undo history; read it through
@@ -210,6 +224,7 @@ const initialEditor: EditorState = {
   selectedItemId: null,
   selectedRoomId: null,
   selectedStairId: null,
+  selectedColumnId: null,
   activeLevelId: GROUND_LEVEL_ID,
   drawMode: "select",
   placingKind: null,
@@ -399,6 +414,8 @@ export interface RoomPatch {
   label?: string;
   floor?: string;
   levelId?: string;
+  /** "open" makes it an open space (a carport, a porch), "enclosed" a room its walls close off */
+  kind?: string;
 }
 
 /**
@@ -413,8 +430,11 @@ export interface RoomSpec {
   h?: number;
   points?: RoomVertex[];
   label: string;
+  /** its finish; an open room's is OPEN_FLOOR unless one is given */
   floor?: string;
   level?: string;
+  /** "open" for an open space; "enclosed" (the default) for a room its walls close off */
+  kind?: string;
 }
 
 /** One change to a room's outline, as the plan's handles make it. */
@@ -520,6 +540,42 @@ export interface StairSpec {
   risers?: number;
   tread?: number;
 }
+
+/** Patchable fields of a column, listed once. */
+const COLUMN_PATCH_KEYS = ["x", "y", "shape", "w", "d", "rotation"] as const;
+/** A column's patch: `height` null goes back to reaching the slab over it; `levelId` moves it to that level. */
+export type ColumnPatch = Partial<Pick<Column, (typeof COLUMN_PATCH_KEYS)[number]>> & { height?: number | null; levelId?: string };
+
+/** A column as add_column describes it, before it is checked. `grid` lays out rows × cols of them centred on (x, y). */
+export interface ColumnSpec {
+  /** the level it stands on (id or name); the level being worked on by default */
+  level?: string;
+  x: number;
+  y: number;
+  shape?: ColumnShape;
+  w?: number;
+  d?: number;
+  rotation?: number;
+  height?: number;
+  grid?: { rows: number; cols: number; spacing: number };
+}
+
+/** What is wrong with a column's own numbers, or null. Checked the same way for an add and an update. */
+function columnError(c: Partial<Omit<Column, "height">> & { height?: number | null }): string | null {
+  return firstError(
+    numbersError(["x", c.x, COORD], ["y", c.y, COORD], ["w", c.w, COLUMN.size], ["d", c.d, COLUMN.size], ["rotation", c.rotation, ROTATION], ["height", c.height ?? undefined, COLUMN.height]),
+    oneOfError("shape", c.shape, COLUMN_SHAPES),
+  );
+}
+
+
+/** "0.30 m square", "0.40 × 0.25 m rectangle", "0.35 m round". */
+const columnSection = (c: Pick<Column, "shape" | "w" | "d">): string =>
+  c.shape === "rectangle" ? `${c.w.toFixed(2)} × ${c.d.toFixed(2)} m rectangle` : `${c.w.toFixed(2)} m ${c.shape === "circle" ? "round" : "square"}`;
+
+/** Why a section's depth cannot be given as it is: a square's and a circle's depth is their width. */
+const depthError = (shape: ColumnShape, w: number, d: number | undefined): string | null =>
+  shape !== "rectangle" && d !== undefined && Math.abs(d - w) > 1e-9 ? `A ${shape} column's depth is its width (${w} m): give d only for a rectangle.` : null;
 
 /** What is wrong with a stair's own numbers, or null. Checked the same way for an add and an update. */
 function stairError(s: Partial<Stair>): string | null {
@@ -783,20 +839,26 @@ const planActions = {
     width?: number,
     sill?: number,
     height?: number,
-    swing?: { hinge?: Hinge; side?: SwingSide },
+    swing?: { hinge?: Hinge; side?: SwingSide; style?: DoorStyle },
   ): ActionResult {
     if (kind !== "door" && kind !== "window") return fail(`Unknown opening kind "${String(kind)}". Use door | window.`);
-    const defaults = kind === "door" ? DOOR_DEFAULTS : WINDOW_DEFAULTS;
+    const styleBad = oneOfError("style", swing?.style, DOOR_STYLES);
+    if (styleBad) return fail(styleBad);
+    const garage = kind === "door" && swing?.style === "garage";
+    if (kind === "window" && swing?.style !== undefined) return fail("Only a door has a style.");
+    if (garage && (swing?.hinge !== undefined || swing?.side !== undefined)) return fail("A garage door rises overhead: it has no hinge or swing side.");
+    const defaults = garage ? { ...GARAGE_DOOR.defaults, sill: DOOR_DEFAULTS.sill } : kind === "door" ? DOOR_DEFAULTS : WINDOW_DEFAULTS;
     const w = width ?? defaults.width;
     const s = sill ?? defaults.sill;
     const h = height ?? defaults.height;
     const bad = firstError(
       textError("wallId", wallId, TEXT.ref),
       numbersError(["t", t, OPENING_T], ["width", w, OPENING_WIDTH], ["sill", s, OPENING_SILL], ["height", h, OPENING_HEIGHT]),
+      garage ? numbersError(["width", w, GARAGE_DOOR.width], ["height", h, GARAGE_DOOR.height]) : null,
       oneOfError("hinge", swing?.hinge, HINGES),
       oneOfError("side", swing?.side, SWING_SIDES),
     );
-    if (bad) return fail(bad);
+    if (bad) return fail(garage ? `Garage door: ${bad}` : bad);
     const found = lookupWall(store.getState().model, wallId);
     if (!found.ok) return lookupFailed(found);
     const wall = found.entity;
@@ -805,18 +867,23 @@ const planActions = {
       const len = wallLength(wall);
       return fail(`Wall ${wall.id} is ${len.toFixed(2)} m long — a ${w.toFixed(2)} m ${kind} does not fit.`);
     }
+    if (garage) {
+      const room = garageDoorFitError(wall, w);
+      if (room) return fail(room);
+    }
     const tight = openingArcError(wall, w, kind);
     if (tight) return fail(tight);
     if (s + h > wall.height) return fail(`${kind} (sill ${s} + height ${h}) exceeds wall height ${wall.height} m.`);
     const opening: Opening = { id: uid(kind), kind, wallId: wall.id, t: clamped, width: w, sill: s, height: h };
-    if (kind === "door") {
+    if (garage) opening.style = "garage";
+    else if (kind === "door") {
       opening.hinge = swing?.hinge ?? DOOR_SWING_DEFAULTS.hinge;
       opening.side = swing?.side ?? DOOR_SWING_DEFAULTS.side;
     }
     pushUndo();
     setModel({ ...store.getState().model, openings: [...store.getState().model.openings, opening] });
     const moved = Math.abs(clamped - t) > 1e-6 ? ` (clamped to t=${clamped.toFixed(2)} to fit the vano)` : "";
-    return ok(`${kind === "door" ? "Door" : "Window"} added on wall ${wall.id} at t=${clamped.toFixed(2)}${moved}.`, {
+    return ok(`${garage ? "Garage door" : kind === "door" ? "Door" : "Window"} added on wall ${wall.id} at t=${clamped.toFixed(2)}${moved}.`, {
       id: opening.id,
       t: clamped,
     });
@@ -831,6 +898,7 @@ const planActions = {
     if (!found.ok) return lookupFailed(found);
     const o = found.entity;
     if (o.kind !== "door") return fail(`${o.id} is a window — only doors swing.`);
+    if (o.style === "garage") return fail(`${o.id} is a garage door: it rises overhead and has no hinge or swing side.`);
     const next = {
       ...o,
       hinge: hinge ?? o.hinge ?? DOOR_SWING_DEFAULTS.hinge,
@@ -858,6 +926,54 @@ const planActions = {
     return ok(`${o.kind} ${o.id} moved to t=${clamped.toFixed(2)}.`, { id: o.id, t: clamped });
   },
 
+  /**
+   * Resize a door or a window, or change how a door opens: `style` "garage" makes it a sectional
+   * overhead door (its hinge and swing go, its size must be a garage door's), "swing" a hinged
+   * leaf (on the default hinge and side). Its centre stays where it is, clamped to fit.
+   */
+  updateOpening(id: string, patch: { width?: number; height?: number; sill?: number; style?: string }): ActionResult {
+    const bad = firstError(
+      textError("id", id, TEXT.ref),
+      numbersError(["width", patch.width, OPENING_WIDTH], ["height", patch.height, OPENING_HEIGHT], ["sill", patch.sill, OPENING_SILL]),
+      oneOfError("style", patch.style, DOOR_STYLES),
+    );
+    if (bad) return fail(bad);
+    const model = store.getState().model;
+    const found = lookupOpening(model, id);
+    if (!found.ok) return lookupFailed(found);
+    const o = found.entity;
+    if (o.kind === "window" && patch.style !== undefined) return fail(`${o.id} is a window: only a door has a style.`);
+    const wall = model.walls.find((x) => x.id === o.wallId);
+    if (!wall) return fail(`${o.kind} ${o.id} is on wall ${o.wallId}, which no longer exists.`);
+    const style = (patch.style as DoorStyle | undefined) ?? o.style;
+    const garage = o.kind === "door" && style === "garage";
+    const width = patch.width ?? o.width;
+    const height = patch.height ?? o.height;
+    const sill = patch.sill ?? o.sill;
+    if (garage) {
+      const size = numbersError(["width", width, GARAGE_DOOR.width], ["height", height, GARAGE_DOOR.height]) ?? garageDoorFitError(wall, width);
+      if (size) return fail(`Garage door: ${size}`);
+    }
+    const clamped = clampOpeningT(wall, width, o.t);
+    if (clamped === null) return fail(`Wall ${wall.id} is ${wallLength(wall).toFixed(2)} m long — a ${width.toFixed(2)} m ${o.kind} does not fit.`);
+    const tight = openingArcError(wall, width, o.kind);
+    if (tight) return fail(tight);
+    if (sill + height > wall.height) return fail(`${o.kind} (sill ${sill} + height ${height}) exceeds wall height ${wall.height} m.`);
+    const next: Opening = { ...o, width, height, sill, t: clamped };
+    if (garage) {
+      next.style = "garage";
+      delete next.hinge;
+      delete next.side;
+    } else if (o.kind === "door") {
+      delete next.style;
+      next.hinge = o.hinge ?? DOOR_SWING_DEFAULTS.hinge;
+      next.side = o.side ?? DOOR_SWING_DEFAULTS.side;
+    }
+    pushUndo();
+    setModel({ ...model, openings: model.openings.map((x) => (x.id === o.id ? next : x)) });
+    return ok(`${garage ? "Garage door" : o.kind === "door" ? "Door" : "Window"} ${o.id} updated: ${width.toFixed(2)} × ${height.toFixed(2)} m.`, { id: o.id, t: clamped });
+  },
+
   removeOpening(id: string): ActionResult {
     const bad = textError("id", id, TEXT.ref);
     if (bad) return fail(bad);
@@ -872,18 +988,20 @@ const planActions = {
 
   // ---- rooms ----
   addRoom(spec: RoomSpec): ActionResult {
-    const { label, floor = DEFAULT_FLOOR, level } = spec;
-    const bad = firstError(textError("label", label, TEXT.label), oneOfError("floor", floor, FLOOR_FINISHES));
+    const { label, level } = spec;
+    const open = spec.kind === "open";
+    const floor = spec.floor ?? (open ? OPEN_FLOOR : DEFAULT_FLOOR);
+    const bad = firstError(textError("label", label, TEXT.label), oneOfError("floor", floor, FLOOR_FINISHES), oneOfError("kind", spec.kind, ROOM_KINDS));
     if (bad) return fail(bad);
     const on = levelFor(level);
     if (!on.ok) return lookupFailed(on);
     const shape = roomShape(spec);
     if (typeof shape === "string") return fail(shape);
-    const room: Room = { id: uid("room"), levelId: on.entity.id, points: shape, label, floor: floor as Room["floor"] };
+    const room: Room = { id: uid("room"), levelId: on.entity.id, points: shape, label, floor: floor as Room["floor"], ...(open ? { kind: "open" as const } : {}) };
     pushUndo();
     const model = store.getState().model;
     setModel({ ...model, rooms: [...model.rooms, room] });
-    return ok(`Room "${label}" added (${roomSize(room.points)})${onLevel(model, room.levelId)}.`, { id: room.id, levelId: room.levelId, area: round3(outlineArea(room.points)) });
+    return ok(`${open ? "Open space" : "Room"} "${label}" added (${roomSize(room.points)})${onLevel(model, room.levelId)}.`, { id: room.id, levelId: room.levelId, area: round3(outlineArea(room.points)) });
   },
 
   updateRoom(idOrLabel: string, patch: RoomPatch): ActionResult {
@@ -892,6 +1010,7 @@ const planActions = {
       numbersError(["x", patch.x, COORD], ["y", patch.y, COORD], ["w", patch.w, ROOM_SIZE], ["h", patch.h, ROOM_SIZE]),
       patch.label === undefined ? null : textError("label", patch.label, TEXT.label),
       oneOfError("floor", patch.floor, FLOOR_FINISHES),
+      oneOfError("kind", patch.kind, ROOM_KINDS),
     );
     if (bad) return fail(bad);
     const found = lookupRoom(store.getState().model, idOrLabel);
@@ -927,6 +1046,9 @@ const planActions = {
       label: patch.label ?? room.label,
       floor: (patch.floor as Room["floor"] | undefined) ?? room.floor,
     };
+    // the kind is stored only when the room is open
+    if (patch.kind === "open") next.kind = "open";
+    else if (patch.kind === "enclosed") delete next.kind;
     pushUndo();
     setModel({
       ...store.getState().model,
@@ -1054,8 +1176,9 @@ const planActions = {
     setModel({ ...model, kinds: model.kinds.map(freezeKind), underlay });
     const storeys = model.levels.length > 1 ? `${model.levels.length} levels, ` : "";
     const stairs = model.stairs.length > 0 ? `, ${model.stairs.length} stairs` : "";
+    const columns = model.columns.length > 0 ? `, ${model.columns.length} columns` : "";
     return ok(
-      `Plan "${model.name}" loaded: ${storeys}${model.walls.length} walls, ${model.rooms.length} rooms, ${model.items.length} items${stairs}.`,
+      `Plan "${model.name}" loaded: ${storeys}${model.walls.length} walls, ${model.rooms.length} rooms, ${model.items.length} items${stairs}${columns}.`,
       migrated.from < model.version ? { migratedFrom: migrated.from } : {},
     );
   },
@@ -1165,9 +1288,10 @@ const planActions = {
       rooms: model.rooms.filter((r) => r.levelId !== level.id),
       items: model.items.filter((i) => i.levelId !== level.id),
       stairs: model.stairs.filter((s) => s.levelId !== level.id),
+      columns: model.columns.filter((c) => c.levelId !== level.id),
     });
     return ok(
-      `Level "${level.name}" removed with ${gone.walls.length} walls, ${gone.openings.length} openings, ${gone.rooms.length} rooms, ${gone.items.length} items and ${gone.stairs.length} stairs.` +
+      `Level "${level.name}" removed with ${gone.walls.length} walls, ${gone.openings.length} openings, ${gone.rooms.length} rooms, ${gone.items.length} items, ${gone.stairs.length} stairs and ${gone.columns.length} columns.` +
         rerouted.map((r) => ` ${rerouteText(model, r, "done")}.`).join(""),
       { id: level.id },
     );
@@ -1251,6 +1375,99 @@ const planActions = {
     pushUndo();
     setModel({ ...model, stairs: model.stairs.filter((s) => s.id !== stair.id) });
     return ok(`Stair ${stair.id} removed.`, { id: stair.id });
+  },
+
+  // ---- columns ----
+  /** Add a column, or a grid of them (`grid`: rows × cols, `spacing` apart, centred on x, y), as one change. */
+  addColumns(spec: ColumnSpec): ActionResult {
+    const shape = spec.shape ?? COLUMN.defaults.shape;
+    const w = spec.w ?? COLUMN.defaults.size;
+    const grid = spec.grid;
+    const bad = firstError(
+      rangeError("x", spec.x, COORD),
+      rangeError("y", spec.y, COORD),
+      columnError({ shape, w, d: spec.d, rotation: spec.rotation, height: spec.height }),
+      isOneOf(shape, COLUMN_SHAPES) ? depthError(shape, w, spec.d) : null,
+      grid === undefined
+        ? null
+        : firstError(
+            countError("grid.rows", grid.rows, COLUMN_GRID.count) ?? (grid.rows === undefined ? "grid.rows is required." : null),
+            countError("grid.cols", grid.cols, COLUMN_GRID.count) ?? (grid.cols === undefined ? "grid.cols is required." : null),
+            rangeError("grid.spacing", grid.spacing, COLUMN_GRID.spacing),
+          ),
+    );
+    if (bad) return fail(bad);
+    const on = levelFor(spec.level);
+    if (!on.ok) return lookupFailed(on);
+    const model = store.getState().model;
+    const rotation = spec.rotation ?? 0;
+    const centres = grid ? columnGrid({ x: spec.x, y: spec.y }, grid.rows, grid.cols, grid.spacing, rotation) : [{ x: spec.x, y: spec.y }];
+    if (model.columns.length + centres.length > MAX_COLUMNS) return fail(`A plan holds at most ${MAX_COLUMNS} columns (it has ${model.columns.length}; this adds ${centres.length}).`);
+    const off = centres.find((p) => !within(p.x, COORD) || !within(p.y, COORD));
+    if (off) return fail(`The grid runs off the plan at (${off.x.toFixed(2)}, ${off.y.toFixed(2)}): coordinates stay within ${COORD.min} to ${COORD.max} m.`);
+    const section = sectionOf(shape, w, spec.d);
+    const columns: Column[] = centres.map((p) => ({
+      id: uid("column"),
+      levelId: on.entity.id,
+      shape,
+      x: columnCoord(p.x),
+      y: columnCoord(p.y),
+      ...section,
+      rotation,
+      ...(spec.height !== undefined ? { height: spec.height } : {}),
+    }));
+    pushUndo();
+    setModel({ ...model, columns: [...model.columns, ...columns] });
+    const first = columns[0];
+    const derived = columnHeight(model, first);
+    // as get_model reports it: to the millimetre, without float noise (2.9 - 0.2 is 2.6999999999999997)
+    const tall = derived === undefined ? undefined : round3(derived);
+    const height = tall === undefined ? "" : `, ${tall.toFixed(2)} m tall`;
+    const ids = columns.map((c) => c.id);
+    if (!grid) {
+      return ok(`Column ${first.id} added (${columnSection(first)}${height}) at (${first.x.toFixed(2)}, ${first.y.toFixed(2)})${onLevel(model, first.levelId)}.`, { id: first.id, ids, levelId: first.levelId, height: tall });
+    }
+    return ok(`${columns.length} columns added in a ${grid.rows} × ${grid.cols} grid ${grid.spacing.toFixed(2)} m apart (${columnSection(first)}${height})${onLevel(model, first.levelId)}: ${ids.join(", ")}.`, { id: first.id, ids, levelId: first.levelId, height: tall });
+  },
+
+  /** Move, turn, resize or reshape a column, set or clear its height, or move it to another level. */
+  updateColumn(ref: string, patch: ColumnPatch): ActionResult {
+    const bad = firstError(textError("id", ref, TEXT.ref), columnError(patch));
+    if (bad) return fail(bad);
+    const model = store.getState().model;
+    const found = lookupColumn(model, ref);
+    if (!found.ok) return lookupFailed(found);
+    const column = found.entity;
+    const on = patch.levelId === undefined ? null : levelFor(patch.levelId);
+    if (on && !on.ok) return lookupFailed(on);
+    const next: Column = { ...column, levelId: on ? on.entity.id : column.levelId };
+    for (const k of COLUMN_PATCH_KEYS) {
+      const v = patch[k];
+      if (v !== undefined) (next as Record<(typeof COLUMN_PATCH_KEYS)[number], unknown>)[k] = k === "x" || k === "y" ? columnCoord(v as number) : v;
+    }
+    const depth = depthError(next.shape, next.w, patch.d);
+    if (depth) return fail(depth);
+    // a square's and a circle's depth follow their width; a rectangle made of one keeps its own
+    Object.assign(next, sectionOf(next.shape, next.w, next.shape === "rectangle" ? (patch.d ?? (column.shape === "rectangle" ? column.d : next.w)) : undefined));
+    if (patch.height === null) delete next.height;
+    else if (patch.height !== undefined) next.height = patch.height;
+    pushUndo();
+    setModel({ ...model, columns: model.columns.map((c) => (c.id === column.id ? next : c)) });
+    const derived = columnHeight(model, next);
+    const tall = derived === undefined ? undefined : round3(derived);
+    return ok(`Column ${column.id} updated (${columnSection(next)}${tall === undefined ? "" : `, ${tall.toFixed(2)} m tall`})${onLevel(model, next.levelId)}.`, { id: column.id, levelId: next.levelId, height: tall });
+  },
+
+  removeColumn(ref: string): ActionResult {
+    const bad = textError("id", ref, TEXT.ref);
+    if (bad) return fail(bad);
+    const model = store.getState().model;
+    const found = lookupColumn(model, ref);
+    if (!found.ok) return lookupFailed(found);
+    const column = found.entity;
+    pushUndo();
+    setModel({ ...model, columns: model.columns.filter((c) => c.id !== column.id) });
+    return ok(`Column ${column.id} removed.`, { id: column.id });
   },
 
   // ---- collaboration ----
@@ -1422,7 +1639,7 @@ export interface ApprovalRequest {
 }
 
 /** The editor with nothing selected. */
-const NOTHING_SELECTED = { selectedWallId: null, selectedItemId: null, selectedRoomId: null, selectedStairId: null } as const;
+const NOTHING_SELECTED = { selectedWallId: null, selectedItemId: null, selectedRoomId: null, selectedStairId: null, selectedColumnId: null } as const;
 
 export const pageActions = {
   build3d(): ActionResult {
@@ -1465,6 +1682,9 @@ export const pageActions = {
   selectStair(id: string | null) {
     store.setState((s) => ({ editor: { ...s.editor, ...NOTHING_SELECTED, selectedStairId: id } }));
   },
+  selectColumn(id: string | null) {
+    store.setState((s) => ({ editor: { ...s.editor, ...NOTHING_SELECTED, selectedColumnId: id } }));
+  },
 
   /**
    * Work on another level: the plan shows it, and what is drawn next goes on it. A view setting
@@ -1478,7 +1698,7 @@ export const pageActions = {
     if (!found.ok) return lookupFailed(found);
     const level = found.entity;
     const e = state.editor;
-    const selected = e.selectedWallId ?? e.selectedRoomId ?? e.selectedItemId ?? e.selectedStairId;
+    const selected = e.selectedWallId ?? e.selectedRoomId ?? e.selectedItemId ?? e.selectedStairId ?? e.selectedColumnId;
     const keep = selected !== null && levelIdOf(state.model, selected) === level.id;
     store.setState((s) => ({
       editor: { ...s.editor, ...(keep ? {} : NOTHING_SELECTED), activeLevelId: level.id, pendingWallStart: null },

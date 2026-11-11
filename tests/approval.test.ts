@@ -167,11 +167,12 @@ describe("every destructive tool is gated", () => {
   const destructive = TOOLS.filter((t) => t.annotations?.destructiveHint).map((t) => t.name);
 
   it("covers the tools that delete things", () => {
-    expect(destructive.sort()).toEqual(["clear_model", "remove_item", "remove_level", "remove_opening", "remove_room", "remove_stair", "remove_wall"]);
+    expect(destructive.sort()).toEqual(["clear_model", "remove_column", "remove_item", "remove_level", "remove_opening", "remove_room", "remove_stair", "remove_wall"]);
   });
 
-  // each aimed at a real entity of the two-storey townhouse, so it is the gate that stops it,
-  // not validation or resolution
+  // each aimed at a real entity of the two-storey townhouse (with a column in its living room), so
+  // it is the gate that stops it, not validation or resolution
+  const withColumn = () => ({ ...seedTownhouse(), columns: [{ id: "g_column", levelId: "level_ground", shape: "square" as const, x: 4, y: 3, w: 0.3, d: 0.3, rotation: 0 }] });
   const TARGET: Record<string, Record<string, unknown>> = {
     clear_model: {},
     remove_wall: { id: "g_wall_n" },
@@ -180,10 +181,11 @@ describe("every destructive tool is gated", () => {
     remove_item: { id: "g_item_sofa" },
     remove_level: { id: "First floor" },
     remove_stair: { id: "stair_main" },
+    remove_column: { id: "g_column" },
   };
 
   it.each(destructive)("%s parks instead of running", async (name) => {
-    actions.loadModel(seedTownhouse());
+    actions.loadModel(withColumn());
     const before = store.getState().model;
     const call = executeWrapped(tool(name), input(TARGET[name]));
     await flush();

@@ -47,7 +47,9 @@ const ITEMS = `IFCEXTRUDEDAREASOLID|IFCREVOLVEDAREASOLID|IFCBOOLEANRESULT|IFCBOO
 /** IfcSpatialElement */
 const SPATIAL_TYPES = "IFCSITE|IFCBUILDING|IFCBUILDINGSTOREY|IFCSPACE";
 /** IfcElement */
-const ELEMENT_TYPES = "IFCWALL|IFCSLAB|IFCDOOR|IFCWINDOW|IFCSTAIR|IFCSTAIRFLIGHT|IFCFURNITURE|IFCCOVERING|IFCOPENINGELEMENT";
+const ELEMENT_TYPES = "IFCWALL|IFCSLAB|IFCDOOR|IFCWINDOW|IFCSTAIR|IFCSTAIRFLIGHT|IFCFURNITURE|IFCCOVERING|IFCOPENINGELEMENT|IFCCOLUMN";
+/** IfcBooleanOperand: what a boolean result may subtract from, or subtract (the solids the export may write) */
+const BOOLEAN_OPERANDS = "IFCBOOLEANRESULT|IFCBOOLEANCLIPPINGRESULT|IFCEXTRUDEDAREASOLID|IFCREVOLVEDAREASOLID|IFCFACETEDBREP|IFCHALFSPACESOLID";
 /** IfcProduct */
 const PRODUCTS = `${SPATIAL_TYPES}|${ELEMENT_TYPES}`;
 /** IfcObjectDefinition */
@@ -83,6 +85,10 @@ export const IFC4_ATTRIBUTES: Readonly<Record<string, readonly string[]>> = {
   IFCRECTANGLEPROFILEDEF: ["ProfileType", "ProfileName?", "Position?:IFCAXIS2PLACEMENT2D", "XDim", "YDim"],
   // schema/ifcprofileresource/lexical/ifcarbitraryclosedprofiledef.htm
   IFCARBITRARYCLOSEDPROFILEDEF: ["ProfileType", "ProfileName?", `OuterCurve:${CURVES}`],
+  // schema/ifcprofileresource/lexical/ifccircleprofiledef.htm
+  IFCCIRCLEPROFILEDEF: ["ProfileType", "ProfileName?", "Position?:IFCAXIS2PLACEMENT2D", "Radius"],
+  // schema/ifcgeometricmodelresource/lexical/ifcbooleanresult.htm
+  IFCBOOLEANRESULT: ["Operator", `FirstOperand:${BOOLEAN_OPERANDS}`, `SecondOperand:${BOOLEAN_OPERANDS}`],
   // schema/ifcgeometricmodelresource/lexical/ifcextrudedareasolid.htm
   IFCEXTRUDEDAREASOLID: [`SweptArea:${PROFILES}`, "Position?:IFCAXIS2PLACEMENT3D", "ExtrudedDirection:IFCDIRECTION", "Depth"],
   // schema/ifcrepresentationresource/lexical/ifcgeometricrepresentationcontext.htm
@@ -134,6 +140,8 @@ export const IFC4_ATTRIBUTES: Readonly<Record<string, readonly string[]>> = {
   IFCSTAIR: [...ELEMENT, "PredefinedType?"],
   // schema/ifcsharedbldgelements/lexical/ifcstairflight.htm
   IFCSTAIRFLIGHT: [...ELEMENT, "NumberOfRisers?", "NumberOfTreads?", "RiserHeight?", "TreadLength?", "PredefinedType?"],
+  // schema/ifcsharedbldgelements/lexical/ifccolumn.htm
+  IFCCOLUMN: [...ELEMENT, "PredefinedType?"],
   // schema/ifcsharedfacilitieselements/lexical/ifcfurniture.htm
   IFCFURNITURE: [...ELEMENT, "PredefinedType?"],
   // schema/ifckernel/lexical/ifcrelaggregates.htm
@@ -193,7 +201,7 @@ const SPECS: Readonly<Record<string, readonly AttributeSpec[]>> = Object.fromEnt
  * Attributes typed IfcLabel or IfcIdentifier (STRING(255)) in the entities above; IfcText ones
  * (Description) have no limit. Typed values IFCLABEL(…) and IFCIDENTIFIER(…) are held to it too.
  */
-const LABELS = new Set(["Name", "ObjectType", "Tag", "LongName", "Phase", "ContextIdentifier", "ContextType", "RepresentationIdentifier", "RepresentationType", "ProfileName", "Category", "LayerSetName", "LandTitleNumber", "MethodOfMeasurement"]);
+const LABELS = new Set(["Name", "ObjectType", "Tag", "LongName", "Phase", "ContextIdentifier", "ContextType", "RepresentationIdentifier", "RepresentationType", "ProfileName", "Category", "LayerSetName", "LandTitleNumber", "MethodOfMeasurement", "UserDefinedOperationType"]);
 const LABEL_MAX = 255;
 /**
  * The property and quantity sets IFC4 defines that the export may write. The "Pset_" and "Qto_"
@@ -208,6 +216,8 @@ const STANDARD_SETS = new Set([
   "Pset_CoveringCommon",
   "Pset_DoorCommon",
   "Pset_WindowCommon",
+  "Pset_ColumnCommon",
+  "Qto_ColumnBaseQuantities",
   "Qto_WallBaseQuantities",
   "Qto_SpaceBaseQuantities",
   "Qto_SlabBaseQuantities",
@@ -246,6 +256,9 @@ const ENUMS: Readonly<Record<string, Readonly<Record<string, readonly string[]>>
   },
   IFCSTAIRFLIGHT: { PredefinedType: ["STRAIGHT", "WINDER", "SPIRAL", "CURVED", "FREEFORM", "USERDEFINED", "NOTDEFINED"] },
   IFCFURNITURE: { PredefinedType: ["CHAIR", "TABLE", "DESK", "BED", "FILECABINET", "SHELF", "SOFA", "USERDEFINED", "NOTDEFINED"] },
+  IFCCOLUMN: { PredefinedType: ["COLUMN", "PILASTER", "USERDEFINED", "NOTDEFINED"] },
+  IFCCIRCLEPROFILEDEF: { ProfileType: ["CURVE", "AREA"] },
+  IFCBOOLEANRESULT: { Operator: ["UNION", "INTERSECTION", "DIFFERENCE"] },
   IFCSPACE: { CompositionType: ["COMPLEX", "ELEMENT", "PARTIAL"], PredefinedType: ["SPACE", "PARKING", "GFA", "INTERNAL", "EXTERNAL", "USERDEFINED", "NOTDEFINED"] },
   IFCSITE: { CompositionType: ["COMPLEX", "ELEMENT", "PARTIAL"] },
   IFCBUILDING: { CompositionType: ["COMPLEX", "ELEMENT", "PARTIAL"] },
@@ -265,6 +278,7 @@ const NUMBERS: Readonly<Record<string, Readonly<Record<string, "real" | "int" | 
   IFCCARTESIANPOINT: { Coordinates: "real[]" },
   IFCDIRECTION: { DirectionRatios: "real[]" },
   IFCRECTANGLEPROFILEDEF: { XDim: "real", YDim: "real" },
+  IFCCIRCLEPROFILEDEF: { Radius: "real" },
   IFCEXTRUDEDAREASOLID: { Depth: "real" },
   IFCGEOMETRICREPRESENTATIONCONTEXT: { CoordinateSpaceDimension: "int", Precision: "real" },
   IFCBUILDINGSTOREY: { Elevation: "real" },
@@ -281,6 +295,7 @@ const NUMBERS: Readonly<Record<string, Readonly<Record<string, "real" | "int" | 
 /** Lengths that must be positive when set (IfcPositiveLengthMeasure); so must every typed IFCPOSITIVELENGTHMEASURE(…). */
 const POSITIVE: Readonly<Record<string, readonly string[]>> = {
   IFCRECTANGLEPROFILEDEF: ["XDim", "YDim"],
+  IFCCIRCLEPROFILEDEF: ["Radius"],
   IFCEXTRUDEDAREASOLID: ["Depth"],
   IFCDOOR: ["OverallHeight", "OverallWidth"],
   IFCWINDOW: ["OverallHeight", "OverallWidth"],
@@ -290,7 +305,7 @@ const POSITIVE: Readonly<Record<string, readonly string[]>> = {
 /** Entities with a GlobalId (subtypes of IfcRoot). */
 const ROOTED = new Set(Object.entries(SPECS).filter(([, attrs]) => attrs[0].name === "GlobalId").map(([name]) => name));
 /** Elements that must stand in exactly one storey, directly or as a part of one that does. */
-export const ELEMENTS = new Set(["IFCWALL", "IFCSLAB", "IFCCOVERING", "IFCDOOR", "IFCWINDOW", "IFCSTAIR", "IFCSTAIRFLIGHT", "IFCFURNITURE"]);
+export const ELEMENTS = new Set(["IFCWALL", "IFCSLAB", "IFCCOVERING", "IFCDOOR", "IFCWINDOW", "IFCSTAIR", "IFCSTAIRFLIGHT", "IFCFURNITURE", "IFCCOLUMN"]);
 const GUID = /^[0-3][0-9A-Za-z_$]{21}$/;
 
 // ---------------------------------------------------------------------------- reader
@@ -723,6 +738,19 @@ export function checkIfc(text: string): IfcCheck {
   for (const rep of of("IFCSHAPEREPRESENTATION")) {
     const ctx = deref(attr(rep, "ContextOfItems"));
     if (!ctx || !ctx.type.startsWith("IFCGEOMETRICREPRESENTATION")) errors.push(`#${rep.id}: a shape representation outside any context`);
+    // the representation's type says what its items are (IFC4 implementer agreements): swept
+    // solids are extrusions, a CSG body is a boolean result
+    const type = (attr(rep, "RepresentationType") as { v?: string }).v;
+    const items = refsIn(attr(rep, "Items")).map((id) => entities.get(id)?.type);
+    if (type === "SweptSolid" && items.some((t) => t !== "IFCEXTRUDEDAREASOLID")) errors.push(`#${rep.id}: a SweptSolid representation holds ${items.join()}`);
+    if (type === "CSG" && items.some((t) => t !== "IFCBOOLEANRESULT")) errors.push(`#${rep.id}: a CSG representation holds ${items.join()}`);
+    if (type !== "CSG" && items.includes("IFCBOOLEANRESULT")) errors.push(`#${rep.id}: a boolean result in a ${type} representation, not a CSG one`);
+  }
+  // a door's own operation is named only when IFC4 has none for it (OperationType USERDEFINED)
+  for (const door of of("IFCDOOR")) {
+    const op = attr(door, "OperationType") as { v?: string };
+    const own = attr(door, "UserDefinedOperationType");
+    if ((op.v === "USERDEFINED") !== (own.t === "str")) errors.push(`#${door.id}: OperationType ${op.v ?? "unset"} with UserDefinedOperationType ${own.t === "str" ? own.v : "unset"}`);
   }
 
   // spatial structure: project > site > building > storeys (> spaces), by aggregation

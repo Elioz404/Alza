@@ -3,14 +3,16 @@
  * is brought up to date.
  *
  * Format 1 had one storey: walls, openings, rooms and items, with no levels. Format 2 has levels
- * and stairs, and every wall, room and item names the level it stands on. Format 3 (the current
- * one, PLAN_FORMAT_VERSION) has free shapes: a room is a polygon (`points`, each corner with the
- * bulge of the edge it starts) rather than a rectangle (x, y, w, h), and a wall may carry a
- * `bulge` and be an arc. A format-1 plan loads as one level, the ground floor, holding all of it;
- * a format-1 or format-2 room loads as its rectangle's four corners, clockwise on the sheet from
- * the top-left one, and every wall of either stays as straight as it was. Nothing is lost on the
- * way: the rectangle is exactly its four corners. A plan from a format newer than this page knows
- * is refused rather than half-read.
+ * and stairs, and every wall, room and item names the level it stands on. Format 3 has free
+ * shapes: a room is a polygon (`points`, each corner with the bulge of the edge it starts) rather
+ * than a rectangle (x, y, w, h), and a wall may carry a `bulge` and be an arc. Format 4 (the
+ * current one, PLAN_FORMAT_VERSION) has structure: columns (`columns`, each on its level), open
+ * rooms (a room's `kind`) and garage doors (a door's `style`). A format-1 plan loads as one level,
+ * the ground floor, holding all of it; a format-1 or format-2 room loads as its rectangle's four
+ * corners, clockwise on the sheet from the top-left one, and every wall of either stays as straight
+ * as it was; a plan before format 4 loads with no columns, every room enclosed and every door
+ * swinging, as it was drawn. Nothing is lost on the way: the rectangle is exactly its four corners.
+ * A plan from a format newer than this page knows is refused rather than half-read.
  *
  * A plan's id (PlanModel.id) came later than any format and is optional in all of them: a plan
  * saved without one is given one, once, as it loads, and keeps it from then on.
@@ -23,13 +25,13 @@
 
 import { z } from "zod";
 import { newPlanId } from "./ids";
-import { groundLevel, type Item, type PlanModel, type Room, type Stair, type Wall } from "./types";
+import { groundLevel, type Column, type Item, type Opening, type PlanModel, type Room, type Stair, type Wall } from "./types";
 import { describeIssues, floorFinish, hinge, itemCategory, partList, swingSide } from "./schemas";
-import { KIND_SOURCES, OPENING_KINDS, PLAN_FORMAT_VERSION, STAIR_SHAPES, STAIR_TURNS } from "./limits";
+import { COLUMN_SHAPES, DOOR_STYLES, KIND_SOURCES, OPENING_KINDS, PLAN_FORMAT_VERSION, ROOM_KINDS, STAIR_SHAPES, STAIR_TURNS } from "./limits";
 import { edgeBulge, rectOutline } from "./shapes";
 
 /** A room as formats 1 and 2 wrote it: a rectangle, by its top-left corner and size. */
-export interface RectRoom extends Omit<Room, "points"> {
+export interface RectRoom extends Omit<Room, "points" | "kind"> {
   x: number;
   y: number;
   w: number;
@@ -37,27 +39,37 @@ export interface RectRoom extends Omit<Room, "points"> {
 }
 
 /** A plan in format 1: one storey, no levels or stairs, entities without a level. */
-export interface PlanModelV1 extends Omit<PlanModel, "version" | "id" | "levels" | "stairs" | "walls" | "rooms" | "items"> {
+export interface PlanModelV1 extends Omit<PlanModel, "version" | "id" | "levels" | "stairs" | "walls" | "rooms" | "items" | "openings" | "columns"> {
   version?: 1;
   id?: string;
   walls: Omit<Wall, "levelId" | "bulge">[];
+  openings: Omit<Opening, "style">[];
   rooms: Omit<RectRoom, "levelId">[];
   items: Omit<Item, "levelId">[];
 }
 
 /** A plan in format 2: levels and stairs, rooms as rectangles, every wall straight. */
-export interface PlanModelV2 extends Omit<PlanModel, "version" | "id" | "rooms" | "walls"> {
+export interface PlanModelV2 extends Omit<PlanModel, "version" | "id" | "rooms" | "walls" | "openings" | "columns"> {
   version: 2;
   id?: string;
   walls: Omit<Wall, "bulge">[];
+  openings: Omit<Opening, "style">[];
   rooms: RectRoom[];
+}
+
+/** A plan in format 3: free shapes, and no columns, open rooms or garage doors. */
+export interface PlanModelV3 extends Omit<PlanModel, "version" | "id" | "rooms" | "openings" | "columns"> {
+  version: 3;
+  id?: string;
+  openings: Omit<Opening, "style">[];
+  rooms: Omit<Room, "kind">[];
 }
 
 /** A plan in the current format, saved before plans had ids. */
 export type PlanModelUnidentified = Omit<PlanModel, "id"> & { id?: string };
 
 /** Any plan a page can be handed: the current format or an older one. */
-export type PlanInput = PlanModel | PlanModelUnidentified | PlanModelV2 | PlanModelV1;
+export type PlanInput = PlanModel | PlanModelUnidentified | PlanModelV3 | PlanModelV2 | PlanModelV1;
 
 // ---------------------------------------------------------------------------- the shape
 
@@ -75,11 +87,12 @@ const openingRecord = z.object({
   height: num,
   hinge: hinge.optional(),
   side: swingSide.optional(),
+  style: z.enum(DOOR_STYLES).optional(),
 });
 /** A corner of a room's outline, with the bulge of the edge it starts (format 3). */
 const vertexRecord = z.object({ x: num, y: num, bulge: num.optional() });
 /** A room as format 3 writes it: its outline. */
-const roomRecord = z.object({ id, points: z.array(vertexRecord), label: z.string(), floor: floorFinish, levelId: id.optional() });
+const roomRecord = z.object({ id, points: z.array(vertexRecord), label: z.string(), floor: floorFinish, levelId: id.optional(), kind: z.enum(ROOM_KINDS).optional() });
 /** A room as formats 1 and 2 wrote it: a rectangle. */
 const rectRoomRecord = z.object({ id, x: num, y: num, w: num, h: num, label: z.string(), floor: floorFinish, levelId: id.optional() });
 const itemRecord = z.object({ id, kind: z.string(), x: num, y: num, rotation: num, levelId: id.optional() });
@@ -110,13 +123,15 @@ const stairRecord = z.object({
   risers: z.int().optional(),
   tread: num.optional(),
 });
+/** A column as format 4 writes it. */
+const columnRecord = z.object({ id, levelId: id, shape: z.enum(COLUMN_SHAPES), x: num, y: num, w: num, d: num, rotation: num, height: num.optional() });
 
 /**
  * Each kind of entity's record, as this page reads it in the current format: what the shared
  * session checks another tab's entities against (src/session/messages.ts, which also holds every
  * entity to its level, as the current format does).
  */
-export const ENTITY_RECORDS = Object.freeze({ levelRecord, wallRecord, openingRecord, roomRecord, itemRecord, stairRecord, kindRecord });
+export const ENTITY_RECORDS = Object.freeze({ levelRecord, wallRecord, openingRecord, roomRecord, itemRecord, stairRecord, columnRecord, kindRecord });
 
 /** What any plan, of any format this page reads, must look like. */
 const planRecord = z.object({
@@ -129,6 +144,7 @@ const planRecord = z.object({
   rooms: z.array(z.union([roomRecord, rectRoomRecord])),
   items: z.array(itemRecord),
   stairs: z.array(stairRecord).optional(),
+  columns: z.array(columnRecord).optional(),
   kinds: z.array(kindRecord),
   underlay: underlayRecord.nullable(),
 });
@@ -162,14 +178,27 @@ export function migratePlan(input: unknown): Migration {
     );
   }
   const bent = from < 3 ? raw.walls.find((w) => w.bulge !== undefined) : undefined;
-  if (bent) return refused(`Wall ${bent.id} has a bulge, which only format 3 has, in a plan in format ${from}. Nothing was loaded.`);
+  if (bent) return refused(`Wall ${bent.id} has a bulge, which only format 3 on has, in a plan in format ${from}. Nothing was loaded.`);
+  // what format 4 added is only in a plan in format 4, which always lists its columns
+  if (from < 4) {
+    const added =
+      raw.columns !== undefined
+        ? "columns"
+        : raw.rooms.some((r) => "kind" in r && r.kind !== undefined)
+          ? "an open room (a room's kind)"
+          : raw.openings.some((o) => o.style !== undefined)
+            ? "a door's style"
+            : null;
+    if (added) return refused(`The plan holds ${added}, which only format 4 has, in a plan in format ${from}. Nothing was loaded.`);
+  } else if (raw.columns === undefined) return refused(`A plan in format ${from} lists its columns (an empty list when it has none); this one does not. Nothing was loaded.`);
   // the parsed copy is only the check: the plan is built from what was handed in
   const plan = input as PlanInput;
   if (from < 2) {
     const v2 = fromV1(plan as PlanModelV1);
     return v2.ok ? fromV2(v2.model, from) : v2;
   }
-  return from < 3 ? fromV2(plan as PlanModelV2, from) : checkLevels(plan as PlanModelUnidentified, from);
+  if (from < 3) return fromV2(plan as PlanModelV2, from);
+  return from < 4 ? fromV3(plan as PlanModelV3, from) : checkLevels(plan as PlanModelUnidentified, from);
 }
 
 /** Format 1 → 2: the one storey becomes the ground floor, and everything on it stands there. */
@@ -201,7 +230,17 @@ function fromV1(plan: PlanModelV1): { ok: true; model: PlanModelV2 } | { ok: fal
  */
 function fromV2(plan: PlanModelV2, from: number): Migration {
   const rooms: Room[] = plan.rooms.map(({ x, y, w, h, ...rest }) => ({ ...rest, points: rectOutline(x, y, w, h) }));
-  return checkLevels({ ...plan, version: PLAN_FORMAT_VERSION, rooms }, from);
+  return fromV3({ ...plan, version: 3, rooms }, from);
+}
+
+/**
+ * Format 3 → 4: no columns yet, and nothing added to its rooms or doors: a room without a kind is
+ * enclosed and a door without a style swings, as format 3 drew every one of them. Then checked as
+ * a plan in the current format is.
+ */
+function fromV3(plan: PlanModelV3, from: number): Migration {
+  const columns: Column[] = [];
+  return checkLevels({ ...plan, version: PLAN_FORMAT_VERSION, columns }, from);
 }
 
 /** A plan in the current format, refused if it names a level it does not have. */
@@ -215,6 +254,7 @@ function checkLevels(plan: PlanModelUnidentified, from: number): Migration {
     ...plan.rooms.map((r) => [r.id, r.levelId] as const),
     ...plan.items.map((i) => [i.id, i.levelId] as const),
     ...(plan.stairs ?? []).map((s: Stair) => [s.id, s.levelId] as const),
+    ...plan.columns.map((c) => [c.id, c.levelId] as const),
   ].find(([, levelId]) => !levelId || !ids.has(levelId));
   if (lost) return refused(`${lost[0]} is on level ${JSON.stringify(lost[1] ?? null)}, which the plan does not have. Nothing was loaded.`);
   return { ok: true, from, model: { ...straightened(plan), version: PLAN_FORMAT_VERSION, id: plan.id ?? newPlanId(), stairs: plan.stairs ?? [] } };

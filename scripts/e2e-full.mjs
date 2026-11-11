@@ -800,6 +800,14 @@ check(
   !!switcherBox && switcherBox.x >= 0 && switcherBox.x + switcherBox.width <= PHONE.width && radioBoxes.every((b) => !!b && b.height >= 44),
   switcherBox ? `${Math.round(switcherBox.x)}..${Math.round(switcherBox.x + switcherBox.width)} px` : "no switcher",
 );
+// every tool on the phone's rail lies whole on the screen, with no sideways scroll to find one
+const railBoxes = await Promise.all((await page.locator(".rail button").all()).map((b) => b.boundingBox()));
+const railScroll = await page.locator(".rail").evaluate((el) => el.scrollWidth - el.clientWidth);
+check(
+  `phone ${PHONE.width}px: every tool on the rail lies within the screen, each a finger wide`,
+  railBoxes.length >= 8 && railScroll <= 0 && railBoxes.every((b) => !!b && b.x >= 0 && b.x + b.width <= PHONE.width && b.width >= 44 && b.height >= 44),
+  `${railBoxes.length} tools, ${railBoxes.map((b) => (b ? `${Math.round(b.x)}+${Math.round(b.width)}` : "none")).join(" ")}, overflow ${railScroll}`,
+);
 await railButton(page, "Add a stair").scrollIntoViewIfNeeded();
 const stairButton = await railButton(page, "Add a stair").boundingBox();
 check(`phone ${PHONE.width}px: the rail's Add a stair can be reached`, !!stairButton && stairButton.x >= 0 && stairButton.x + stairButton.width <= PHONE.width);
@@ -1038,7 +1046,7 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   const loadedV1 = await hook.evaluate((h, p) => h.actions.loadModel(p), v1);
   check(
     "storeys: a format 1 plan loads as one ground floor, and the 3D view builds it",
-    loadedV1.ok && loadedV1.migratedFrom === 1 && (await until("s.model.name === 'Saved as format 1' && s.model.version === 3")) &&
+    loadedV1.ok && loadedV1.migratedFrom === 1 && (await until("s.model.name === 'Saved as format 1' && s.model.version === 4")) &&
       (await sceneUntil((s) => s.levels.total === 1 && s.stairs === 0 && s.slabs === 0)),
     loadedV1.summary,
   );
@@ -1497,13 +1505,15 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
 
   // a format-2 plan, rooms as rectangles: loads migrated, its rooms as their four corners
   const v2 = await hook.evaluate((h) => {
-    const m = h.store.getState().model;
+    // format 2 had no columns
+    const { columns, ...m } = h.store.getState().model;
+    void columns;
     return { ...m, version: 2, name: "Saved as format 2", rooms: [{ id: "room_old", levelId: m.levels[0].id, x: 1, y: 1, w: 3, h: 2, label: "Old", floor: "tile" }] };
   });
   const loadedV2 = await hook.evaluate((h, p) => h.actions.loadModel(p), v2);
   check(
     "shapes: a format-2 plan loads, each rectangle room as its four corners",
-    loadedV2.ok && loadedV2.migratedFrom === 2 && (await until("s.model.version === 3 && s.model.rooms[0].points.length === 4 && s.model.rooms[0].points[2].x === 4 && s.model.rooms[0].points[2].y === 3")),
+    loadedV2.ok && loadedV2.migratedFrom === 2 && (await until("s.model.version === 4 && s.model.rooms[0].points.length === 4 && s.model.rooms[0].points[2].x === 4 && s.model.rooms[0].points[2].y === 3")),
     loadedV2.summary,
   );
 
@@ -1567,8 +1577,8 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
     const arcs = file ? (file.text.match(/IFCARCINDEX\(/g) ?? []).length : 0;
     check(
       "shapes: the IFC export writes curved walls and shaped rooms with IFC4 arcs, every wall, space and opening in it",
-      file?.name === "crescent-house.ifc" && ifc.framed && ifc.schema === "IFC4" && ifc.count("IFCWALL") === 25 && ifc.count("IFCSPACE") === 12 &&
-        ifc.count("IFCOPENINGELEMENT") === 29 && ifc.count("IFCINDEXEDPOLYCURVE") > 0 && arcs >= 6,
+      file?.name === "crescent-house.ifc" && ifc.framed && ifc.schema === "IFC4" && ifc.count("IFCWALL") === 31 && ifc.count("IFCSPACE") === 14 &&
+        ifc.count("IFCOPENINGELEMENT") === 34 && ifc.count("IFCINDEXEDPOLYCURVE") > 0 && arcs >= 6,
       `${file?.name}: ${ifc.count("IFCWALL")} walls, ${ifc.count("IFCSPACE")} spaces, ${ifc.count("IFCOPENINGELEMENT")} openings, ${ifc.count("IFCINDEXEDPOLYCURVE")} curves, ${arcs} arcs`,
     );
   }
@@ -1806,6 +1816,319 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   }
   await tool("set_active_level", { id: "level_ground" });
   await showView(page, "Plan");
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+}
+
+// ---------- 12l. structure: columns over an open carport, a garage door, the car ----------
+{
+  const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+  await showView(page, "Plan");
+  await planMenu(page, "Load Crescent House demo");
+  await until("s.model.name === 'Crescent House'", 5000);
+  const plan = await tool("get_model", {});
+  const carport = plan.model?.rooms.find((r) => r.label === "Carport");
+  const first = plan.supports?.find((x) => x.levelId === "level_first");
+  check(
+    "structure: the demo's studio stands on 3 columns over an open carport, with a garage door and a car, clean",
+    plan.ok && plan.model.columns.length === 3 && carport?.kind === "open" && plan.model.openings.some((o) => o.style === "garage") &&
+      plan.model.items.some((i) => i.kind === "car") && first?.columns === 3 && first.unsupported.length === 0 && (await tool("get_issues", {})).issues.length === 0,
+    plan.summary,
+  );
+  // without its columns the studio's floor is reported unsupported, where it is
+  await hook.evaluate((h) => h.actions.loadModel({ ...h.store.getState().model, columns: [] }));
+  const bare = await tool("get_issues", { level: "First floor" });
+  check("structure: without its columns the studio's floor is reported unsupported", bare.issues.some((i) => i.code === "slab_unsupported" && i.refs.includes("f_room_studio")), bare.summary);
+  await hook.evaluate((h) => h.actions.undo());
+  await until("s.model.columns.length === 3");
+  // the agent adds a column: it is seen doing so, and the column is part of the plan
+  const added = await tool("add_column", { x: 13, y: -2.5, level: "Ground floor" });
+  const focus = await hook.evaluate((h) => h.presence.getState().agent.focus);
+  check("structure: add_column adds a column the agent is seen adding", added.ok && focus.includes(added.id) && (await until("s.model.columns.length === 4")), added.summary);
+  // a column in the drive through the garage door is reported
+  const drive = await tool("get_issues", { level: "Ground floor" });
+  check("structure: a column in the garage door's drive is reported", drive.issues.some((i) => i.code === "column_blocks_door" && i.refs.includes(added.id)), drive.summary);
+  // removing one waits for the person, and a refusal keeps it
+  const removing = hook.evaluate((h, id) => h.runTool("remove_column", { id }), added.id);
+  check("structure: remove_column parks for approval", await until("s.approvals.length === 1 && s.approvals[0].targets[0].type === 'column'"));
+  await hook.evaluate((h) => h.actions.resolveApproval(h.store.getState().approvals[0].id, false));
+  check("structure: a refused remove_column keeps the column", !(await removing).ok && (await until("s.model.columns.length === 4")));
+  await hook.evaluate((h) => h.actions.undo());
+  await until("s.model.columns.length === 3");
+  // a garage door and an open space through the tools
+  const garageDoor = await tool("add_door", { wallId: "g_wing_end", t: 0.5, style: "garage", width: 2.4 });
+  const opened = await tool("update_room", { id: "Guest room", open: true });
+  check(
+    "structure: add_door style garage and update_room open take effect",
+    garageDoor.ok && opened.ok && (await until(`s.model.openings.some((o) => o.id === '${garageDoor.id}' && o.style === 'garage' && o.hinge === undefined) && s.model.rooms.some((r) => r.label === 'Guest room' && r.kind === 'open')`)),
+    `${garageDoor.summary} ${opened.summary}`,
+  );
+  await hook.evaluate((h) => h.actions.undo());
+  await hook.evaluate((h) => h.actions.undo());
+  await until("s.model.rooms.every((r) => r.label !== 'Guest room' || r.kind === undefined)");
+  await S("12l-structure-plan");
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+}
+
+// ---------- 12m. structure on the plan: columns, the column tool, the carport, the slab overhead ----------
+{
+  await showView(page, "Plan");
+  await planMenu(page, "Load Crescent House demo");
+  await until("s.model.name === 'Crescent House'", 5000);
+  await page.locator(PLAN_SVG).hover();
+  await page.keyboard.press("Shift+1");
+  const drawn = await page.evaluate(() => ({
+    columns: document.querySelectorAll("[data-column] .pl-column").length,
+    garage: !!document.querySelector("[data-opening='g_garage_door'][data-style='garage'] .pl-garage-overhead"),
+    garageSwings: document.querySelectorAll("[data-opening='g_garage_door'] .pl-swing, [data-opening='g_garage_door'] .pl-leaf").length,
+    open: document.querySelectorAll("[data-open-space]").length,
+    overhead: !!document.querySelector(".pl-overhead-rim"),
+    rim: !!document.querySelector("[data-open-rim] .pl-open-rim")?.getAttribute("d"),
+    axes: [...document.querySelectorAll("[data-column-axes] .pl-dim-text")].map((t) => t.textContent).join(),
+  }));
+  check(
+    "structure plan: three columns in poché, the garage door with no swing, the carport hatched and its open sides edged, the studio's slab dashed over it, the columns' axes dimensioned",
+    drawn.columns === 3 && drawn.garage && drawn.garageSwings === 0 && drawn.open === 1 && drawn.rim && drawn.overhead && drawn.axes === "2.75,2.75",
+    JSON.stringify(drawn),
+  );
+  // a press selects a column, and Properties edits it
+  await page.locator("[data-column='g_column_2']").click();
+  check(
+    "structure plan: a click selects a column, and Properties names it",
+    (await until("s.editor.selectedColumnId === 'g_column_2'")) && (await page.locator(".insp-head__title").first().textContent()) === "Column 2",
+  );
+  await page.keyboard.press("Escape");
+  // the column tool from the keyboard alone: P, an arrow brings the cross, Enter puts one down, Esc ends it
+  await page.locator(PLAN_SVG).hover();
+  await page.mouse.move(0, 0);
+  await page.keyboard.press("p");
+  check("structure plan: P picks Add a column", (await railButton(page, "Add a column").getAttribute("aria-pressed")) === "true");
+  // from the keyboard the aim is drawn at once, and the hint says where Enter would put the column
+  const aimSaid = (await page.locator(".hint").textContent()) ?? "";
+  check(
+    "structure plan: picked by P, the column's aim is drawn and the hint letters where it would go",
+    (await page.locator(".pl-ghost-column").count()) === 1 && /Column at X -?\d+\.\d\d m, Y -?\d+\.\d\d m, /.test(aimSaid),
+    aimSaid,
+  );
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  check("structure plan: Enter puts a column down at the tool's cross", await until("s.model.columns.length === 4 && s.activity.at(-1).source === 'human'"));
+  await page.keyboard.press("Escape");
+  check("structure plan: Esc puts the column tool down", (await railButton(page, "Select").getAttribute("aria-pressed")) === "true");
+  await page.keyboard.press("Control+z");
+  await until("s.model.columns.length === 3");
+  // on the studio's level, without its columns, its floor is hatched where nothing carries it
+  await hook.evaluate((h) => h.actions.loadModel({ ...h.store.getState().model, columns: [] }));
+  await hook.evaluate((h) => h.runTool("set_active_level", { id: "level_first" }));
+  check("structure plan: an upper floor nothing carries is hatched on its level", await page.locator(".pl-unsupported").first().isVisible().catch(() => false));
+  await S("12m-structure-unsupported");
+  await hook.evaluate((h) => h.actions.undo());
+  await hook.evaluate((h) => h.runTool("set_active_level", { id: "level_ground" }));
+  await until("s.model.columns.length === 3");
+  await S("12m-structure-plan");
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+}
+
+// ---------- 12n. structure in 3D and IFC: columns, the studio's soffit, the garage door, the car ----------
+{
+  const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+  await showView(page, "Plan");
+  await planMenu(page, "Load Crescent House demo");
+  await until("s.model.name === 'Crescent House'", 5000);
+  await tool("set_active_level", { id: "First floor" });
+  await showView(page, "3D");
+  const built = await sceneUntil((s) => s.levels.shown.length === 2 && s.entities > 0, 8000);
+  // a column shows where it stands, and a click on it selects it, outlined in the model
+  await railButton(page, "Top view").click();
+  await sceneUntil((s) => !s.moving, 4000);
+  await tool("set_active_level", { id: "Ground floor" });
+  await sceneUntil((s) => !s.moving, 4000);
+  const columnAt = await hook.evaluate((h) => h.sceneLocate("column", "g_column_2"));
+  const canvasAt = await page.locator(SCENE_CANVAS).boundingBox();
+  if (columnAt && canvasAt) await page.mouse.click(canvasAt.x + columnAt.x, canvasAt.y + columnAt.y);
+  check(
+    "structure 3D: a click on a column in the model selects it, and the model outlines it",
+    built && !!columnAt && (await until("s.editor.selectedColumnId === 'g_column_2'")) && (await sceneUntil((s) => s.marks.selection === 1)),
+    JSON.stringify(columnAt),
+  );
+  await S("12n-structure-3d-top");
+  await hook.evaluate((h) => h.actions.selectColumn(null));
+  await railButton(page, "Orbit").click();
+  await sceneUntil((s) => !s.moving, 4000);
+  // under the studio, looking up at its soffit across the carport, the car parked there
+  await tool("set_active_level", { id: "First floor" });
+  await hook.evaluate((h) => h.sceneLook([20.5, 2.2, 6.5], [14, 1.0, -0.2]));
+  await sceneUntil((s) => !s.moving, 4000);
+  await S("12n-structure-carport");
+  // the garage door is raised and lowered by set_doors, as a hinged door is swung
+  const before = (await scene())?.frames ?? 0;
+  const raised = await tool("set_doors", { state: "open", id: "g_garage_door" });
+  check("structure 3D: set_doors raises the sectional garage door in the model", raised.ok && (await sceneUntil((s) => s.frames > before && !s.moving, 4000)), raised.summary);
+  await hook.evaluate((h) => h.sceneLook([15, 2.6, -9], [14, 1.2, -1]));
+  await sceneUntil((s) => !s.moving, 4000);
+  await S("12n-structure-garage-open");
+  await tool("set_doors", { state: "closed", id: "g_garage_door" });
+  // the building model: three load-bearing columns, the wall the first stands in written less it,
+  // the carport an outside parking space, the garage door a sectional door
+  {
+    const file = await downloadText(() => exportMenu(page, "Building model"));
+    const ifc = ifcFacts(file);
+    const text = file?.text ?? "";
+    check(
+      "structure IFC: the columns are IfcColumns, the wall one stands in a CSG body less it, and the counts the demo's",
+      ifc.framed && ifc.count("IFCCOLUMN") === 3 && ifc.count("IFCBOOLEANRESULT") === 1 && /'CSG'/.test(text) && ifc.count("IFCWALL") === 31 && ifc.count("IFCOPENINGELEMENT") === 34,
+      `${ifc.count("IFCCOLUMN")} columns, ${ifc.count("IFCBOOLEANRESULT")} booleans, ${ifc.count("IFCWALL")} walls, ${ifc.count("IFCOPENINGELEMENT")} openings`,
+    );
+    check(
+      "structure IFC: the carport is an outside parking space and the garage door a sectional IfcDoor",
+      /IFCSPACE\([^;]*'Carport'[^;]*\.PARKING\./.test(text) && /IFCDOOR\([^;]*\.USERDEFINED\.,'SECTIONAL'\)/.test(text),
+      file?.name,
+    );
+  }
+  await showView(page, "Plan");
+  await planMenu(page, "Load Sunset Loft demo");
+  await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
+}
+
+// ---------- 12o. structure end to end: an agent builds a carport under a storey with the tools alone ----------
+{
+  const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
+  const refused = [];
+  const T = async (name, args) => {
+    const r = await tool(name, args);
+    if (!r.ok) refused.push(`${name}: ${r.summary}`);
+    return r;
+  };
+  await page.bringToFront();
+  await page.setViewportSize(DESKTOP);
+  await showView(page, "Plan");
+  await planMenu(page, "Clear plan");
+  await until("s.model.walls.length === 0 && s.model.rooms.length === 0 && s.model.columns.length === 0");
+  // a workshop 6 × 6.5 m, an open carport east of it under one storey over both, carried by three columns
+  await T("set_plan_name", { name: "Carport by tools" });
+  const F = (await T("add_level", {})).id;
+  const box = [[0, 0, 6, 0], [6, 0, 6, 6.5], [6, 6.5, 0, 6.5], [0, 6.5, 0, 0]];
+  const groundWalls = [];
+  for (const [ax, ay, bx, by] of box) groundWalls.push((await T("add_wall", { ax, ay, bx, by })).id);
+  await T("add_door", { wallId: groundWalls[2], t: 0.5 });
+  await T("add_room", { x: 0.1, y: 0.1, w: 5.8, h: 6.3, label: "Workshop" });
+  const carportWall = (await T("add_wall", { ax: 6, ay: 0, bx: 11, by: 0 })).id;
+  const garage = await T("add_door", { wallId: carportWall, t: 0.5, style: "garage" });
+  await T("add_room", { x: 6.1, y: 0.1, w: 5.05, h: 6.55, label: "Carport", open: true });
+  const grid = await T("add_column", { x: 11, y: 3.25, grid: { rows: 3, cols: 1, spacing: 3.25 } });
+  await T("place_item", { kind: "car", x: 8.5, y: 3.4 });
+  for (const [ax, ay, bx, by] of [[0, 0, 11, 0], [11, 0, 11, 6.5], [11, 6.5, 0, 6.5], [0, 6.5, 0, 0]]) await T("add_wall", { ax, ay, bx, by, level: F });
+  const partition = (await T("add_wall", { ax: 6, ay: 0, bx: 6, by: 6.5, level: F })).id;
+  await T("add_door", { wallId: partition, t: 0.5 });
+  await T("add_room", { x: 0.1, y: 0.1, w: 5.8, h: 6.3, label: "Bedroom", level: F });
+  await T("add_room", { x: 6.1, y: 0.1, w: 4.8, h: 6.3, label: "Studio", level: F });
+  const clean = await T("get_issues", {});
+  const report = await T("get_model", {});
+  const carried = report.supports?.find((x) => x.levelId === F);
+  check(
+    "structure by tools: an open carport with a garage door, three columns and a car under a storey, with no issues",
+    refused.length === 0 && grid.ids?.length === 3 && garage.ok && clean.issues?.length === 0 && carried?.columns === 3 && carried.unsupported.length === 0 &&
+      (await until("s.model.columns.length === 3 && s.model.rooms.some((r) => r.label === 'Carport' && r.kind === 'open') && s.model.items.some((i) => i.kind === 'car')")),
+    refused.join(" ;; ") || JSON.stringify(clean.issues?.map((i) => i.code)),
+  );
+  await S("12o-carport-by-tools-plan");
+
+  // the middle column taken away, once the person agrees: the storey's floor is unsupported where it stood
+  const removing = hook.evaluate((h, id) => h.runTool("remove_column", { id }), grid.ids[1]);
+  await until("s.approvals.length === 1 && s.approvals[0].targets[0].type === 'column'");
+  await hook.evaluate((h) => h.actions.resolveApproval(h.store.getState().approvals[0].id, true));
+  const gone = await removing;
+  const studio = (await state("s.model.rooms.find((r) => r.label === 'Studio').id"));
+  const after = await tool("get_issues", { level: F });
+  await hook.evaluate((h) => void h.actions.undo());
+  check(
+    "structure by tools: removing a column leaves the studio's floor unsupported, and Undo carries it again",
+    gone.ok && after.issues.some((i) => i.code === "slab_unsupported" && i.refs.includes(studio)) &&
+      (await until("s.model.columns.length === 3")) && (await tool("get_issues", {})).issues.length === 0,
+    JSON.stringify(after.issues?.map((i) => i.code)),
+  );
+
+  // the column tool by pointer: P, a click in the carport puts one down there, as the person's own edit
+  await fitPlan(page);
+  await page.locator(PLAN_SVG).hover();
+  await page.keyboard.press("p");
+  await click(9.6, 5.6);
+  const placed = await until("s.model.columns.length === 4 && s.activity.at(-1).source === 'human'");
+  const at = await hook.evaluate((h, ids) => h.store.getState().model.columns.find((c) => !ids.includes(c.id)), grid.ids);
+  check("structure plan: a click with the column tool puts a column down where it was clicked", placed && !!at && Math.hypot(at.x - 9.6, at.y - 5.6) <= 0.3, JSON.stringify(at ?? null));
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Control+z");
+  await until("s.model.columns.length === 3");
+
+  // in 3D: the columns stand in the model, and from under the carport the studio's soffit hides the sky
+  const canvasColour = async () => {
+    const shot = await page.locator(SCENE_CANVAS).screenshot();
+    return page.evaluate(async (b64) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      const c = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const g = c.getContext("2d");
+      g.drawImage(bitmap, 0, 0);
+      const s = 24;
+      const d = g.getImageData(Math.floor(bitmap.width / 2 - s / 2), Math.floor(bitmap.height * 0.3), s, s).data;
+      const sum = [0, 0, 0];
+      for (let i = 0; i < d.length; i += 4) for (let k = 0; k < 3; k++) sum[k] += d[i + k];
+      return sum.map((v) => v / (d.length / 4));
+    }, shot.toString("base64"));
+  };
+  await tool("set_active_level", { id: F });
+  await showView(page, "3D");
+  const built = await sceneUntil((s) => s.levels.shown.length === 2 && s.columns === 3 && s.slabs === 1, 8000);
+  check("structure 3D: the agent's three columns and the storey's slab are in the model", built, JSON.stringify(await scene()));
+  // under the studio, between the car and the columns, looking up past the slab's edge to the sky beyond
+  await hook.evaluate((h) => h.sceneLook([10.2, 1.1, 1.4], [12.5, 3.6, 1.6]));
+  await sceneUntil((s) => !s.moving, 4000);
+  const underSlab = await canvasColour();
+  await S("12o-carport-by-tools-soffit");
+  await tool("set_active_level", { id: "Ground floor" });
+  await sceneUntil((s) => s.levels.shown.length === 1 && !s.moving, 4000);
+  await hook.evaluate((h) => h.sceneLook([10.2, 1.1, 1.4], [12.5, 3.6, 1.6]));
+  await sceneUntil((s) => !s.moving, 4000);
+  const openSky = await canvasColour();
+  const diff = Math.max(...underSlab.map((v, k) => Math.abs(v - openSky[k])));
+  check("structure 3D: from under the carport, the storey's soffit is drawn over it (the view changes when the storey is hidden)", diff > 12, `${underSlab.map(Math.round)} vs ${openSky.map(Math.round)}`);
+  await tool("set_active_level", { id: F });
+  await showView(page, "Plan");
+
+  // the building model: the three columns as IfcColumns, the carport an outside parking space
+  {
+    const file = await downloadText(() => exportMenu(page, "Building model"));
+    const ifc = ifcFacts(file);
+    const text = file?.text ?? "";
+    check(
+      "structure IFC: the agent's carport exports its three IfcColumns, its open space as outside parking and its sectional door",
+      ifc.framed && ifc.count("IFCCOLUMN") === 3 && /IFCSPACE\([^;]*'Carport'[^;]*\.PARKING\./.test(text) && /IFCDOOR\([^;]*\.USERDEFINED\.,'SECTIONAL'\)/.test(text),
+      `${ifc.count("IFCCOLUMN")} columns`,
+    );
+  }
+
+  // a plan saved in format 3, before columns: it loads, with none, its rooms enclosed and its doors swinging
+  const v3 = await hook.evaluate((h) => {
+    const { columns, ...m } = h.store.getState().model;
+    void columns;
+    return {
+      ...m,
+      version: 3,
+      name: "Saved as format 3",
+      rooms: m.rooms.filter((r) => r.kind !== "open"),
+      openings: m.openings.filter((o) => o.style !== "garage"),
+      items: m.items.filter((i) => i.kind !== "car"),
+    };
+  });
+  const loadedV3 = await hook.evaluate((h, p) => h.actions.loadModel(p), v3);
+  check(
+    "structure: a format-3 plan loads into format 4 with no columns, nothing else changed",
+    loadedV3.ok && loadedV3.migratedFrom === 3 &&
+      (await until(`s.model.version === 4 && s.model.name === 'Saved as format 3' && s.model.columns.length === 0 && s.model.rooms.length === ${v3.rooms.length} && s.model.walls.length === ${v3.walls.length}`)),
+    loadedV3.summary,
+  );
   await planMenu(page, "Load Sunset Loft demo");
   await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
 }

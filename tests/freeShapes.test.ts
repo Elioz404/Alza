@@ -32,8 +32,11 @@ const plan = (over: Partial<PlanModel>): PlanModel => ({ ...emptyModel(), ...ove
 describe("plans saved before free shapes", () => {
   it("a format-2 plan's rooms load as their four corners, its walls as straight, nothing else changed", () => {
     const loft = seedLoft();
+    // format 2 had no columns: the plan it saved has no list of them
+    const { columns: _none, ...saved } = loft;
+    void _none;
     const v2 = {
-      ...loft,
+      ...saved,
       version: 2,
       rooms: loft.rooms.map(({ points, ...r }) => ({ ...r, ...outlineBounds(points) })),
     };

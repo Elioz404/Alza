@@ -44,6 +44,7 @@ function PlanFigures() {
   const windows = useAppStore((s) => s.model.openings.filter((o) => o.kind === "window").length);
   const levels = useAppStore((s) => s.model.levels.length);
   const stairs = useAppStore((s) => s.model.stairs.length);
+  const columns = useAppStore((s) => s.model.columns.length);
   const area = rooms.reduce((a, r) => a + roomArea(r), 0);
   return (
     <Stats
@@ -59,6 +60,7 @@ function PlanFigures() {
               { label: "Stairs", value: stairs },
             ]
           : []),
+        ...(columns > 0 ? [{ label: "Columns", value: columns }] : []),
         { label: "Floor area", value: area > 0 ? squareMetres(area) : "0 m²" },
       ]}
     />

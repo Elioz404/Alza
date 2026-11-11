@@ -1,6 +1,6 @@
 /**
  * The keys that act on the selection, the same whichever view shows it: Delete or Backspace
- * removes the selected wall, piece, room or stair, Ctrl/Cmd+Z undoes the last change, and Escape lets
+ * removes the selected wall, piece, room, stair or column, Ctrl/Cmd+Z undoes the last change, and Escape lets
  * go of the selection. The plan (src/editor/Editor.tsx) and the 3D view (src/three/Scene3D.tsx)
  * both answer them through here, so a piece selected by a click on the model is removed, and
  * the removal undone, exactly as on the plan.
@@ -21,11 +21,12 @@ export function deselectAll(): void {
   pageActions.selectItem(null);
   pageActions.selectRoom(null);
   pageActions.selectStair(null);
+  pageActions.selectColumn(null);
 }
 
-/** Remove what is selected (a wall, then a piece, a room, a stair), as the human. Returns whether anything was. */
+/** Remove what is selected (a wall, then a piece, a room, a stair, a column), as the human. Returns whether anything was. */
 export function removeSelected(): boolean {
-  const { selectedWallId, selectedItemId, selectedRoomId, selectedStairId } = store.getState().editor;
+  const { selectedWallId, selectedItemId, selectedRoomId, selectedStairId, selectedColumnId } = store.getState().editor;
   if (selectedWallId) {
     dispatch({ type: "remove_wall", id: selectedWallId }, human);
     pageActions.selectWall(null);
@@ -38,6 +39,9 @@ export function removeSelected(): boolean {
   } else if (selectedStairId) {
     dispatch({ type: "remove_stair", id: selectedStairId }, human);
     pageActions.selectStair(null);
+  } else if (selectedColumnId) {
+    dispatch({ type: "remove_column", id: selectedColumnId }, human);
+    pageActions.selectColumn(null);
   } else return false;
   return true;
 }

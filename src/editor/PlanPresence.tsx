@@ -22,6 +22,7 @@ import { useCanvas } from "./canvasState";
 import { placeOf, type Place } from "../model/places";
 import { stairGeometryIn } from "../model/levels";
 import { catalogOf } from "../model/catalog";
+import { columnBox } from "../model/columns";
 import type { PlanModel } from "../model/types";
 import { outlinePath } from "../model/shapes";
 import { PRESENCE_MARK, wallPathD } from "./drawing";
@@ -47,6 +48,11 @@ function Highlight({ model, id, S, className }: { model: PlanModel; id: string; 
   if (g) {
     const { minX, minY, maxX, maxY } = g.box;
     return <rect className={className} x={minX * S - P.pad} y={minY * S - P.pad} width={(maxX - minX) * S + 2 * P.pad} height={(maxY - minY) * S + 2 * P.pad} />;
+  }
+  const col = model.columns.find((x) => x.id === id);
+  if (col) {
+    const b = columnBox(col);
+    return <rect className={className} x={b.minX * S - P.pad} y={b.minY * S - P.pad} width={(b.maxX - b.minX) * S + 2 * P.pad} height={(b.maxY - b.minY) * S + 2 * P.pad} />;
   }
   const o = model.openings.find((x) => x.id === id);
   const at = o && placeOf(model, id);

@@ -18,6 +18,7 @@ const PUBLIC_NAMES = [
   "place_item", "define_item_kind", "move_item", "remove_item",
   "list_levels", "add_level", "update_level", "remove_level", "set_active_level",
   "add_stair", "update_stair", "remove_stair",
+  "add_column", "update_column", "remove_column",
   "set_plan_name", "clear_model",
   "build_3d", "set_camera", "set_3d_style", "set_doors", "export_ifc", "get_supplier_catalog", "place_supplier_product",
   "leave_note", "get_notes", "get_presence", "point_at",

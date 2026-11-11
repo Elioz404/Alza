@@ -181,6 +181,48 @@ const washbasin: Draw = ({ S, hw, hd, W, D }) => [
 
 const towelRail: Draw = ({ S, hw, hd, W, D }) => [box("body", -hw, -hd, W, D, 0.02 * S), line("bar", `M${-hw + 0.04 * S} 0H${hw - 0.04 * S}`, "pl-fd-ink")];
 
+/**
+ * A car seen from above, as a plan's reference vehicle is drawn: the body with rounded corners,
+ * the windscreen and the rear window (trapezoids, wider at the bonnet and the boot), the roof
+ * between them, the door mirrors. Its rear is the back edge (-d/2), its bonnet the front (+d/2),
+ * so it parks nose in from the way its rotation faces. Proportions are fractions of the car's own
+ * length and width, so the symbol fits any size the kind is given.
+ */
+const CAR = Object.freeze({
+  /** from the front: where the windscreen starts and ends, and from the back the rear window */
+  screen: [0.24, 0.39] as const,
+  rear: [0.19, 0.29] as const,
+  /** the glass's width at its wide and its narrow end, as fractions of the car's width */
+  wide: 0.84,
+  narrow: 0.7,
+  /** corner radius, and the mirrors' reach and depth, fractions of the width */
+  corner: 0.22,
+  mirror: 0.09,
+  mirrorDepth: 0.06,
+});
+
+const car: Draw = ({ hw, hd, W, D }) => {
+  const front = (f: number) => hd - f * D;
+  const back = (f: number) => -hd + f * D;
+  const glass = (key: string, wideY: number, narrowY: number) =>
+    line(
+      key,
+      `M${-hw * CAR.wide} ${wideY}L${hw * CAR.wide} ${wideY}L${hw * CAR.narrow} ${narrowY}L${-hw * CAR.narrow} ${narrowY}Z`,
+      "pl-fd-ink",
+    );
+  const m = CAR.mirror * W;
+  const md = CAR.mirrorDepth * W;
+  const my = front(CAR.screen[0]) - md;
+  return [
+    box("body", -hw, -hd, W, D, CAR.corner * W),
+    glass("screen", front(CAR.screen[0]), front(CAR.screen[1])),
+    glass("rear", back(CAR.rear[0]), back(CAR.rear[1])),
+    line("roof", `M${-hw * CAR.narrow} ${front(CAR.screen[1])}V${back(CAR.rear[1])}M${hw * CAR.narrow} ${front(CAR.screen[1])}V${back(CAR.rear[1])}`),
+    box("mirror-l", -hw - m, my, m, md, md / 2),
+    box("mirror-r", hw, my, m, md, md / 2),
+  ];
+};
+
 const SYMBOLS: Readonly<Record<string, Draw>> = Object.freeze({
   sofa: sofa(3),
   sofa_3: sofa(3),
@@ -213,6 +255,7 @@ const SYMBOLS: Readonly<Record<string, Draw>> = Object.freeze({
   sink: washbasin,
   towel_rail: towelRail,
   plant,
+  car,
 });
 
 /** Whether a kind has a symbol of its own (it reads without its name). */

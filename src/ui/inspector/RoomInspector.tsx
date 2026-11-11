@@ -1,6 +1,7 @@
 /**
- * Properties for a selected room: its name, floor finish, corner and size in metres, its area,
- * and removing it. Every field is one update_room or remove_room.
+ * Properties for a selected room: its name, floor finish, whether it is an open space (a
+ * carport, a porch: no walls need close it off), corner and size in metres, its area, and
+ * removing it. Every field is one update_room or remove_room.
  */
 
 import { pageActions } from "../../model/store";
@@ -9,7 +10,8 @@ import type { Room } from "../../model/types";
 import type { RoomPatch } from "../../model/store";
 import { outlineBounds, outlinePerimeter } from "../../model/shapes";
 import { useNotify } from "../shell/useNotify";
-import { Button, IconRoom, IconTrash, Section, SegmentedControl, SegmentedControlItem } from "../primitives";
+import { Button, IconRoom, IconTrash, Section, SegmentedControl, SegmentedControlItem, Switch } from "../primitives";
+import { isOpenRoom } from "../../model/issues";
 import { EntityHead, InspectorFoot, PlanTextField, Stats, useCommit } from "./parts";
 import { MeasureField, PointFields } from "./measure";
 import { RoomShape } from "./RoomShape";
@@ -35,7 +37,7 @@ export function RoomInspector({ room }: { room: Room }) {
   return (
     <div className="insp">
       <div className="insp-body">
-        <EntityHead icon={IconRoom} title={room.label} sub={`Room, ${FINISH_LABEL[room.floor].toLowerCase()} floor`} id={room.id} />
+        <EntityHead icon={IconRoom} title={room.label} sub={`${isOpenRoom(room) ? "Open space" : "Room"}, ${FINISH_LABEL[room.floor].toLowerCase()} floor`} id={room.id} />
         <Section>
           <PlanTextField
             label="Name"
@@ -53,6 +55,14 @@ export function RoomInspector({ room }: { room: Room }) {
               ))}
             </SegmentedControl>
           </div>
+          <Switch
+            label="Open space"
+            value={isOpenRoom(room)}
+            onChange={(open) => update({ kind: open ? "open" : "enclosed" })}
+            description="A carport, a porch, a terrace under the house: its sides need no walls, and Issues does not ask for them or for a door."
+            labelPosition="start"
+            labelSpacing="spread"
+          />
         </Section>
         <Section title="Size and position" action={<span className="insp-aside">Snaps to {Math.round(SNAP * 100)} cm</span>}>
           <div className="insp-grid">

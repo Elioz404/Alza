@@ -11,7 +11,11 @@ import {
   BULGE,
   CALIBRATION_METERS,
   CAMERA_MODES,
+  COLUMN,
+  COLUMN_GRID,
+  COLUMN_SHAPES,
   COORD,
+  DOOR_STYLES,
   DOOR_STATES,
   FLOOR_FINISHES,
   FURNITURE_DIM,
@@ -105,6 +109,19 @@ export const stairRiserCount = z.int().min(STAIR.risers.min).max(STAIR.risers.ma
 export const stairGoing = inRange(STAIR.treadSet);
 export const stairShape = z.enum(STAIR_SHAPES);
 export const stairTurn = z.enum(STAIR_TURNS);
+
+/** A column's section, its width or depth, and a set height. */
+export const columnShape = z.enum(COLUMN_SHAPES);
+export const columnSize = inRange(COLUMN.size);
+export const columnHeight = inRange(COLUMN.height);
+/** A grid of columns: rows × cols of them, `spacing` metres apart each way. */
+export const columnGridSpec = z.strictObject({
+  rows: z.int().min(COLUMN_GRID.count.min).max(COLUMN_GRID.count.max),
+  cols: z.int().min(COLUMN_GRID.count.min).max(COLUMN_GRID.count.max),
+  spacing: inRange(COLUMN_GRID.spacing),
+});
+/** How a door opens: a hinged leaf, or a sectional overhead garage door. */
+export const doorStyle = z.enum(DOOR_STYLES);
 
 /** An id, or a human name such as "bedroom", that addresses an entity. */
 export const ref = text(TEXT.ref);

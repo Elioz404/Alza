@@ -36,7 +36,22 @@
  *                               its landing as an IfcSlab LANDING; Pset_StairCommon
  *   item                      → IfcFurniture with its catalogue box as body, standing on the floor
  *                               finish; a supplier product carries its sku and vendor in the
- *                               plan's own Alza_Product set
+ *                               plan's own Alza_Product set. The car, a reference object, is
+ *                               furniture too (config.ts FURNITURE_TYPE says why)
+ *   column                    → IfcColumn COLUMN: its section (an IfcRectangleProfileDef turned as
+ *                               it stands, or an IfcCircleProfileDef) extruded from its floor to
+ *                               its height (model/columns.ts columnHeight: the underside of the
+ *                               slab over it), in concrete, with Pset_ColumnCommon (LoadBearing)
+ *                               and Qto_ColumnBaseQuantities. A wall it stands in is written less
+ *                               it: the wall's Body a CSG IfcBooleanResult DIFFERENCE of its
+ *                               extrusion and each column's (reaching past the wall's foot and
+ *                               top), so no two bodies overlap, as the plan draws them in one poché
+ *   open room                 → its IfcSpace is EXTERNAL (PARKING where a car is parked in it) and
+ *                               Pset_SpaceCommon IsExternal; the slab over it is the upper level's
+ *                               own (model/floors.ts slabRegion covers every room of a level,
+ *                               over open ground or not), its soffit the slab's underside
+ *   garage door               → an IfcDoor DOOR, OperationType USERDEFINED, UserDefinedOperationType
+ *                               SECTIONAL (config.ts): IFC4 has no sectional door
  *
  * Every element is contained in its level's storey (IfcRelContainedInSpatialStructure), placed
  * relative to it, and has a GlobalId derived from the plan's id and its own (guid.ts). Every name
@@ -67,7 +82,10 @@ import {
   wallTangentAt,
   closestOnEdge,
 } from "../../model/shapes";
-import type { Item, Level, Opening, PlanModel, Room, RoomVertex, Stair, Wall } from "../../model/types";
+import type { Column, Item, Level, Opening, PlanModel, Room, RoomVertex, Stair, Wall } from "../../model/types";
+import { columnArea, columnFootprint, columnHeight, columnRect, columnWalls, isRound } from "../../model/columns";
+import { postTop, wallPosts } from "../../model/columnCuts";
+import { isGarageDoor, isOpenRoom } from "../../model/issues";
 import { catalogOf, SUPPLIER_KIND_PREFIX, isSupplierKind } from "../../model/catalog";
 import { rectCorners, segLen, type ORect, type Pt } from "../../model/geometry";
 import { levelSlice, levelsOf, slabUnderside, stairGeometryIn, stairwellsOf, type LevelInfo } from "../../model/levels";
@@ -76,8 +94,8 @@ import { slabOutline, stairwellPolys } from "../../model/floors";
 import { piecesArea, regionPieces, type Piece, type Poly } from "../../model/region";
 import { stairSplit } from "../../model/stairs";
 import { cleanText } from "../../model/text";
-import { DOOR_SWING_DEFAULTS, DOUBLE_DOOR_CLEAR, FLOOR_FINISH_DEPTH, REGION, SLAB_THICKNESS, SUPPLIER, TEXT, WALL_IN_LINE_SINE, WALL_JOINT_REACH, WALL_MITRE_LIMIT } from "../../model/limits";
-import { FLOOR_MATERIAL, FURNITURE_TYPE, IFC_NAMES, IFC_PSETS, IFC_REPRESENTATION as REP, IFC_SIZES, MODEL_PRECISION, STEP_LABEL_MAX, WALL_MATERIAL } from "./config";
+import { DOOR_SWING_DEFAULTS, DOUBLE_DOOR_CLEAR, FLOOR_FINISH_DEPTH, GARAGE_DOOR, REGION, SLAB_THICKNESS, SUPPLIER, TEXT, WALL_IN_LINE_SINE, WALL_JOINT_REACH, WALL_MITRE_LIMIT } from "../../model/limits";
+import { COLUMN_MATERIAL, FLOOR_MATERIAL, FURNITURE_TYPE, IFC_NAMES, SPACE_TYPE, IFC_PSETS, IFC_REPRESENTATION as REP, IFC_SIZES, MODEL_PRECISION, STEP_LABEL_MAX, WALL_MATERIAL } from "./config";
 import { IfcEntities, type Context, type CurveSegment, type ElementHead, type LayerSetUsage, type LocalPlacement, type Material, type ProductShape, type PropertyValue } from "./entities";
 import type { Ref } from "./step";
 
@@ -193,6 +211,24 @@ export function wallIsExternal(wall: Wall, rooms: readonly Room[]): boolean | un
   }
   if (outside === inside) return undefined;
   return outside > inside;
+}
+
+/**
+ * Whether a column stands outside, its Pset_ColumnCommon IsExternal: one in a wall is as that wall
+ * is (wallIsExternal; outside if any wall it is in is); a free one is outside unless an enclosed
+ * room of its level is all round it, probed IFC_SIZES.roomProbe past each side of its section,
+ * as wallIsExternal steps past a wall's faces.
+ */
+export function columnIsExternal(c: Column, levelWalls: readonly Wall[], rooms: readonly Room[]): boolean {
+  const walls = columnWalls(levelWalls, c);
+  if (walls.length > 0) return walls.some((w) => wallIsExternal(w, rooms) === true);
+  const enclosed = rooms.filter((r) => !isOpenRoom(r));
+  const r = columnRect(c);
+  const reach = Math.max(c.w, c.d) / 2 + IFC_SIZES.roomProbe;
+  return [0, 1, 2, 3].some((k) => {
+    const a = r.rot + (k * Math.PI) / 2;
+    return !inRoom(enclosed, c.x + Math.cos(a) * reach, c.y + Math.sin(a) * reach);
+  });
 }
 
 /**
@@ -418,6 +454,7 @@ export interface IfcElementCounts {
   stairs: number;
   stairFlights: number;
   furniture: number;
+  columns: number;
 }
 
 /** Builds the plan's IFC model into a STEP file, entity by entity. */
@@ -429,6 +466,7 @@ export class PlanToIfc {
   private plasterMaterial: Material | null = null;
   private readonly wallUsages = new Map<number, { usage: LayerSetUsage; walls: Ref[] }>();
   private readonly slabs: Ref[] = [];
+  private readonly columns: Ref[] = [];
   private readonly floorMaterials = new Map<string, { material: Material; coverings: Ref[] }>();
 
   constructor(private readonly model: PlanModel) {}
@@ -506,6 +544,7 @@ export class PlanToIfc {
 
     for (const [thickness, { usage, walls }] of this.wallUsages) ifc.associatesMaterial(this.guid(`rel:material:wall:${thickness}`), walls, usage);
     if (this.slabs.length > 0) ifc.associatesMaterial(this.guid("rel:material:slab"), this.slabs, this.plaster());
+    if (this.columns.length > 0) ifc.associatesMaterial(this.guid("rel:material:column"), this.columns, ifc.material(COLUMN_MATERIAL.name, COLUMN_MATERIAL.category));
     for (const [finish, { material, coverings }] of this.floorMaterials) ifc.associatesMaterial(this.guid(`rel:material:floor:${finish}`), coverings, material);
   }
 
@@ -537,6 +576,10 @@ export class PlanToIfc {
       if (built) contained.push(built);
     }
     for (const item of this.model.items.filter((i) => i.levelId === level.id)) contained.push(this.item(item, placement));
+    for (const column of this.model.columns.filter((c) => c.levelId === level.id)) {
+      const built = this.column(column, walls, rooms, placement);
+      if (built) contained.push(built);
+    }
 
     if (spaces.length > 0) ifc.aggregates(this.guid(`rel:aggregates:spaces:${level.id}`), storey, spaces);
     if (contained.length > 0) ifc.contains(this.guid(`rel:contains:${level.id}`), storey, contained);
@@ -568,8 +611,10 @@ export class PlanToIfc {
     const axis = ifc.shapeRepresentation(this.axis, REP.axis, REP.curve2d, [ifc.polyline([[0, 0], [len, 0]])]);
     const frame: PlanFrame = { o: { x: wall.ax, y: wall.ay }, d: { x: (wall.bx - wall.ax) / len, y: (wall.by - wall.ay) / len } };
     const profile = outline.square ? ifc.rectangle([(len + extB - extA) / 2, 0], bodyLength, wall.thickness) : ifc.closedProfile(outlineCurve(ifc, outline.outline, frame));
-    const footprint = outline.square ? bodyLength * wall.thickness : Math.abs(outlineArea(outline.outline));
-    const body = ifc.shapeRepresentation(this.body, REP.body, REP.sweptSolid, [ifc.extrusion(profile, wall.height)]);
+    const less = this.lessColumns(wall, outline.outline, frame, [-extA / len, 1 + extB / len]);
+    const whole = outline.square ? bodyLength * wall.thickness : Math.abs(outlineArea(outline.outline));
+    const footprint = whole - less.area;
+    const body = ifc.shapeRepresentation(this.body, REP.body, less.solids.length > 0 ? REP.csg : REP.sweptSolid, [ifc.difference(ifc.extrusion(profile, wall.height), less.solids)]);
     const element = ifc.wall(
       { guid: this.guid(`wall:${wall.id}`), name: label(`${IFC_NAMES.wall} ${wall.id}`), placement, shape: ifc.productShape([axis, body]), tag: label(wall.id) },
       "STANDARD",
@@ -582,16 +627,18 @@ export class PlanToIfc {
     // measured on the body as written, so the quantities and the solid agree
     const openings = this.model.openings.filter((o) => o.wallId === wall.id);
     const cut = openings.reduce((sum, o) => sum + o.width * Math.max(0, Math.min(o.height, wall.height - o.sill)), 0);
-    const side = bodyLength * wall.height;
+    // the columns in it take their footprint up to their tops, and the side where they take its whole thickness
+    const side = bodyLength * wall.height - less.side;
+    const volume = whole * wall.height - less.volume;
     this.quantities(element, wall.id, IFC_PSETS.wallQuantities, [
-      ["length", "Length", bodyLength],
+      ["length", "Length", bodyLength - less.length],
       ["length", "Width", wall.thickness],
       ["length", "Height", wall.height],
       ["area", "GrossFootprintArea", footprint],
       ["area", "GrossSideArea", side],
       ["area", "NetSideArea", Math.max(0, side - cut)],
-      ["volume", "GrossVolume", footprint * wall.height],
-      ["volume", "NetVolume", Math.max(0, footprint * wall.height - cut * wall.thickness)],
+      ["volume", "GrossVolume", volume],
+      ["volume", "NetVolume", Math.max(0, volume - cut * wall.thickness)],
     ]);
 
     return [element, ...openings.map((o) => this.filledOpening(o, wall, len, element, placement))];
@@ -615,7 +662,10 @@ export class PlanToIfc {
     ]);
     const { outline, ext } = buttBody(wall, levelWalls);
     const [extA, extB] = ext;
-    const body = ifc.shapeRepresentation(this.body, REP.body, REP.sweptSolid, [ifc.extrusion(ifc.closedProfile(outlineCurve(ifc, outline, frame)), wall.height)]);
+    const less = this.lessColumns(wall, outline, frame, [-extA / len, 1 + extB / len]);
+    const body = ifc.shapeRepresentation(this.body, REP.body, less.solids.length > 0 ? REP.csg : REP.sweptSolid, [
+      ifc.difference(ifc.extrusion(ifc.closedProfile(outlineCurve(ifc, outline, frame)), wall.height), less.solids),
+    ]);
     const element = ifc.wall(
       { guid: this.guid(`wall:${wall.id}`), name: label(`${IFC_NAMES.wall} ${wall.id}`), placement, shape: ifc.productShape([axis, body]), tag: label(wall.id) },
       "STANDARD",
@@ -627,18 +677,20 @@ export class PlanToIfc {
     // measured on the body as written: along the centreline, and the outline's own area
     const openings = this.model.openings.filter((o) => o.wallId === wall.id);
     const bodyLength = len + extA + extB;
-    const footprint = Math.abs(outlineArea(outline));
+    const whole = Math.abs(outlineArea(outline));
+    const footprint = whole - less.area;
     const cut = openings.reduce((sum, o) => sum + o.width * Math.max(0, Math.min(o.height, wall.height - o.sill)), 0);
-    const side = bodyLength * wall.height;
+    const side = bodyLength * wall.height - less.side;
+    const volume = whole * wall.height - less.volume;
     this.quantities(element, wall.id, IFC_PSETS.wallQuantities, [
-      ["length", "Length", bodyLength],
+      ["length", "Length", bodyLength - less.length],
       ["length", "Width", wall.thickness],
       ["length", "Height", wall.height],
       ["area", "GrossFootprintArea", footprint],
       ["area", "GrossSideArea", side],
       ["area", "NetSideArea", Math.max(0, side - cut)],
-      ["volume", "GrossVolume", footprint * wall.height],
-      ["volume", "NetVolume", Math.max(0, footprint * wall.height - cut * wall.thickness)],
+      ["volume", "GrossVolume", volume],
+      ["volume", "NetVolume", Math.max(0, volume - cut * wall.thickness)],
     ]);
     return [element, ...openings.map((o) => this.filledArcOpening(o, wall, frame, element, placement))];
   }
@@ -671,7 +723,7 @@ export class PlanToIfc {
     });
     ifc.voids(this.guid(`rel:voids:${o.id}`), wallElement, void_);
 
-    const facing = o.kind === "door" ? doorFacing(o) : null;
+    const facing = o.kind === "door" && !isGarageDoor(o) ? doorFacing(o) : null;
     const fillPlacement = ifc.localPlacement(placement, ifc.placement3([0, 0, 0], facing ?? undefined));
     const depth = o.kind === "door" ? IFC_SIZES.doorLeafDepth : IFC_SIZES.windowDepth;
     const head: ElementHead = {
@@ -681,7 +733,7 @@ export class PlanToIfc {
       shape: this.bodyShape([ifc.extrusion(ifc.rectangle([0, 0], chord, depth), o.height)]),
       tag: label(o.id),
     };
-    const fill = o.kind === "door" ? ifc.door(head, o.height, chord, doorOperation(o)) : ifc.window(head, o.height, chord);
+    const fill = o.kind === "door" ? this.door(head, o, chord) : ifc.window(head, o.height, chord);
     ifc.fills(this.guid(`rel:fills:${o.id}`), void_, fill);
     return fill;
   }
@@ -707,7 +759,7 @@ export class PlanToIfc {
     });
     ifc.voids(this.guid(`rel:voids:${o.id}`), wallElement, void_);
 
-    const facing = o.kind === "door" ? doorFacing(o) : null;
+    const facing = o.kind === "door" && !isGarageDoor(o) ? doorFacing(o) : null;
     const fillPlacement = ifc.localPlacement(placement, ifc.placement3([0, 0, 0], facing ?? undefined));
     const depth = o.kind === "door" ? IFC_SIZES.doorLeafDepth : IFC_SIZES.windowDepth;
     const head: ElementHead = {
@@ -718,9 +770,97 @@ export class PlanToIfc {
       shape: this.bodyShape([ifc.extrusion(ifc.rectangle([0, 0], o.width, depth), o.height)]),
       tag: label(o.id),
     };
-    const fill = o.kind === "door" ? ifc.door(head, o.height, o.width, doorOperation(o)) : ifc.window(head, o.height, o.width);
+    const fill = o.kind === "door" ? this.door(head, o, o.width) : ifc.window(head, o.height, o.width);
     ifc.fills(this.guid(`rel:fills:${o.id}`), void_, fill);
     return fill;
+  }
+
+  /**
+   * A door: a hinged one by the way it swings (doorOperation), a garage door as the sectional door
+   * IFC4 has no value for (USERDEFINED, GARAGE_DOOR.ifcOperation).
+   */
+  private door(head: ElementHead, o: Opening, width: number): Ref<"IFCDOOR"> {
+    return isGarageDoor(o) ? this.ifc.door(head, o.height, width, "USERDEFINED", GARAGE_DOOR.ifcOperation) : this.ifc.door(head, o.height, width, doorOperation(o));
+  }
+
+  /**
+   * The columns standing in a wall (model/columns.ts columnWalls), as solids in the wall's frame to
+   * take out of its body — each one's section from IFC_SIZES.openingOverreach under the wall's foot
+   * up to its own top (columnHeight), past the wall's top only when it reaches it, so the boolean
+   * leaves no skin and a short column leaves the wall whole over it — and what they take from it,
+   * measured on the body as written: the footprint (`outline`: the body's outline on the plan),
+   * the volume (each one's share of the footprint up to its top), and the side (where a column
+   * takes the wall's whole thickness, model/columnCuts.ts wallPosts: the length of centreline it
+   * replaces within `span`, the body's own run as shares of the centreline, `length` where it
+   * reaches the wall's top, and `side` the face it replaces up to its own top).
+   */
+  private lessColumns(
+    wall: Wall,
+    outline: readonly RoomVertex[],
+    frame: PlanFrame,
+    span: readonly [number, number],
+  ): { solids: ReturnType<IfcEntities["extrusion"]>[]; area: number; volume: number; length: number; side: number } {
+    const ifc = this.ifc;
+    const columns = this.model.columns.filter((c) => columnWalls([wall], c).length > 0);
+    if (columns.length === 0) return { solids: [], area: 0, volume: 0, length: 0, side: 0 };
+    const over = IFC_SIZES.openingOverreach;
+    const tops = columns.map((c) => Math.min(columnHeight(this.model, c) ?? wall.height, wall.height));
+    const solids = columns.map((c, i) => {
+      const centre = inFrame(frame, c);
+      const r = columnRect(c);
+      const profile = isRound(c) ? ifc.circle(centre, c.w / 2) : ifc.rectangle(centre, c.w, c.d, directionIn(frame, { x: Math.cos(r.rot), y: Math.sin(r.rot) }));
+      const reaches = tops[i] >= wall.height - 1e-9;
+      return ifc.extrusion(profile, tops[i] + over + (reaches ? over : 0), [0, 0, -over]);
+    });
+    const body = [tessellateOutline(outline)];
+    const whole = piecesArea(regionPieces(body));
+    const footprints = columns.map((c) => columnFootprint(c));
+    const area = whole - piecesArea(regionPieces(body, footprints));
+    const volume = footprints.reduce((sum, f, i) => sum + (whole - piecesArea(regionPieces(body, [f]))) * tops[i], 0);
+    // the stretches of centreline the columns replace, within the body's own run
+    const len = wallLength(wall);
+    let length = 0;
+    let side = 0;
+    for (const p of wallPosts(wall, columns, this.model)) {
+      const run = Math.max(0, Math.min(p.t1, span[1]) - Math.max(p.t0, span[0])) * len;
+      side += run * postTop(wall, p);
+      if (p.top === undefined) length += run;
+    }
+    return { solids, area, volume, length, side };
+  }
+
+  /**
+   * A column: its section extruded from its floor to its height, turned as it stands; load
+   * bearing, outside unless it stands in an enclosed room of its level. Null on a level the plan
+   * does not have.
+   */
+  private column(c: Column, levelWalls: readonly Wall[], rooms: readonly Room[], storeyPlacement: LocalPlacement): Ref<"IFCCOLUMN"> | null {
+    const ifc = this.ifc;
+    const height = columnHeight(this.model, c);
+    if (height === undefined) return null;
+    const round = isRound(c);
+    const placement = ifc.localPlacement(storeyPlacement, ifc.placement3([...at(c.x, c.y), 0], round ? undefined : rectFrame(columnRect(c)).xAxis));
+    const profile = round ? ifc.circle([0, 0], c.w / 2) : ifc.rectangle([0, 0], c.w, c.d);
+    const element = ifc.column(
+      { guid: this.guid(`column:${c.id}`), name: label(`${IFC_NAMES.column} ${c.id}`), placement, shape: this.bodyShape([ifc.extrusion(profile, height)]), tag: label(c.id) },
+      "COLUMN",
+    );
+    this.columns.push(element);
+    this.properties(element, c.id, IFC_PSETS.columnCommon, [
+      ["Reference", { type: "IFCIDENTIFIER", value: label(c.id) }],
+      ["LoadBearing", { type: "IFCBOOLEAN", value: true }],
+      ["IsExternal", { type: "IFCBOOLEAN", value: columnIsExternal(c, levelWalls, rooms) }],
+    ]);
+    const area = columnArea(c);
+    const perimeter = round ? Math.PI * c.w : 2 * (c.w + c.d);
+    this.quantities(element, c.id, IFC_PSETS.columnQuantities, [
+      ["length", "Length", height],
+      ["area", "CrossSectionArea", area],
+      ["area", "OuterSurfaceArea", perimeter * height],
+      ["volume", "GrossVolume", area * height],
+      ["volume", "NetVolume", area * height],
+    ]);
+    return element;
   }
 
   /** A room as a space: its floor rectangle, extruded to the underside of the slab over it. */
@@ -732,11 +872,16 @@ export class PlanToIfc {
     const footPrint = ifc.shapeRepresentation(this.footPrint, REP.footPrint, REP.curve2d, [outlineCurve(ifc, room.points)]);
     const body = ifc.shapeRepresentation(this.body, REP.body, REP.sweptSolid, [ifc.extrusion(ifc.closedProfile(outlineCurve(ifc, room.points)), height)]);
     const longName = cleanText(room.label);
-    const space = ifc.space(this.guid(`space:${room.id}`), label(room.id), label(longName || room.id), placement, ifc.productShape([footPrint, body]));
+    const open = isOpenRoom(room);
+    const catalog = catalogOf(this.model);
+    const parks = open && this.model.items.some((i) => i.levelId === room.levelId && catalog.get(i.kind)?.parking && pointInOutline(i, room.points));
+    const type = !open ? SPACE_TYPE.enclosed : parks ? SPACE_TYPE.parking : SPACE_TYPE.open;
+    const space = ifc.space(this.guid(`space:${room.id}`), label(room.id), label(longName || room.id), placement, ifc.productShape([footPrint, body]), type);
     const area = roomArea(room);
     this.properties(space, room.id, IFC_PSETS.spaceCommon, [
       ["Reference", { type: "IFCIDENTIFIER", value: label(room.id) }],
-      ["IsExternal", { type: "IFCBOOLEAN", value: false }],
+      // an open room (a carport, a porch) is out of doors, under a roof or not
+      ["IsExternal", { type: "IFCBOOLEAN", value: open }],
     ]);
     this.quantities(space, room.id, IFC_PSETS.spaceQuantities, [
       ["length", "Height", height],
@@ -915,6 +1060,7 @@ export class PlanToIfc {
       stairs: n("IFCSTAIR"),
       stairFlights: n("IFCSTAIRFLIGHT"),
       furniture: n("IFCFURNITURE"),
+      columns: n("IFCCOLUMN"),
     };
   }
 }

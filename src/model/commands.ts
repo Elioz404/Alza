@@ -17,6 +17,8 @@ import {
   store,
   withUndo,
   type ActionResult,
+  type ColumnPatch,
+  type ColumnSpec,
   type ItemKindSpec,
   type LevelPatch,
   type RoomPatch,
@@ -31,7 +33,7 @@ import type { PlanInput } from "./planFormat";
 import type { SupplierProductData } from "./catalog";
 import type { ActivitySource, Note, PlanModel, Underlay } from "./types";
 import type { CurveInput } from "./shapes";
-import type { Actor, Hinge, SwingSide } from "./limits";
+import type { Actor, DoorStyle, Hinge, SwingSide } from "./limits";
 import { touchedBy } from "./touch";
 import { agentTouched, holdEditing, releaseEditing } from "./presence";
 
@@ -43,10 +45,13 @@ export type Command =
   | { type: "add_wall"; ax: number; ay: number; bx: number; by: number; thickness?: number; height?: number; level?: string; curve?: CurveInput }
   | { type: "edit_wall"; id: string; patch: WallPatch }
   | { type: "remove_wall"; id: string }
-  | { type: "add_door"; wallId: string; t: number; width?: number; height?: number; hinge?: Hinge; side?: SwingSide }
+  // `style` "garage" adds a sectional overhead garage door, sized from GARAGE_DOOR (limits.ts)
+  | { type: "add_door"; wallId: string; t: number; width?: number; height?: number; hinge?: Hinge; side?: SwingSide; style?: DoorStyle }
   | { type: "add_window"; wallId: string; t: number; width?: number; sill?: number; height?: number }
   | { type: "set_door_swing"; id: string; hinge?: Hinge; side?: SwingSide }
   | { type: "move_opening"; id: string; t: number }
+  // resize a door or window, or change how a door opens (style)
+  | { type: "update_opening"; id: string; patch: { width?: number; height?: number; sill?: number; style?: DoorStyle } }
   | { type: "remove_opening"; id: string }
   // a rectangle (x, y, w, h), an outline (points) or the walls round a point (fit): store.ts, RoomSpec
   | ({ type: "add_room" } & RoomSpec)
@@ -66,6 +71,12 @@ export type Command =
   | { type: "move_stair"; id: string; x?: number; y?: number; rotation?: number }
   | { type: "update_stair"; id: string; patch: StairPatch }
   | { type: "remove_stair"; id: string }
+  // a column, or a grid of them (spec.grid), on a level: store.ts, ColumnSpec
+  | { type: "add_column"; spec: ColumnSpec }
+  // the drag's command: where the column is and how it is turned, nothing else
+  | { type: "move_column"; id: string; x?: number; y?: number; rotation?: number }
+  | { type: "update_column"; id: string; patch: ColumnPatch }
+  | { type: "remove_column"; id: string }
   | { type: "set_plan_name"; name: string }
   | { type: "clear_model" }
   | { type: "load_model"; model: PlanInput }
@@ -103,10 +114,11 @@ const HANDLERS: Handlers = {
   add_wall: (c) => actions.addWall(c.ax, c.ay, c.bx, c.by, c.thickness, c.height, c.level, c.curve),
   edit_wall: (c) => actions.editWall(c.id, c.patch),
   remove_wall: (c) => actions.removeWall(c.id),
-  add_door: (c) => actions.addOpening("door", c.wallId, c.t, c.width, undefined, c.height, { hinge: c.hinge, side: c.side }),
+  add_door: (c) => actions.addOpening("door", c.wallId, c.t, c.width, undefined, c.height, { hinge: c.hinge, side: c.side, style: c.style }),
   add_window: (c) => actions.addOpening("window", c.wallId, c.t, c.width, c.sill, c.height),
   set_door_swing: (c) => actions.setDoorSwing(c.id, c.hinge, c.side),
   move_opening: (c) => actions.moveOpening(c.id, c.t),
+  update_opening: (c) => actions.updateOpening(c.id, c.patch),
   remove_opening: (c) => actions.removeOpening(c.id),
   add_room: (c) => actions.addRoom(c),
   update_room: (c) => actions.updateRoom(c.id, c.patch),
@@ -139,6 +151,10 @@ const HANDLERS: Handlers = {
   move_stair: (c) => actions.updateStair(c.id, { x: c.x, y: c.y, rotation: c.rotation }),
   update_stair: (c) => actions.updateStair(c.id, c.patch),
   remove_stair: (c) => actions.removeStair(c.id),
+  add_column: (c) => actions.addColumns(c.spec),
+  move_column: (c) => actions.updateColumn(c.id, { x: c.x, y: c.y, rotation: c.rotation }),
+  update_column: (c) => actions.updateColumn(c.id, c.patch),
+  remove_column: (c) => actions.removeColumn(c.id),
   set_plan_name: (c) => actions.setPlanName(c.name),
   clear_model: () => actions.clearModel(),
   load_model: (c) => actions.loadModel(c.model),

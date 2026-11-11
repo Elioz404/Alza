@@ -1,5 +1,5 @@
 /**
- * The tool rail: a vertical toolbar (a bottom one on phones) of the current view's tools, each
+ * The tool rail: a vertical toolbar (a bottom one on phones, without Pan, so every tool fits) of the current view's tools, each
  * a toggle with its key in the button's corner and in the tooltip, in groups with a rule
  * between them. Arrow keys move along the buttons, Tab leaves the rail (roving tabindex, the
  * WAI toolbar pattern); the rules are not stops.
@@ -11,14 +11,14 @@ import { usePlanTool } from "../../editor/canvasState";
 import { IconButton } from "../primitives";
 import { useBreakpoint } from "../theme/media";
 import { useShell } from "./ShellContext";
-import { toolsFor } from "./tools";
+import { railToolsFor } from "./tools";
 
 export function ToolRail() {
   const editor = useAppStore((s) => s.editor);
   const planTool = usePlanTool();
   const shell = useShell();
   const phone = useBreakpoint("phone");
-  const tools = toolsFor(editor.view);
+  const tools = railToolsFor(editor.view, phone);
   const activeIndex = Math.max(0, tools.findIndex((t) => t.isActive(editor, planTool)));
   const ref = useRef<HTMLDivElement>(null);
 

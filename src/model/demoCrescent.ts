@@ -6,19 +6,23 @@
  *  - An L-shaped kitchen round a pantry, a hall with a straight stair along its north wall, a
  *    study, and a guest wing turned 30° off the east wall (60° and 120° joints where it meets it).
  *  - Upstairs, over the wing, a roof terrace: a quadrilateral room inside a low parapet.
+ *  - North of the wing, a studio upstairs stands out from the east wall on three square columns
+ *    over an open carport: the car parks under it, in through a sectional garage door on the
+ *    carport's north wall, and the studio's floor is carried by those columns and the house.
  *
  * Every room is the space its walls close off (enclose.ts), so each one reaches exactly to the
  * walls' inner faces, curved ones included. Its own module, loaded when the demo is chosen: the
  * page's first load carries only the loft (seed.ts).
  */
 
-import type { Item, Opening, PlanModel, Room, Wall } from "./types";
+import type { Column, Item, Opening, PlanModel, Room, Wall } from "./types";
 import type { Pt } from "./geometry";
 import { groundLevel } from "./types";
 import { newPlanId } from "./ids";
 import { enclosedOutline } from "./enclose";
-import { DOOR_DEFAULTS, GROUND_LEVEL_ID as G, LEVEL_DEFAULTS, LEVEL_NAMES, PLAN_FORMAT_VERSION, WALL_DEFAULTS, WINDOW_DEFAULTS, type FloorFinish } from "./limits";
-import { bulgeFromSagitta } from "./shapes";
+import { COLUMN, DOOR_DEFAULTS, GARAGE_DOOR, GROUND_LEVEL_ID as G, LEVEL_DEFAULTS, LEVEL_NAMES, OPEN_FLOOR, PLAN_FORMAT_VERSION, WALL_DEFAULTS, WINDOW_DEFAULTS, type FloorFinish } from "./limits";
+import { bulgeFromSagitta, rectOutline } from "./shapes";
+import { columnCoord } from "./columns";
 
 export const CRESCENT_FIRST_LEVEL_ID = "level_first";
 const F = CRESCENT_FIRST_LEVEL_ID;
@@ -41,6 +45,14 @@ const HOUSE = Object.freeze({
   outer: 0.2,
   inner: 0.1,
   parapet: 1.1,
+  /**
+   * The studio over the carport: its east wall's axis (the columns stand under it), how far north of the house it
+   * reaches, its south wall, and the garage door and car centred on its width.
+   */
+  studioEast: 16.2,
+  studioNorth: -3,
+  studioSouth: 2.6,
+  garageDoor: 2.6,
 });
 
 const deg = (d: number) => (d * Math.PI) / 180;
@@ -75,6 +87,10 @@ const GROUND_WALLS = wallsOn(G, [
   ["g_wing_n", W, HOUSE.wingNorth, WING_NE.x, WING_NE.y, T],
   ["g_wing_end", WING_NE.x, WING_NE.y, WING_SE.x, WING_SE.y, T],
   ["g_wing_s", WING_SE.x, WING_SE.y, W, HOUSE.wingSouth, T],
+  // the carport: the house's east wall run on north, and the wall the garage door is in, running
+  // into the corner column to the slab's edge over it (the studio's east wall's outer face)
+  ["g_carport_w", W, HOUSE.studioNorth, W, 0, T],
+  ["g_carport_n", W, HOUSE.studioNorth, HOUSE.studioEast + T / 2, HOUSE.studioNorth, T],
 ]);
 
 const FIRST_WALLS = wallsOn(F, [
@@ -91,7 +107,31 @@ const FIRST_WALLS = wallsOn(F, [
   ["f_terrace_n", W, HOUSE.wingNorth, WING_NE.x, WING_NE.y, T, { height: HOUSE.parapet }],
   ["f_terrace_end", WING_NE.x, WING_NE.y, WING_SE.x, WING_SE.y, T, { height: HOUSE.parapet }],
   ["f_terrace_s", WING_SE.x, WING_SE.y, W, HOUSE.wingSouth, T, { height: HOUSE.parapet }],
+  // the studio, out over the carport on its columns
+  ["f_studio_w", W, HOUSE.studioNorth, W, 0, T],
+  ["f_studio_n", W, HOUSE.studioNorth, HOUSE.studioEast, HOUSE.studioNorth, T],
+  ["f_studio_e", HOUSE.studioEast, HOUSE.studioNorth, HOUSE.studioEast, HOUSE.studioSouth, T],
+  ["f_studio_s", HOUSE.studioEast, HOUSE.studioSouth, W, HOUSE.studioSouth, T],
 ]);
+
+/** The middle of the studio's width, east of the house: where the garage door and the car are centred. */
+const CARPORT_MID = (W + T / 2 + HOUSE.studioEast) / 2;
+/**
+ * The carport's columns, under the studio's east wall: under its two corners and halfway between,
+ * each set in so its outer faces are the studio walls' outer faces over it, where the slab ends —
+ * column, wall and slab edge one face.
+ */
+const COLUMN_SET_IN = COLUMN.defaults.size / 2 - T / 2;
+const COLUMNS: Column[] = [HOUSE.studioNorth + COLUMN_SET_IN, (HOUSE.studioNorth + HOUSE.studioSouth) / 2, HOUSE.studioSouth - COLUMN_SET_IN].map((y, i) => ({
+  id: `g_column_${i + 1}`,
+  levelId: G,
+  shape: "square",
+  x: columnCoord(HOUSE.studioEast - COLUMN_SET_IN),
+  y: columnCoord(y),
+  w: COLUMN.defaults.size,
+  d: COLUMN.defaults.size,
+  rotation: 0,
+}));
 
 /** A door, `width` wide, centred at `t` along its wall. */
 const door = (id: string, wallId: string, at: number, width: number = DOOR_DEFAULTS.width, swing: Pick<Opening, "hinge" | "side"> = { hinge: "a", side: "right" }): Opening => ({
@@ -133,6 +173,17 @@ const OPENINGS: Opening[] = [
   win("g_win_study_s", "g_s", 0.5),
   win("g_win_wing_n", "g_wing_n", 0.6),
   win("g_win_wing_end", "g_wing_end", 0.5, 1.6),
+  // the carport's sectional door, centred on it
+  {
+    id: "g_garage_door",
+    kind: "door",
+    style: "garage",
+    wallId: "g_carport_n",
+    t: (CARPORT_MID - W) / (HOUSE.studioEast + T / 2 - W),
+    width: HOUSE.garageDoor,
+    sill: DOOR_DEFAULTS.sill,
+    height: GARAGE_DOOR.defaults.height,
+  },
   // first floor
   door("f_door_bed2", "f_x5", 2.1 / Y),
   door("f_door_master", "f_mid", 5.5 / W, 0.8),
@@ -146,6 +197,11 @@ const OPENINGS: Opening[] = [
   win("f_win_landing", "f_n", 9 / W),
   win("f_win_bath", "f_s", (W - 7.25) / (W - X6), 0.8, 1.2, 0.9),
   win("f_win_lounge", "f_s", (W - 10.25) / (W - X6)),
+  // the studio: in from the landing, a long window north over the drive, two east
+  door("f_door_studio", "f_e", 1.7 / D, DOOR_DEFAULTS.width, { hinge: "a", side: "left" }),
+  win("f_win_studio_n", "f_studio_n", 0.5, 1.6),
+  win("f_win_studio_e1", "f_studio_e", 0.25),
+  win("f_win_studio_e2", "f_studio_e", 0.75),
 ];
 
 /** Each room by a point inside it, to fill the space its walls close off there. */
@@ -163,6 +219,7 @@ const ROOMS: readonly RoomSpec[] = [
   ["f_room_bath", F, "Bathroom", "tile", { x: 7, y: 5 }],
   ["f_room_lounge", F, "Lounge", "oak", { x: 10, y: 5 }],
   ["f_room_terrace", F, "Roof terrace", "concrete", { x: 14, y: 6 }],
+  ["f_room_studio", F, "Studio", "oak", { x: 14, y: 0 }],
 ];
 
 /** A heading (place_item's rotation) that faces the plan direction d. */
@@ -216,6 +273,14 @@ const ITEMS: readonly ItemSpec[] = [
   ["f_terrace_chair", F, "armchair", 14.2, 6.8, 0],
   ["f_terrace_table", F, "side_table", 15.1, 6.0, 0],
   ["f_terrace_plant", F, "plant", 13.4, 4.4, 0],
+  // the car under the studio, nose in, as it came through the garage door
+  ["g_car", G, "car", CARPORT_MID, -0.15, 0],
+  // the studio: a desk under the north window, a sofa along the east wall facing in
+  ["f_studio_desk", F, "desk", CARPORT_MID, HOUSE.studioNorth + T / 2 + 0.33, 0],
+  ["f_studio_chair", F, "office_chair", CARPORT_MID, HOUSE.studioNorth + T / 2 + 1.05, 180],
+  ["f_studio_sofa", F, "sofa", HOUSE.studioEast - T / 2 - 0.46, 0.8, 270],
+  ["f_studio_coffee", F, "coffee_table", 14.6, 0.8, 90],
+  ["f_studio_plant", F, "plant", W + T / 2 + 0.3, HOUSE.studioNorth + T / 2 + 0.3, 0],
 ];
 
 /** The demo house, every room fitted to its walls. Throws if a room's walls do not close it off, which the tests would catch. */
@@ -229,6 +294,16 @@ export function seedCrescent(): PlanModel {
     if (!points) throw new Error(`Crescent House: no walls close off room ${id}.`);
     return { id, levelId, points, label, floor };
   });
+  // the carport is open on its east and south: its floor runs out to the slab's edge over it (the
+  // studio walls' outer faces), under the whole of every column
+  rooms.push({
+    id: "g_room_carport",
+    levelId: G,
+    points: rectOutline(W + T / 2, HOUSE.studioNorth + T / 2, HOUSE.studioEast + T / 2 - (W + T / 2), HOUSE.studioSouth + T / 2 - (HOUSE.studioNorth + T / 2)),
+    label: "Carport",
+    floor: OPEN_FLOOR,
+    kind: "open",
+  });
   const items: Item[] = ITEMS.map(([id, levelId, kind, x, y, rotation]) => ({ id, levelId, kind, x, y, rotation }));
   return {
     version: PLAN_FORMAT_VERSION,
@@ -241,6 +316,7 @@ export function seedCrescent(): PlanModel {
     items,
     // along the hall's north wall, climbing west to the landing
     stairs: [{ id: "stair_main", levelId: G, shape: "straight", x: 11, y: 0.6, rotation: 270, width: 0.9 }],
+    columns: COLUMNS.map((c) => ({ ...c })),
     kinds: [],
     underlay: null,
   };

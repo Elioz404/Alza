@@ -206,6 +206,10 @@ export const FURNITURE = Object.freeze({
   duvetFold: oklch(95, 0.008, 85),
   /** the oval table's tulip pedestal: warm white lacquer */
   pedestal: oklch(94, 0.008, 85),
+  /** a car's tinted glass: a dark blue-grey that still reads as glass, not the hob's black */
+  carGlass: oklch(38, 0.03, 240),
+  /** a car's tail lamps */
+  carTailLamp: oklch(44, 0.15, 25),
   /** the hob's black glass and the oven's window */
   hobGlass: oklch(20, 0.005, 250),
   ovenGlass: oklch(24, 0.01, 250),

@@ -4,8 +4,21 @@
  * Walls in solid poché, openings cut through them (door leaves with their swing, windows with
  * their glass line), rooms with their floor and their name and area, furniture as plan symbols,
  * dimension chains with ticks outside the walls. Chained wall drawing, rooms, doors and windows
- * placed on a wall, furniture, stairs, a blueprint underlay, 5 cm snap (and wall ends snap to
- * wall ends), pan and zoom.
+ * placed on a wall, furniture, stairs, columns, a blueprint underlay, 5 cm snap (and wall ends
+ * snap to wall ends), pan and zoom.
+ *
+ * Columns are drawn as walls are, in solid poché: a column cut by the plan is structure in
+ * section, and a column standing in a wall reads as one solid with it (the same fill and pen, so
+ * no line is drawn where they overlap). No cross is drawn in it: on a plan a cross marks a void
+ * (a shaft, an opening through the floor), never something solid. The column tool snaps a new
+ * one to wall corners, wall axes, the other columns' axes and the grid (columns.ts
+ * snapColumnPoint); the columns of a level are dimensioned axis to axis below and to the right
+ * of its walls, as a structural grid is. An open space (a carport, a porch) carries a lighter
+ * hatch, and a fine rim along its open sides, where no wall's poché marks its edge (SlabMarks.tsx);
+ * a garage door is drawn with its
+ * closed panels in the wall and, dashed, where they lie raised under the ceiling, with no swing;
+ * the slab of the level above, where it stands over open ground here, is outlined in long
+ * dashes, the convention for what is overhead (SlabMarks.tsx).
  *
  * It shows one level of the plan at a time, the one being worked on (activeLevelId), with the
  * level below drawn faintly underneath to line walls up with. A stair is drawn with its plan
@@ -25,10 +38,11 @@ import { levelBelow, levelInfo, levelSlice, stairGeometryIn, stairwellsOf } from
 import { stairGeometry, type StairGeometry } from "../model/stairs";
 import { useAppStore } from "../ui/useAppStore";
 import { dispatch, type Command } from "../model/commands";
-import type { ApprovalTarget, Item, Opening, PlanModel, Room, Stair, Wall } from "../model/types";
+import type { ApprovalTarget, Column, Item, Opening, PlanModel, Room, Stair, Wall } from "../model/types";
 import { rectCorners, snap, segLen, segPoint, type Pt } from "../model/geometry";
-import { clampOpeningT, doorLeaves, openingArcError, openingSpan } from "../model/issues";
-import { closestOnEdge, outlineAnchor, outlineBounds, outlinePath, outlineRect, roomArea, wallArc, wallEdge, wallLength, wallPointAt } from "../model/shapes";
+import { clampOpeningT, doorLeaves, isGarageDoor, isOpenRoom, openingArcError, openingSpan, parkingClearance } from "../model/issues";
+import { chordNormal, closestOnEdge, outlineAnchor, outlineBounds, outlinePath, outlineRect, roomArea, wallArc, wallEdge, wallLength, wallPointAt } from "../model/shapes";
+import { columnAim, columnBox, columnFootprint, snapColumnPoint, type ColumnAim } from "../model/columns";
 import { catalogOf } from "../model/catalog";
 import { assetUrl } from "../model/assets";
 import { agentMarks, provenance } from "../model/provenance";
@@ -38,6 +52,7 @@ import { isInsideOverlay, isTypingTarget } from "../ui/keys";
 import { deselectAll, handleSelectionKey } from "./selectionKeys";
 import { setHover, setPointer as sharePointer } from "../model/presence";
 import {
+  COLUMN,
   DEFAULT_FLOOR,
   DOOR_DEFAULTS,
   LEVEL_DEFAULTS,
@@ -53,9 +68,11 @@ import {
   activeTool,
   canvasStore,
   fitPlan,
+  placeColumnAt,
   placeHeldPieceAt,
   placeStairAt,
-  planCentre,
+  setColumnCursor,
+  pickColumnToolByKey,
   setCanvasSize,
   setOpeningFits,
   setPlanTool,
@@ -63,6 +80,7 @@ import {
   setStairRotation,
   setView,
   useCanvas,
+  viewCentre,
   worldAt,
   zoomBy,
   zoomIn,
@@ -83,6 +101,7 @@ import {
   MARK,
   chainStops,
   cloudPath,
+  garageInside,
   deltaPath,
   footprintCorners,
   metres,
@@ -99,6 +118,9 @@ import {
 } from "./drawing";
 import type { WallPocheProps } from "./WallPoche";
 import type { ShapeHandlesProps } from "./ShapeHandles";
+import type { SlabMarksProps } from "./SlabMarks";
+import type { ColumnChainsProps, ColumnGhostProps, ColumnMarkProps } from "./ColumnMarks";
+import { ColumnShape } from "./ColumnShape";
 import { addDraftCorner, cancelRoomDraft, closeRoomDraft, draftError, draftOutline, moveRoomCursor, removeLastCorner } from "./roomDraft";
 
 /** Canvas size assumed until the SVG has been laid out and measured. */
@@ -146,6 +168,28 @@ const ShapeHandles = deferred<ShapeHandlesProps>(
   () => null,
 );
 
+/**
+ * The slab of the level above where it stands over open ground here, and the stretches of an
+ * upper floor nothing carries (SlabMarks.tsx): fetched after the first paint with the floors'
+ * outlines they are worked out from; until then they are not drawn.
+ */
+const SlabMarks = deferred<SlabMarksProps>(
+  "the slabs' marks",
+  () => import("./SlabMarks").then((m) => m.SlabMarks),
+  () => null,
+);
+
+/**
+ * The columns' marks beyond their poché (ColumnMarks.tsx): a selected or hovered column's outline
+ * and section pill, the column tool's aim, the columns' axes dimensioned. Fetched after the first
+ * paint; until they are here, columns are drawn, selected and placed without them.
+ */
+const columnMarks = () => import("./ColumnMarks");
+const ColumnOutline = deferred<ColumnMarkProps & { className: string }>("the columns' outlines", () => columnMarks().then((m) => m.ColumnOutline), () => null);
+const ColumnPill = deferred<ColumnMarkProps>("the columns' pills", () => columnMarks().then((m) => m.ColumnPill), () => null);
+const ColumnGhost = deferred<ColumnGhostProps>("the column tool's aim", () => columnMarks().then((m) => m.ColumnGhost), () => null);
+const ColumnChains = deferred<ColumnChainsProps>("the columns' dimensions", () => columnMarks().then((m) => m.ColumnChains), () => null);
+
 
 const ARROWS: Readonly<Record<string, Pt>> = Object.freeze({
   ArrowLeft: { x: -1, y: 0 },
@@ -180,6 +224,11 @@ const isControlTarget = (target: EventTarget | null): boolean =>
 
 const nudgeCommand = (dx: number, dy: number): Command | null => {
   const { model, editor } = store.getState();
+  if (editor.selectedColumnId) {
+    // by the step from where it is: a column on a wall's axis keeps its offset from it
+    const c = model.columns.find((i) => i.id === editor.selectedColumnId);
+    return c ? { type: "move_column", id: c.id, x: c.x + dx, y: c.y + dy } : null;
+  }
   if (editor.selectedStairId) {
     const st = model.stairs.find((i) => i.id === editor.selectedStairId);
     return st ? { type: "move_stair", id: st.id, x: snap(st.x + dx), y: snap(st.y + dy) } : null;
@@ -202,13 +251,6 @@ const nudgeCommand = (dx: number, dy: number): Command | null => {
   return null;
 };
 
-/** The middle of the plan as it is shown. */
-const viewCentre = (): Pt => {
-  const { view, size } = canvasStore.getState();
-  // until the canvas has been laid out, the middle of the plan itself
-  const c = size && size.w > 0 && size.h > 0 ? worldAt(view, size.w / 2, size.h / 2) : planCentre(store.getState().model);
-  return { x: snap(c.x), y: snap(c.y) };
-};
 
 /** Put the held piece down in the middle of the plan as it is shown (Enter, or Library's button). */
 const placeInView = (): boolean => {
@@ -243,6 +285,36 @@ function handleRoomKey(e: KeyboardEvent): boolean {
   return false;
 }
 
+/** Where the column tool would put a column for a point on the level being worked on: aimed as columns.ts says. */
+const columnAimAt = (p: Pt): ColumnAim => {
+  const s = store.getState();
+  return columnAim(p, levelSlice(s.model, activeLevelId(s)));
+};
+
+/**
+ * The column tool's keys: the arrows move its cross a snap step (ten with Shift), from the middle
+ * of the view; Enter puts a column down where the cross is, pulled to a wall or another column's
+ * axis as a click would be. The tool stays in hand. True when the key was the tool's.
+ */
+function handleColumnKey(e: KeyboardEvent): boolean {
+  const arrow = ARROWS[e.key];
+  if (arrow) {
+    const step = SNAP * (e.shiftKey ? NUDGE_SHIFT_FACTOR : 1);
+    const from = canvasStore.getState().columnCursor ?? viewCentre();
+    setColumnCursor({ x: snap(from.x + arrow.x * step), y: snap(from.y + arrow.y * step) });
+    return true;
+  }
+  if (e.key === "Enter") {
+    const at = canvasStore.getState().columnCursor ?? viewCentre();
+    const aim = columnAimAt(at);
+    // a refusal is in the feed and the notice like any other change's; the cross stays to try again
+    placeColumnAt(aim.x, aim.y);
+    if (!canvasStore.getState().columnCursor) setColumnCursor(at);
+    return true;
+  }
+  return false;
+}
+
 /** The stair the stair tool would add with its bottom riser at `at`, on a level `rise` metres high. */
 const aimedStair = (at: Pt, rotation: number, levelId: string, rise: number): StairGeometry =>
   stairGeometry({ id: "aim", levelId, shape: STAIR_DEFAULTS.shape, x: at.x, y: at.y, rotation, width: STAIR.defaultWidth } satisfies Stair, rise);
@@ -268,6 +340,7 @@ export function Editor() {
   const stairRotation = useCanvas((s) => s.stairRotation);
   const roomDraft = useCanvas((s) => s.roomDraft);
   const roomCursor = useCanvas((s) => s.roomCursor);
+  const columnCursor = useCanvas((s) => s.columnCursor);
 
   const [pointer, setPointer] = useState<Pointer | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
@@ -275,6 +348,7 @@ export function Editor() {
   const [dragRoom, setDragRoom] = useState<{ id: string; dx: number; dy: number; x0: number; y0: number } | null>(null);
   const [dragEnd, setDragEnd] = useState<{ id: string; end: "a" | "b" } | null>(null);
   const [dragStair, setDragStair] = useState<{ id: string; dx: number; dy: number } | null>(null);
+  const [dragColumn, setDragColumn] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [roomStart, setRoomStart] = useState<Pt | null>(null);
   /** with the stair tool: where the press went down, the stair's bottom riser */
   const [stairStart, setStairStart] = useState<Pt | null>(null);
@@ -362,6 +436,10 @@ export function Editor() {
         placeInView();
         return;
       }
+      if (canvasStore.getState().tool === "column" && !isControlTarget(e.target) && handleColumnKey(e)) {
+        e.preventDefault();
+        return;
+      }
       if (canvasStore.getState().tool === "stair" && !isControlTarget(e.target)) {
         // the stair tool from the keyboard: the arrows aim it, Enter puts it in the middle of the view
         if (e.key === "Enter") {
@@ -410,6 +488,9 @@ export function Editor() {
           break;
         case "s":
           setPlanTool("stair");
+          break;
+        case "p":
+          pickColumnToolByKey();
           break;
         case "v":
           // the same as the rail's Select (src/ui/shell/tools.ts), whichever listener runs first
@@ -539,6 +620,8 @@ export function Editor() {
     setPointer({ raw, at });
     const target = aimOpening(raw);
     setOpeningFits(target ? target.t !== null : null);
+    // the column tool follows whichever moved last: the pointer, or the keyboard's cross
+    if (tool$ === "column" && canvasStore.getState().columnCursor) setColumnCursor(null);
     if (panning) {
       setView((v) => ({
         ...v,
@@ -550,6 +633,11 @@ export function Editor() {
     if (stairStart && Math.hypot(raw.x - stairStart.x, raw.y - stairStart.y) * S >= MARK.stairAim) setStairRotation(aimRotation(stairStart, raw));
     if (dragStair) drag.update({ type: "move_stair", id: dragStair.id, x: snap(raw.x - dragStair.dx), y: snap(raw.y - dragStair.dy) });
     if (dragItem) drag.update({ type: "move_item", id: dragItem.id, x: snap(raw.x - dragItem.dx), y: snap(raw.y - dragItem.dy) });
+    if (dragColumn) {
+      // pulled to the walls and the other columns' axes as a new one is, never to itself
+      const to = snapColumnPoint({ x: raw.x - dragColumn.dx, y: raw.y - dragColumn.dy }, model, COLUMN.snap, dragColumn.id);
+      drag.update({ type: "move_column", id: dragColumn.id, x: to.x, y: to.y });
+    }
     if (dragRoom) {
       // moved by whole grid steps from where it was picked up, so corners on the grid stay on it
       const patch = { x: dragRoom.x0 + snap(raw.x - dragRoom.dx - dragRoom.x0), y: dragRoom.y0 + snap(raw.y - dragRoom.dy - dragRoom.y0) };
@@ -609,6 +697,11 @@ export function Editor() {
       capture(e);
       return;
     }
+    if (tool$ === "column") {
+      const at = columnAim(raw, model);
+      placeColumnAt(at.x, at.y);
+      return;
+    }
     if (tool$ === "door" || tool$ === "window") {
       const target = aimOpening(raw);
       if (target && target.t !== null) dispatch({ type: tool$ === "door" ? "add_door" : "add_window", wallId: target.wall.id, t: target.t }, { actor: "human" });
@@ -621,12 +714,13 @@ export function Editor() {
 
   const onPointerUp = (e: React.PointerEvent) => {
     if (panning) setPanning(null);
-    if (dragItem || dragRoom || dragEnd || dragStair) {
+    if (dragItem || dragRoom || dragEnd || dragStair || dragColumn) {
       drag.end(); // the whole drag: one undo step, one line in the feed (nothing, if it never moved)
       setDragItem(null);
       setDragRoom(null);
       setDragEnd(null);
       setDragStair(null);
+      setDragColumn(null);
     }
     if (stairStart) {
       placeStairAt(stairStart.x, stairStart.y);
@@ -681,6 +775,16 @@ export function Editor() {
     capture(e);
   };
 
+  const onColumnDown = (id: string, e: React.PointerEvent) => {
+    if (!selecting || e.button !== 0 || e.altKey) return;
+    e.stopPropagation();
+    pageActions.selectColumn(id);
+    const p = toWorld(e.clientX, e.clientY);
+    const c = model.columns.find((x) => x.id === id)!;
+    setDragColumn({ id, dx: p.x - c.x, dy: p.y - c.y });
+    capture(e);
+  };
+
   const onRoomDown = (id: string, e: React.PointerEvent) => {
     if (!selecting || e.button !== 0 || e.altKey) return;
     e.stopPropagation();
@@ -715,7 +819,7 @@ export function Editor() {
   const renderOpening = (o: Opening): ReactNode => {
     const wall = wallById.get(o.wallId);
     if (!wall) return null;
-    return <OpeningSymbol key={o.id} wall={wall} opening={o} S={S} />;
+    return <OpeningSymbol key={o.id} wall={wall} opening={o} rooms={model.rooms} S={S} />;
   };
 
   const rugsFirst = [...model.items].sort((a, b) => Number(catalog.get(b.kind)?.isRug ?? false) - Number(catalog.get(a.kind)?.isRug ?? false));
@@ -731,9 +835,19 @@ export function Editor() {
   const stairAt = stairStart ?? (pointer ? pointer.at : tool$ === "stair" ? viewCentre() : null);
   const aimed = tool$ === "stair" && stairAt && !panning ? aimedStair(stairAt, stairRotation, levelId, rise) : null;
   const hoveredWall = hoverId && selecting && hoverId !== editor.selectedWallId ? wallById.get(hoverId) : undefined;
+  const selectedColumn = editor.selectedColumnId ? model.columns.find((c) => c.id === editor.selectedColumnId) : undefined;
+  const hoveredColumn = hoverId && selecting && hoverId !== editor.selectedColumnId ? model.columns.find((c) => c.id === hoverId) : undefined;
+  // the column tool's aim: the keyboard's cross while the arrows move it, else where the pointer is
+  const columnAt = tool$ === "column" && !panning ? (columnCursor ?? pointer?.raw ?? null) : null;
+  const aimedColumn = columnAt ? columnAim(columnAt, model) : null;
 
   const placing = editor.drawMode === "place" && editor.placingKind ? catalog.get(editor.placingKind) : undefined;
   const drawing = tool$ === "wall" || tool$ === "room" || tool$ === "place" || tool$ === "stair";
+  const parkingOf = (it: Item | undefined) => {
+    const k = it ? catalog.get(it.kind) : undefined;
+    return it && k?.parking ? parkingCorners(it.x, it.y, k.w, k.d, it.rotation) : null;
+  };
+  const selectedParking = parkingOf(selectedItem);
 
   return (
     <svg
@@ -749,7 +863,7 @@ export function Editor() {
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
       onPointerLeave={() => {
-        if (panning || dragItem || dragRoom || dragEnd || dragStair || stairStart) return;
+        if (panning || dragItem || dragRoom || dragEnd || dragStair || dragColumn || stairStart) return;
         sharePointer(null);
         setPointer(null);
         setOpeningFits(null);
@@ -786,9 +900,18 @@ export function Editor() {
       {model.rooms.map((r) => (
         <g key={r.id} className="pl-room" data-selected={editor.selectedRoomId === r.id || undefined} onPointerDown={(e) => onRoomDown(r.id, e)} {...hover(r.id)}>
           <path className={`pl-floor pl-floor--${r.floor}`} d={outlinePath(r.points, S)} fill={floorFill(r, ref)} />
+          {isOpenRoom(r) ? (
+            <path data-open-space="" d={outlinePath(r.points, S)} fill={`url(#${ref("open")})`} />
+          ) : null}
           {pending.has(r.id) ? <path className="pl-pending" d={outlinePath(r.points, S)} fill={`url(#${ref("hatch")})`} /> : null}
         </g>
       ))}
+
+      {/* an open space's open sides: its floor's edge, where no wall closes it off */}
+      <SlabMarks plan={plan} levelId={levelId} S={S} hatch={`url(#${ref("warn")})`} part="open" />
+
+      {/* the level above's slab, where it stands over open ground here: its edge, dashed */}
+      <SlabMarks plan={plan} levelId={levelId} S={S} hatch={`url(#${ref("warn")})`} part="overhead" />
 
       {/* the level below, faintly, to line this one up with */}
       {ghost ? <GhostLevel model={ghost} S={S} /> : null}
@@ -836,6 +959,14 @@ export function Editor() {
         </g>
       ))}
 
+      {/* columns: solid poché, one solid with a wall they stand in; each takes a press within a touch target */}
+      {model.columns.map((c) => (
+        <g key={c.id} className="pl-column-hit" data-column={c.id} onPointerDown={(e) => onColumnDown(c.id, e)} {...hover(c.id)}>
+          <ColumnReach column={c} S={S} />
+          <ColumnShape column={c} S={S} className={`pl-column ${c.id === editor.selectedColumnId ? "pl-column--selected" : selecting && c.id === hoverId ? "pl-column--hover" : ""}`} />
+        </g>
+      ))}
+
       {/* openings, cut through their walls */}
       <g className="pl-openings">{model.openings.map(renderOpening)}</g>
 
@@ -846,8 +977,12 @@ export function Editor() {
         ))}
       </g>
 
-      {/* dimension chains outside the walls */}
+      {/* dimension chains outside the walls; the columns' axes below and to the right */}
       <DimensionChains walls={model.walls} S={S} />
+      <ColumnChains columns={model.columns} walls={model.walls} S={S} />
+
+      {/* a stretch of this floor nothing under it carries (Issues: slab_unsupported), over what stands on it */}
+      <SlabMarks plan={plan} levelId={levelId} S={S} hatch={`url(#${ref("warn")})`} part="unsupported" />
 
       {/* pending destructive requests: the target hatched and outlined in the error colour */}
       <g className="pl-pending-marks">
@@ -869,6 +1004,10 @@ export function Editor() {
             return k ? <ItemOutline item={it} w={k.w} d={k.d} S={S} className="pl-hover-outline" /> : null;
           })()
         : null}
+      {selectedParking ? <polygon className="pl-parking" points={polygonPoints(selectedParking, S)} /> : null}
+      {selectedColumn ? <ColumnOutline column={selectedColumn} S={S} className="pl-sel-outline" /> : null}
+      {selectedColumn ? <ColumnPill column={selectedColumn} S={S} /> : null}
+      {hoveredColumn ? <ColumnOutline column={hoveredColumn} S={S} className="pl-hover-outline" /> : null}
       {selectedStairGeometry ? <StairOutline geometry={selectedStairGeometry} S={S} className="pl-sel-outline" /> : null}
       {hoveredStairGeometry ? <StairOutline geometry={hoveredStairGeometry} S={S} className="pl-hover-outline" /> : null}
       {hoveredWall ? <WallPill wall={hoveredWall} S={S} tone="quiet" /> : null}
@@ -932,11 +1071,14 @@ export function Editor() {
       {placing && pointer && !dragItem ? (
         <g className="pl-ghost-item" transform={`translate(${pointer.at.x * S} ${pointer.at.y * S})`}>
           {furnitureSymbol(placing.kind, placing.w, placing.d, S)}
+          {placing.parking ? <polygon className="pl-parking" points={polygonPoints(parkingCorners(0, 0, placing.w, placing.d, 0), S)} /> : null}
         </g>
       ) : null}
+      {aimedColumn ? <ColumnGhost aim={aimedColumn} columns={model.columns} S={S} /> : null}
 
       {/* the snap cursor: where a click lands */}
       {pointer && drawing && !panning ? <SnapCursor at={pointer.at} S={S} /> : null}
+      {aimedColumn ? <SnapCursor at={{ x: aimedColumn.x, y: aimedColumn.y, to: aimedColumn.to === "corner" || aimedColumn.to === "wall" ? "end" : "grid" }} S={S} /> : null}
 
       {/* the shared session: the agent at work, what it points at, the other tabs' cursors */}
       <PlanPresence S={S} levelId={levelId} />
@@ -951,10 +1093,11 @@ export function Editor() {
 /** One sentence for assistive technology: what the plan holds. */
 function planDescription(model: PlanModel, level: string | null): string {
   const of = `Plan of ${model.name}${level ? `, ${level}` : ""}`;
-  if (model.walls.length === 0 && model.rooms.length === 0 && model.items.length === 0 && model.stairs.length === 0) return `${of}, empty`;
-  const rooms = model.rooms.map((r) => `${r.label} ${roomArea(r).toFixed(1)} square metres`).join(", ");
+  if (model.walls.length === 0 && model.rooms.length === 0 && model.items.length === 0 && model.stairs.length === 0 && model.columns.length === 0) return `${of}, empty`;
+  const rooms = model.rooms.map((r) => `${r.label}${isOpenRoom(r) ? " (open)" : ""} ${roomArea(r).toFixed(1)} square metres`).join(", ");
   const stairs = model.stairs.length > 0 ? `, ${model.stairs.length} ${model.stairs.length === 1 ? "stair" : "stairs"}` : "";
-  const counts = `${model.walls.length} walls, ${model.openings.length} doors and windows, ${model.items.length} pieces of furniture${stairs}`;
+  const columns = model.columns.length > 0 ? `, ${model.columns.length} ${model.columns.length === 1 ? "column" : "columns"}` : "";
+  const counts = `${model.walls.length} walls, ${model.openings.length} doors and windows, ${model.items.length} pieces of furniture${stairs}${columns}`;
   return `${of}: ${counts}${rooms ? `. Rooms: ${rooms}` : ""}`;
 }
 
@@ -967,6 +1110,7 @@ function PlanPatterns({ refOf, S }: { refOf: (name: string) => string; S: number
   const plank = FLOOR_PATTERN.plankWidth * S;
   const run = FLOOR_PATTERN.plankRun * S;
   const tile = FLOOR_PATTERN.tile * S;
+  const open = Math.max(FLOOR_PATTERN.openHatch * S, MARK.hatch);
   const joints = FLOOR_PATTERN.plankJoints;
   return (
     <defs>
@@ -989,12 +1133,21 @@ function PlanPatterns({ refOf, S }: { refOf: (name: string) => string; S: number
       <pattern id={refOf("hatch")} patternUnits="userSpaceOnUse" width={MARK.hatch} height={MARK.hatch} patternTransform="rotate(45)">
         <path className="pl-hatch" d={`M0 0V${MARK.hatch}`} />
       </pattern>
+      <pattern id={refOf("warn")} patternUnits="userSpaceOnUse" width={MARK.hatch} height={MARK.hatch} patternTransform="rotate(-45)">
+        <path className="pl-warn-hatch" d={`M0 0V${MARK.hatch}`} />
+      </pattern>
+      {/* an open space's hatch is in metres, as a floor's pattern is: it scales with the plan, never denser than the grid */}
+      <pattern id={refOf("open")} patternUnits="userSpaceOnUse" width={open} height={open} patternTransform="rotate(45)">
+        <path className="pl-open-hatch" d={`M0 0V${open}`} />
+      </pattern>
     </defs>
   );
 }
 
+
+
 /** A door or a window, cut through its wall, in the wall's own frame (A end to the left). */
-function OpeningSymbol({ wall, opening: o, S }: { wall: Wall; opening: Opening; S: number }) {
+function OpeningSymbol({ wall, opening: o, rooms = [], S }: { wall: Wall; opening: Opening; rooms?: readonly Room[]; S: number }) {
   // the vano runs along the centreline, from t0 to t1 (an arc's length on a curved wall); the
   // cut is that stretch of the wall's band, its jambs square to the wall at each end
   const [t0, t1] = openingSpan(wall, o);
@@ -1014,6 +1167,24 @@ function OpeningSymbol({ wall, opening: o, S }: { wall: Wall; opening: Opening; 
   );
   const p0 = wallPointAt(wall, t0);
   const p1 = wallPointAt(wall, t1);
+  if (isGarageDoor(o)) {
+    // An overhead door, as a plan draws one: no leaf and no swing. Its closed panels are a bold
+    // line across the vano (along the chord on a curved wall: a sectional door is straight) and,
+    // in long dashes, the rectangle they fill raised under the ceiling inside — the door's width,
+    // and as deep as it is high, since its sections run back along the tracks by their height.
+    const face = wall.thickness / 2;
+    const sign = garageInside(p0, p1, face, o.height, rooms);
+    const n = chordNormal(p0, p1);
+    const off = (p: Pt, k: number) => `${(p.x + n.x * k * sign) * S} ${(p.y + n.y * k * sign) * S}`;
+    const deep = face + o.height;
+    return (
+      <g data-opening={o.id} data-style="garage">
+        {cut}
+        <path className="pl-garage-panel" d={`M${p0.x * S} ${p0.y * S}L${p1.x * S} ${p1.y * S}`} />
+        <path className="pl-garage-overhead" d={`M${off(p0, face)}L${off(p0, deep)}L${off(p1, deep)}L${off(p1, face)}`} />
+      </g>
+    );
+  }
   if (o.kind === "window") {
     // the frame is the band; the pane is straight, across the vano's chord (inside the wall: openingArcError)
     return (
@@ -1049,7 +1220,8 @@ function RoomLabel({ room: r, S, flag }: { room: Room; S: number; flag: string |
   const anchor = outlineAnchor(r.points);
   const cx = anchor.x * S;
   const cy = anchor.y * S;
-  const area = `${roomArea(r).toFixed(2)} m²`;
+  // an open space says so beside its area: its sides need no walls
+  const area = `${roomArea(r).toFixed(2)} m²${isOpenRoom(r) ? ", open" : ""}`;
   // a rectangle's lettering may run its whole width; any other outline's, the widest circle inside it
   const rect = outlineRect(r.points);
   const span = rect ?? { w: anchor.clearance * 2, h: anchor.clearance * 2 };
@@ -1331,6 +1503,8 @@ function entityCorners(id: string, model: PlanModel, wallById: Map<string, Wall>
     const g = stairGeometryIn(model, stair);
     return g ? g.footprint.flatMap(rectCorners) : null;
   }
+  const column = model.columns.find((c) => c.id === id);
+  if (column) return columnFootprint(column);
   const opening = model.openings.find((o) => o.id === id);
   const host = opening ? wallById.get(opening.wallId) : undefined;
   return opening && host ? openingCorners(host, opening) : null;
@@ -1411,4 +1585,21 @@ function StairOutline({ geometry, S, className, fill }: { geometry: StairGeometr
       ))}
     </g>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Columns and cars
+// ---------------------------------------------------------------------------
+
+/** The corners of a parked car's clear floor (issues.ts parkingClearance), in metres. */
+function parkingCorners(x: number, y: number, w: number, d: number, rotation: number): Pt[] {
+  return rectCorners(parkingClearance({ cx: x, cy: y, hw: w / 2, hd: d / 2, rot: (-rotation * Math.PI) / 180 }));
+}
+
+
+/** What takes a press on a column: its section, or a touch target round its centre when the section is smaller on screen. */
+function ColumnReach({ column: c, S }: { column: Column; S: number }) {
+  const b = columnBox(c);
+  const half = Math.max(((b.maxX - b.minX) / 2) * S, ((b.maxY - b.minY) / 2) * S, MARK.touchReach);
+  return <rect className="pl-column-reach" x={c.x * S - half} y={c.y * S - half} width={2 * half} height={2 * half} />;
 }

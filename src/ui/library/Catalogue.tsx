@@ -23,6 +23,7 @@ const CATEGORY_LABEL: Record<(typeof ITEM_CATEGORIES)[number], string> = {
   bath: "Bath",
   office: "Office",
   decor: "Decor",
+  garage: "Garage",
 };
 
 const ALL = "all";
