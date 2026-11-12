@@ -1517,7 +1517,7 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
     loadedV2.summary,
   );
 
-  // the free-shapes demo: two storeys of curves and angles, clean, on the plan and in 3D
+  // the demo house: two storeys, a curved bay, rooms fitted to their walls, clean, on the plan and in 3D
   await planMenu(page, "Load Crescent House demo");
   const demo = await until("s.model.name === 'Crescent House'", 5000);
   const demoIssues = await tool("get_issues", {});
@@ -1544,13 +1544,14 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await S("12i-crescent-plan");
-  // upstairs, the roof terrace's parapets stop below the plan's cut: drawn in outline, not poché
+  // upstairs, the roof terrace's parapets (its curve among them) stop below the plan's cut: drawn in outline, not poché
   await tool("set_active_level", { id: "First floor" });
+  const parapetCount = await state("s.model.walls.filter((w) => w.levelId === 'level_first' && w.height < 2).length");
   const parapets = await page
-    .waitForFunction((sel) => document.querySelectorAll(sel).length === 3, `${PLAN_SVG} .pl-wall-fill--below-cut`, { timeout: 5000 })
+    .waitForFunction(([sel, n]) => document.querySelectorAll(sel).length === n, [`${PLAN_SVG} .pl-wall-fill--below-cut`, parapetCount], { timeout: 5000 })
     .then(() => true)
     .catch(() => false);
-  check("shapes: the roof terrace's three parapets are drawn below the cut, in outline", parapets);
+  check("shapes: the roof terrace's four parapets are drawn below the cut, in outline", parapetCount === 4 && parapets, String(parapetCount));
   await S("12i-crescent-first");
   await tool("set_active_level", { id: "Ground floor" });
   await showView(page, "3D");
@@ -1569,16 +1570,30 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   );
   await S("12i-crescent-3d-facade");
   await hook.evaluate((h) => h.actions.selectWall(null));
+  // walking up to the front door under the main bedroom: every storey is shown, and the slab over
+  // the porch hides the names of the rooms on it, as the walls do
+  await railButton(page, "Walk").click();
+  await sceneUntil((s) => !s.moving && s.walker !== null && s.levels.shown.length === 2, 6000);
+  await hook.evaluate((h) => h.sceneLook([9.2, 1.6, 20.5], [8.6, 1.4, 14.6]));
+  await sceneUntil((s) => !s.moving, 4000);
+  await page.waitForTimeout(300);
+  {
+    const upstairs = await state("s.model.rooms.filter((r) => r.levelId === 'level_first').map((r) => r.label)");
+    const names = await page.evaluate(() => [...document.querySelectorAll(".scene-label:not([hidden]) .scene-label__name")].map((e) => e.textContent));
+    check("shapes: walking at the front door, the names of the rooms upstairs are hidden by the slab over the porch", names.length > 0 && names.every((n) => !upstairs.includes(n)), JSON.stringify(names));
+  }
   await railButton(page, "Orbit").click();
   // the building model: curved walls on their arcs, shaped rooms by their outlines
   {
+    // every opening in a wall, and one cut in a floor for each stairwell
+    const counts = await state("({ walls: s.model.walls.length, spaces: s.model.rooms.length, openings: s.model.openings.length + s.model.stairs.length })");
     const file = await downloadText(() => exportMenu(page, "Building model"));
     const ifc = ifcFacts(file);
     const arcs = file ? (file.text.match(/IFCARCINDEX\(/g) ?? []).length : 0;
     check(
       "shapes: the IFC export writes curved walls and shaped rooms with IFC4 arcs, every wall, space and opening in it",
-      file?.name === "crescent-house.ifc" && ifc.framed && ifc.schema === "IFC4" && ifc.count("IFCWALL") === 31 && ifc.count("IFCSPACE") === 14 &&
-        ifc.count("IFCOPENINGELEMENT") === 34 && ifc.count("IFCINDEXEDPOLYCURVE") > 0 && arcs >= 6,
+      file?.name === "crescent-house.ifc" && ifc.framed && ifc.schema === "IFC4" && ifc.count("IFCWALL") === counts.walls && ifc.count("IFCSPACE") === counts.spaces &&
+        ifc.count("IFCOPENINGELEMENT") === counts.openings && ifc.count("IFCINDEXEDPOLYCURVE") > 0 && arcs >= 6,
       `${file?.name}: ${ifc.count("IFCWALL")} walls, ${ifc.count("IFCSPACE")} spaces, ${ifc.count("IFCOPENINGELEMENT")} openings, ${ifc.count("IFCINDEXEDPOLYCURVE")} curves, ${arcs} arcs`,
     );
   }
@@ -1820,31 +1835,31 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
 }
 
-// ---------- 12l. structure: columns over an open carport, a garage door, the car ----------
+// ---------- 12l. structure: a bedroom on two columns over an open parking bay, the garage door, the cars ----------
 {
   const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
   await showView(page, "Plan");
   await planMenu(page, "Load Crescent House demo");
   await until("s.model.name === 'Crescent House'", 5000);
   const plan = await tool("get_model", {});
-  const carport = plan.model?.rooms.find((r) => r.label === "Carport");
+  const carport = plan.model?.rooms.find((r) => r.label === "Porch & carport");
   const first = plan.supports?.find((x) => x.levelId === "level_first");
   check(
-    "structure: the demo's studio stands on 3 columns over an open carport, with a garage door and a car, clean",
-    plan.ok && plan.model.columns.length === 3 && carport?.kind === "open" && plan.model.openings.some((o) => o.style === "garage") &&
-      plan.model.items.some((i) => i.kind === "car") && first?.columns === 3 && first.unsupported.length === 0 && (await tool("get_issues", {})).issues.length === 0,
+    "structure: the demo's main bedroom stands on 2 columns over an open parking bay, a garage door behind it and two cars, clean",
+    plan.ok && plan.model.columns.length === 2 && carport?.kind === "open" && plan.model.openings.some((o) => o.style === "garage") &&
+      plan.model.items.filter((i) => i.kind === "car").length === 2 && first?.columns === 2 && first.unsupported.length === 0 && (await tool("get_issues", {})).issues.length === 0,
     plan.summary,
   );
-  // without its columns the studio's floor is reported unsupported, where it is
+  // without its columns the main bedroom's floor is reported unsupported, where it is
   await hook.evaluate((h) => h.actions.loadModel({ ...h.store.getState().model, columns: [] }));
   const bare = await tool("get_issues", { level: "First floor" });
-  check("structure: without its columns the studio's floor is reported unsupported", bare.issues.some((i) => i.code === "slab_unsupported" && i.refs.includes("f_room_studio")), bare.summary);
+  check("structure: without its columns the main bedroom's floor is reported unsupported", bare.issues.some((i) => i.code === "slab_unsupported" && i.refs.includes("f_room_master")), bare.summary);
   await hook.evaluate((h) => h.actions.undo());
-  await until("s.model.columns.length === 3");
-  // the agent adds a column: it is seen doing so, and the column is part of the plan
-  const added = await tool("add_column", { x: 13, y: -2.5, level: "Ground floor" });
+  await until("s.model.columns.length === 2");
+  // the agent adds a column, out on the bay in front of the garage door: it is seen doing so, and the column is part of the plan
+  const added = await tool("add_column", { x: 11.3, y: 15.3, level: "Ground floor" });
   const focus = await hook.evaluate((h) => h.presence.getState().agent.focus);
-  check("structure: add_column adds a column the agent is seen adding", added.ok && focus.includes(added.id) && (await until("s.model.columns.length === 4")), added.summary);
+  check("structure: add_column adds a column the agent is seen adding", added.ok && focus.includes(added.id) && (await until("s.model.columns.length === 3")), added.summary);
   // a column in the drive through the garage door is reported
   const drive = await tool("get_issues", { level: "Ground floor" });
   check("structure: a column in the garage door's drive is reported", drive.issues.some((i) => i.code === "column_blocks_door" && i.refs.includes(added.id)), drive.summary);
@@ -1852,26 +1867,29 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   const removing = hook.evaluate((h, id) => h.runTool("remove_column", { id }), added.id);
   check("structure: remove_column parks for approval", await until("s.approvals.length === 1 && s.approvals[0].targets[0].type === 'column'"));
   await hook.evaluate((h) => h.actions.resolveApproval(h.store.getState().approvals[0].id, false));
-  check("structure: a refused remove_column keeps the column", !(await removing).ok && (await until("s.model.columns.length === 4")));
+  check("structure: a refused remove_column keeps the column", !(await removing).ok && (await until("s.model.columns.length === 3")));
   await hook.evaluate((h) => h.actions.undo());
-  await until("s.model.columns.length === 3");
-  // a garage door and an open space through the tools
-  const garageDoor = await tool("add_door", { wallId: "g_wing_end", t: 0.5, style: "garage", width: 2.4 });
-  const opened = await tool("update_room", { id: "Guest room", open: true });
+  await until("s.model.columns.length === 2");
+  // a second garage door, in the garage's side wall onto the drive, and an open space, through the tools
+  const garageDoor = await tool("add_door", { wallId: "g_e", t: 9.6 / 14.6, style: "garage", width: 2.4 });
+  const opened = await tool("update_room", { id: "Garage", open: true });
   check(
     "structure: add_door style garage and update_room open take effect",
-    garageDoor.ok && opened.ok && (await until(`s.model.openings.some((o) => o.id === '${garageDoor.id}' && o.style === 'garage' && o.hinge === undefined) && s.model.rooms.some((r) => r.label === 'Guest room' && r.kind === 'open')`)),
+    garageDoor.ok && opened.ok && (await until(`s.model.openings.some((o) => o.id === '${garageDoor.id}' && o.style === 'garage' && o.hinge === undefined) && s.model.rooms.some((r) => r.label === 'Garage' && r.kind === 'open')`)),
     `${garageDoor.summary} ${opened.summary}`,
   );
+  // a garage door in a space already open is no garage door: the checker says so
+  const opensNothing = await tool("get_issues", { level: "Ground floor" });
+  check("structure: a garage door in an open space is reported as opening no garage", opensNothing.issues.some((i) => i.code === "garage_door_no_garage"), opensNothing.summary);
   await hook.evaluate((h) => h.actions.undo());
   await hook.evaluate((h) => h.actions.undo());
-  await until("s.model.rooms.every((r) => r.label !== 'Guest room' || r.kind === undefined)");
+  await until("s.model.rooms.every((r) => r.label !== 'Garage' || r.kind === undefined)");
   await S("12l-structure-plan");
   await planMenu(page, "Load Sunset Loft demo");
   await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
 }
 
-// ---------- 12m. structure on the plan: columns, the column tool, the carport, the slab overhead ----------
+// ---------- 12m. structure on the plan: columns, the column tool, the parking bay, the slab overhead ----------
 {
   await showView(page, "Plan");
   await planMenu(page, "Load Crescent House demo");
@@ -1888,8 +1906,8 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
     axes: [...document.querySelectorAll("[data-column-axes] .pl-dim-text")].map((t) => t.textContent).join(),
   }));
   check(
-    "structure plan: three columns in poché, the garage door with no swing, the carport hatched and its open sides edged, the studio's slab dashed over it, the columns' axes dimensioned",
-    drawn.columns === 3 && drawn.garage && drawn.garageSwings === 0 && drawn.open === 1 && drawn.rim && drawn.overhead && drawn.axes === "2.75,2.75",
+    "structure plan: two columns in poché, the garage door with no swing, the parking bay hatched and its open sides edged, the main bedroom's slab dashed over it, the columns' axes dimensioned",
+    drawn.columns === 2 && drawn.garage && drawn.garageSwings === 0 && drawn.open === 1 && drawn.rim && drawn.overhead && drawn.axes === "5.40",
     JSON.stringify(drawn),
   );
   // a press selects a column, and Properties edits it
@@ -1913,25 +1931,25 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   );
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("Enter");
-  check("structure plan: Enter puts a column down at the tool's cross", await until("s.model.columns.length === 4 && s.activity.at(-1).source === 'human'"));
+  check("structure plan: Enter puts a column down at the tool's cross", await until("s.model.columns.length === 3 && s.activity.at(-1).source === 'human'"));
   await page.keyboard.press("Escape");
   check("structure plan: Esc puts the column tool down", (await railButton(page, "Select").getAttribute("aria-pressed")) === "true");
   await page.keyboard.press("Control+z");
-  await until("s.model.columns.length === 3");
-  // on the studio's level, without its columns, its floor is hatched where nothing carries it
+  await until("s.model.columns.length === 2");
+  // on the main bedroom's level, without its columns, its floor is hatched where nothing carries it
   await hook.evaluate((h) => h.actions.loadModel({ ...h.store.getState().model, columns: [] }));
   await hook.evaluate((h) => h.runTool("set_active_level", { id: "level_first" }));
   check("structure plan: an upper floor nothing carries is hatched on its level", await page.locator(".pl-unsupported").first().isVisible().catch(() => false));
   await S("12m-structure-unsupported");
   await hook.evaluate((h) => h.actions.undo());
   await hook.evaluate((h) => h.runTool("set_active_level", { id: "level_ground" }));
-  await until("s.model.columns.length === 3");
+  await until("s.model.columns.length === 2");
   await S("12m-structure-plan");
   await planMenu(page, "Load Sunset Loft demo");
   await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
 }
 
-// ---------- 12n. structure in 3D and IFC: columns, the studio's soffit, the garage door, the car ----------
+// ---------- 12n. structure in 3D and IFC: columns, the main bedroom's soffit, the garage door, the cars ----------
 {
   const tool = (name, args) => hook.evaluate((h, [n, a]) => h.runTool(n, a), [name, args]);
   await showView(page, "Plan");
@@ -1957,33 +1975,34 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   await hook.evaluate((h) => h.actions.selectColumn(null));
   await railButton(page, "Orbit").click();
   await sceneUntil((s) => !s.moving, 4000);
-  // under the studio, looking up at its soffit across the carport, the car parked there
+  // from the street, south-east: the main bedroom on its two columns over the parking bay, a car under it
   await tool("set_active_level", { id: "First floor" });
-  await hook.evaluate((h) => h.sceneLook([20.5, 2.2, 6.5], [14, 1.0, -0.2]));
+  await hook.evaluate((h) => h.sceneLook([19.5, 2.4, 25.5], [10.5, 2.0, 16.5]));
   await sceneUntil((s) => !s.moving, 4000);
   await S("12n-structure-carport");
   // the garage door is raised and lowered by set_doors, as a hinged door is swung
   const before = (await scene())?.frames ?? 0;
   const raised = await tool("set_doors", { state: "open", id: "g_garage_door" });
   check("structure 3D: set_doors raises the sectional garage door in the model", raised.ok && (await sceneUntil((s) => s.frames > before && !s.moving, 4000)), raised.summary);
-  await hook.evaluate((h) => h.sceneLook([15, 2.6, -9], [14, 1.2, -1]));
+  await hook.evaluate((h) => h.sceneLook([8.8, 1.7, 21.5], [11.3, 1.2, 14.6]));
   await sceneUntil((s) => !s.moving, 4000);
   await S("12n-structure-garage-open");
   await tool("set_doors", { state: "closed", id: "g_garage_door" });
-  // the building model: three load-bearing columns, the wall the first stands in written less it,
-  // the carport an outside parking space, the garage door a sectional door
+  // the building model: two load-bearing columns standing free (no wall cut by one), the parking
+  // bay an outside parking space, the garage door a sectional door
   {
+    const counts = await state("({ walls: s.model.walls.length, openings: s.model.openings.length + s.model.stairs.length })");
     const file = await downloadText(() => exportMenu(page, "Building model"));
     const ifc = ifcFacts(file);
     const text = file?.text ?? "";
     check(
-      "structure IFC: the columns are IfcColumns, the wall one stands in a CSG body less it, and the counts the demo's",
-      ifc.framed && ifc.count("IFCCOLUMN") === 3 && ifc.count("IFCBOOLEANRESULT") === 1 && /'CSG'/.test(text) && ifc.count("IFCWALL") === 31 && ifc.count("IFCOPENINGELEMENT") === 34,
+      "structure IFC: the columns are IfcColumns standing free, no wall cut by them, and the counts the demo's",
+      ifc.framed && ifc.count("IFCCOLUMN") === 2 && ifc.count("IFCBOOLEANRESULT") === 0 && ifc.count("IFCWALL") === counts.walls && ifc.count("IFCOPENINGELEMENT") === counts.openings,
       `${ifc.count("IFCCOLUMN")} columns, ${ifc.count("IFCBOOLEANRESULT")} booleans, ${ifc.count("IFCWALL")} walls, ${ifc.count("IFCOPENINGELEMENT")} openings`,
     );
     check(
-      "structure IFC: the carport is an outside parking space and the garage door a sectional IfcDoor",
-      /IFCSPACE\([^;]*'Carport'[^;]*\.PARKING\./.test(text) && /IFCDOOR\([^;]*\.USERDEFINED\.,'SECTIONAL'\)/.test(text),
+      "structure IFC: the parking bay is an outside parking space and the garage door a sectional IfcDoor",
+      /IFCSPACE\([^;]*'g_room_carport'[^;]*\.PARKING\./.test(text) && /IFCDOOR\([^;]*\.USERDEFINED\.,'SECTIONAL'\)/.test(text),
       file?.name,
     );
   }
@@ -2014,8 +2033,9 @@ await until("s.model.name === 'Sunset Loft' && s.model.levels.length === 1");
   for (const [ax, ay, bx, by] of box) groundWalls.push((await T("add_wall", { ax, ay, bx, by })).id);
   await T("add_door", { wallId: groundWalls[2], t: 0.5 });
   await T("add_room", { x: 0.1, y: 0.1, w: 5.8, h: 6.3, label: "Workshop" });
-  const carportWall = (await T("add_wall", { ax: 6, ay: 0, bx: 11, by: 0 })).id;
-  const garage = await T("add_door", { wallId: carportWall, t: 0.5, style: "garage" });
+  await T("add_wall", { ax: 6, ay: 0, bx: 11, by: 0 });
+  // the workshop is the garage: its sectional door opens east onto the carport, the drive in front of it
+  const garage = await T("add_door", { wallId: groundWalls[1], t: 0.5, style: "garage" });
   await T("add_room", { x: 6.1, y: 0.1, w: 5.05, h: 6.55, label: "Carport", open: true });
   const grid = await T("add_column", { x: 11, y: 3.25, grid: { rows: 3, cols: 1, spacing: 3.25 } });
   await T("place_item", { kind: "car", x: 8.5, y: 3.4 });

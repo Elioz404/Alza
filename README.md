@@ -323,10 +323,19 @@ rule asks for.
   a storey. It needs no walls or door, and is floored in concrete unless told otherwise.
 - **Garage doors.** `add_door` with `style: "garage"` adds a sectional overhead door, 2.4 to
   5.5 m wide and 2.0 to 2.5 m tall, with no swing. The plan draws its panels and its raised
-  position dashed; the 3D view runs its sections along their track.
+  position dashed; the 3D view runs its sections along their track. The checker asks that it
+  lead from an enclosed garage out to a drive: one in an open space opens nothing, and one
+  into another room or facing a wall has nowhere for a car to come from.
 - **A car.** The catalogue includes a mid-size car (1.8 x 4.5 x 1.5 m) as a reference object,
   so you can see whether it fits its garage or carport. Selected, it shows its parking
-  clearance.
+  clearance. The checker asks that it can be driven in: from one of its ends, a straight lane
+  as wide as the car plus 0.3 m a side (`PARKING` in `src/model/limits.ts`) to a garage door
+  that spans it or an open side of its space, and on past that exit over the drive for the
+  car's length and 0.4 m more, with no wall, column or furniture in it, and not into an
+  enclosed room. A second car parked in line on that drive is a tandem and allowed; one
+  parked across it is in the way. A car shut in is told what would let it out: a garage door
+  ahead that is off its line (by how much, and where to centre the car) or too narrow, or a
+  garage door in a wall beside it.
 
 ### The catalogue
 
@@ -336,10 +345,19 @@ rule asks for.
 ### Demos
 
 - **Sunset Loft**, the default plan, loads at start and from the Plan menu.
-- **Crescent House** (Plan menu), the free-shapes demo: two storeys with a curved facade, a
-  wing turned off the house at an angle under a roof terrace, an L-shaped kitchen round a
-  pantry, a stair, and a studio standing on three columns over an open carport, with a car
-  under it and a sectional garage door.
+- **Crescent House** (Plan menu), a two-storey family house laid out to its site: the street
+  to the south, the drive up the east side, the garden to the north. A living room under a roof
+  terrace, its garden wall one glazed arc; an open dining area and L-shaped kitchen; a stair
+  hall with a guest WC and a coats cupboard that opens into it; a utility room between the
+  kitchen and an enclosed single garage. Upstairs, three bedrooms round one landing, the main
+  suite over the garage, and a gallery beside the stairwell whose window lights the stair, over
+  a high light in the hall. The main bedroom projects over the drive on two columns: a car
+  drives straight between them and through the sectional garage door, a second parks in line
+  under the bedroom, and the front door is a few steps away under the same slab. The street and
+  east facades are ordered: the bedroom's windows even about its front, each east opening under
+  one upstairs. Take a column away and the checker reports the floor unsupported. A plan saved
+  with the earlier Crescent House, whose garage door stood in an open carport, now loads with a
+  `garage_door_no_garage` warning.
 
 Loading a demo replaces the current plan; Undo brings it back. Both are audited to 0 issues by
 regression tests (`tests/issues.test.ts`,
@@ -390,7 +408,7 @@ by level, so walls on different floors are never compared.
 | Storeys | A wall under a level above that stops short of its slab or runs up through it |
 | Stairs | No level above; risers or going out of range; the 2R + G rule; headroom under the slab; a wall in the stair or over its stairwell; a blocked landing at either end; a stairwell outside every room; overlapping stairs |
 | Structure | An upper floor with no wall or column within half of a 6 m span (sampled every 25 cm, coarser on a floor that would need over 40,000 samples, each unsupported zone reported with its bounds); a column short of its slab or through it; a column with nothing under it on the level below; a column off every room and wall, in a door's swing, a garage door's drive or a window, on a stair, or on another column |
-| Parking | A car without 0.6 m clear at its sides and 0.4 m at its ends, or with a column in it, a wall through it, or past its garage's walls |
+| Parking | A car without 0.6 m clear at its sides and 0.4 m at its ends, or with a column in it, a wall through it, or past its garage's walls; a car with no straight lane in, or with a column or piece in its lane or on the drive past it; a garage door that opens no enclosed garage, or leads into another room or faces a wall |
 
 The structural checks are a sanity check, not engineering: only walls and columns that reach the
 slab's underside carry it.
@@ -597,7 +615,7 @@ npm run deploy:studio   # build, then Cloudflare Pages (wrangler)
 npm run deploy:partner  # build, then Netlify
 ```
 
-**Unit tests.** 1542 tests in 65 files (`npx vitest run`). They cover the geometry, the checker
+**Unit tests.** 1571 tests in 65 files (`npx vitest run`). They cover the geometry, the checker
 and its rules, the commands and undo, levels and stairs, free shapes and joints, columns and
 supports, the 3D scene and furniture, the IFC export, the tools and their validation, the
 approval gate, untrusted partner text, the session (convergence, hostile messages, the

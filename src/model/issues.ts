@@ -114,7 +114,7 @@ export function doorLeaves(wall: Wall, o: Opening, face: number = wall.thickness
 }
 
 /** The floor a door leaf sweeps, as a polygon: its hinge and the arc from open to shut. */
-function leafSweep(leaf: DoorLeaf): Pt[] {
+export function leafSweep(leaf: DoorLeaf): Pt[] {
   const a0 = Math.atan2(leaf.open.y - leaf.hinge.y, leaf.open.x - leaf.hinge.x);
   const a1 = Math.atan2(leaf.shut.y - leaf.hinge.y, leaf.shut.x - leaf.hinge.x);
   const turn = Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0));
@@ -1008,19 +1008,204 @@ export const columnCollisions: Rule = ({ columns, stairs, placed }) => {
   return issues;
 };
 
+/** How a car's drive-in lane leaves its space: through a garage door, or out of an open side. */
+export type LaneExit = { readonly through: "garage_door"; readonly door: string } | { readonly through: "open_side" };
+
+/** A clear way a parked car is driven in: straight out of one of its ends to where it leaves its space, and on. */
+export interface DriveLane {
+  /** the floor it runs over, from the car's end to the exit: as wide as the car plus PARKING.laneSide each side */
+  readonly rect: ORect;
+  /** how far it runs to its exit, metres */
+  readonly length: number;
+  readonly exit: LaneExit;
+  /**
+   * the drive past the exit, as wide, for the car's length and PARKING.end more: the floor the car
+   * is driven over to come in and go out, outside its space, on which nothing may stand either
+   */
+  readonly runOut: ORect;
+}
+
+/** A garage door in a wall a lane ran into that does not take the lane: off its line, or too narrow. */
+interface NearDoor {
+  readonly door: string;
+  readonly wall: string;
+  /** how far the car would move, square to its length, to stand on the door's line */
+  readonly shift: Pt;
+  /** the width the door would need to take the lane where the car stands */
+  readonly width: number;
+}
+
+/** What ended a lane: a wall or a room (`id`), and the exit it had passed on its way, if any. */
+interface LaneEnd {
+  readonly id: string;
+  readonly past: LaneExit | null;
+}
+
+/** What following a car's lanes found: the lanes that reach an exit, and what ended the others. */
+interface LaneSearch {
+  readonly lanes: readonly DriveLane[];
+  /** the walls the others ran into, and the exit each had passed first, if any (on the drive outside) */
+  readonly walls: readonly LaneEnd[];
+  /** the enclosed rooms the others ran on into, with no wall between, likewise */
+  readonly rooms: readonly LaneEnd[];
+  /** garage doors in those walls that came close to taking a lane */
+  readonly near: readonly NearDoor[];
+}
+
+/**
+ * The lanes a parked car (`car`, a kind marked `parking`) can be driven along, one from each of
+ * its ends: a strip as wide as the car plus PARKING.laneSide at each side, followed straight out
+ * along the car's length in PARKING.laneStep steps until it passes through a garage door that
+ * spans it, leaves the open space the car is in or the whole plan by a side no wall closes, or has
+ * gone PARKING.laneReach without meeting anything (all exits); then on past the exit for the
+ * car's length and PARKING.end more, its run-out, the drive outside. A wall the lane runs into,
+ * before its exit or past it, or an enclosed room (not the car's own) it runs on into, means no
+ * lane that way. Columns and furniture are not tested here: they are what can stand in a lane,
+ * not what ends it. Only the walls and rooms along the farthest the lane could go are looked at.
+ */
+function laneSearch(ctx: CheckContext, car: PlacedItem): LaneSearch {
+  const { walls, hostedOn, model } = ctx;
+  const { rect } = car;
+  const halfWidth = rect.hw + PARKING.laneSide;
+  const step = PARKING.laneStep;
+  const runOut = 2 * rect.hd + PARKING.end;
+  // the car's length runs along its local y: (-sin rot, cos rot)
+  const along: Pt = { x: -Math.sin(rect.rot), y: Math.cos(rect.rot) };
+  const room = model.rooms.find((r) => pointInOutline(car.item, r.points));
+  const open = room !== undefined && isOpenRoom(room);
+  // the plan's extent on this level, its walls' and its rooms': past it, a lane is out in the open
+  const extents = [...walls.map((s) => s.box), ...model.rooms.map((r) => outlineBox(r.points))];
+  const all = extents.length > 0 ? extents.reduce((a, b) => ({ minX: Math.min(a.minX, b.minX), minY: Math.min(a.minY, b.minY), maxX: Math.max(a.maxX, b.maxX), maxY: Math.max(a.maxY, b.maxY) })) : null;
+  const lanes: DriveLane[] = [];
+  const blocked: LaneEnd[] = [];
+  const into: LaneEnd[] = [];
+  const near: NearDoor[] = [];
+  for (const sign of [1, -1]) {
+    const u = { x: along.x * sign, y: along.y * sign };
+    const end = { x: rect.cx + u.x * rect.hd, y: rect.cy + u.y * rect.hd };
+    /** the strip from `from` to `to` metres out of the car's end */
+    const strip = (from: number, to: number): ORect => ({ cx: end.x + (u.x * (from + to)) / 2, cy: end.y + (u.y * (from + to)) / 2, hw: halfWidth, hd: (to - from) / 2, rot: rect.rot });
+    // what the lane could meet at all, out to the farthest it could go
+    const corridor = boxOf(rectCorners(strip(0, PARKING.laneReach + runOut)));
+    const nearWalls = walls.filter((s) => !boxesApart(s.box, corridor));
+    const enclosed = model.rooms.filter((r) => r !== room && !isOpenRoom(r) && !boxesApart(outlineBox(r.points), corridor));
+    let exit: { at: number; how: LaneExit; wall: string | null } | null = null;
+    let found: DriveLane | null = null;
+    let stop: string | null = null;
+    let entered: string | null = null;
+    for (let k = 1; !found && !stop && !entered; k++) {
+      const d = k * step;
+      if (exit && d - step >= exit.at + runOut) {
+        found = { rect: strip(0, exit.at), length: exit.at, exit: exit.how, runOut: strip(exit.at, exit.at + runOut) };
+        break;
+      }
+      const slab = strip(d - step, d);
+      const slabBox = boxOf(rectCorners(slab));
+      const hit = nearWalls.find((s) => s.wall.id !== exit?.wall && !boxesApart(s.box, slabBox) && wallHits(s, slab, 0.02));
+      if (hit) {
+        const doors = (hostedOn.get(hit.wall.id) ?? []).filter((h) => isGarageDoor(h.opening));
+        const door: HostedOpening | undefined = exit ? undefined : doors.find((h) => laneAcross(h, slab, u).spans);
+        if (door) exit = { at: d, how: { through: "garage_door", door: door.opening.id }, wall: hit.wall.id };
+        else {
+          stop = hit.wall.id;
+          if (!exit) {
+            for (const h of doors) {
+              const across = laneAcross(h, slab, u);
+              if (across.overlaps) near.push({ door: h.opening.id, wall: hit.wall.id, shift: across.shift, width: across.width });
+            }
+          }
+        }
+        continue;
+      }
+      const corners = rectCorners(slab);
+      const other = enclosed.find((r) => corners.some((p) => pointInOutline(p, r.points)));
+      if (other) {
+        entered = other.id;
+        continue;
+      }
+      if (exit) continue;
+      const leftRoom = open && corners.every((p) => !pointInOutline(p, room.points));
+      const leftPlan = !all || boxesApart(slabBox, all);
+      if (leftRoom || leftPlan || d >= PARKING.laneReach) exit = { at: Math.max(d - step, 0), how: { through: "open_side" }, wall: null };
+    }
+    if (found) lanes.push(found);
+    if (stop) blocked.push({ id: stop, past: exit?.how ?? null });
+    if (entered) into.push({ id: entered, past: exit?.how ?? null });
+  }
+  return { lanes, walls: blocked, rooms: into, near };
+}
+
+/**
+ * How a garage door's vano meets a lane slab crossing its wall: whether it takes the lane's whole
+ * width (`spans`) or some of it (`overlaps`), how far the car would move square to its length to
+ * stand on the door's line, and the width the door would need to take the lane where it is.
+ */
+function laneAcross({ opening: o, wall, center }: HostedOpening, slab: ORect, u: Pt): { spans: boolean; overlaps: boolean; shift: Pt; width: number } {
+  const edge = wallEdge(wall);
+  const at = closestOnEdge(edge, { x: slab.cx, y: slab.cy });
+  const tangent = wallTangentAt(wall, at.t);
+  // the lane's width measured along the wall, wider the more slanted it crosses it
+  const across = Math.abs(u.x * tangent.y - u.y * tangent.x);
+  const side = { x: -u.y, y: u.x };
+  const off = (center.x - slab.cx) * side.x + (center.y - slab.cy) * side.y;
+  const shift = { x: side.x * off, y: side.y * off };
+  if (across < 1e-6) return { spans: false, overlaps: false, shift, width: Infinity };
+  const fromCentre = Math.abs(at.t - o.t) * wallLength(wall);
+  const reach = slab.hw / across;
+  return { spans: fromCentre + reach <= o.width / 2 + 1e-6, overlaps: fromCentre < o.width / 2 + reach, shift, width: 2 * (fromCentre + reach) };
+}
+
+/**
+ * The drive-in lanes of every parked car on a level of the plan (the ground floor by default),
+ * by the car's id: the clear way or ways it can be driven in, none for a car shut in.
+ */
+export function driveInLanes(plan: PlanModel, levelId: string = plan.levels[0].id): ReadonlyMap<string, readonly DriveLane[]> {
+  const ctx = checkContext(levelSlice(plan, levelId), plan, levelId);
+  return new Map(ctx.placed.filter((p) => p.def.parking).map((p) => [p.item.id, laneSearch(ctx, p).lanes]));
+}
+
+/**
+ * A parked car another one is parked in line behind, in its lane: a tandem, which is deliberate —
+ * the car in front is driven out first, along the same line (its own lane is checked as its own).
+ * Square to the lane, or off its line, a car stands in the way.
+ */
+function inTandem(other: PlacedItem, lane: ORect): boolean {
+  if (!other.def.parking) return false;
+  if (Math.abs(Math.sin(other.rect.rot - lane.rot)) > 1e-6) return false;
+  const side = { x: Math.cos(lane.rot), y: Math.sin(lane.rot) };
+  const off = Math.abs((other.rect.cx - lane.cx) * side.x + (other.rect.cy - lane.cy) * side.y);
+  return off + other.rect.hw <= lane.hw + 1e-6;
+}
+
+/** Metres to the centimetre, for a message. */
+const cm = (v: number): string => (Math.abs(v) < 0.005 ? 0 : v).toFixed(2);
+
 /**
  * A parked car (a kind marked `parking`) needs PARKING's clear floor round it: no column in it,
  * no wall through it, and, in an enclosed room, all of it inside that room — the garage it is in.
  * An open space's open sides are where its people get out, so only its walls and columns count.
+ *
+ * A car that fits must also be one that can be driven there: from one of its ends a straight lane
+ * (laneSearch) to a garage door or an open side, and on over the drive outside, with no column or
+ * furniture standing in it (another car parked in line on it is a tandem: inTandem). Each thing is
+ * reported once: a column in the car's clearance is that, not also in its lane; one in the drive
+ * through the lane's garage door is the door's (columnBlocksOpening); and a car that does not fit
+ * is not asked for a lane. A car shut in is told what would let it out: a garage door in the wall
+ * ahead that is off its line or too narrow, or one in a wall beside it.
  */
-export const parkingClear: Rule = ({ model: { rooms }, placed, walls, columns }) => {
+export const parkingClear: Rule = (ctx) => {
+  const { model, placed, walls, columns, hosted } = ctx;
+  const { rooms } = model;
   const issues: Issue[] = [];
-  for (const { item, def, rect } of placed) {
+  for (const car of placed) {
+    const { item, def, rect } = car;
     if (!def.parking) continue;
     const zone = parkingClearance(rect);
     const zoneBox = boxOf(rectCorners(zone));
+    const inClearance = new Set<string>();
     for (const { column: c, box } of columns) {
       if (!boxesApart(box, zoneBox) && columnHitsRect(c, zone, 0.01)) {
+        inClearance.add(c.id);
         issues.push({
           severity: "error",
           code: "column_blocks_parking",
@@ -1039,9 +1224,154 @@ export const parkingClear: Rule = ({ model: { rooms }, placed, walls, columns })
         message: `${kindName(def)} does not fit ${room ? `"${room.label}"` : "where it stands"}: with ${PARKING.side} m at its sides and ${PARKING.end} m at its ends it ${wall ? `runs into wall ${wall.wall.id}` : "reaches past the room's walls"}.`,
         refs: wall ? [item.id, wall.wall.id] : room ? [item.id, room.id] : [item.id],
       });
+      continue;
+    }
+    const width = 2 * (rect.hw + PARKING.laneSide);
+    const search = laneSearch(ctx, car);
+    if (search.lanes.length === 0) {
+      const into = [...new Set(search.walls.map((e) => e.id))];
+      const onInto = [...new Set(search.rooms.map((e) => e.id))].map((id) => rooms.find((r) => r.id === id)!);
+      const pastOf = (e: LaneEnd) => (e.past === null ? "" : e.past.through === "garage_door" ? ` past garage door ${e.past.door}` : " past its open side");
+      const ends = [
+        ...search.walls.map((e) => `wall ${e.id}${pastOf(e)}`),
+        ...search.rooms.map((e) => `"${rooms.find((r) => r.id === e.id)!.label}"${pastOf(e)}, with no wall between`),
+      ].join(" and ");
+      // what would let it out: a garage door ahead that misses its line, or one beside it
+      const near = search.near.map((n) => {
+        const off = Math.hypot(n.shift.x, n.shift.y);
+        const to = `(${cm(item.x + n.shift.x)}, ${cm(item.y + n.shift.y)})`;
+        return off < 0.005
+          ? `garage door ${n.door} in wall ${n.wall} is too narrow for its lane: widen it to ${cm(n.width)} m`
+          : `garage door ${n.door} in wall ${n.wall} is ${cm(off)} m off the car's line: centre the car on it at ${to}, or widen the door to ${cm(n.width)} m`;
+      });
+      const ahead = new Set([...search.near.map((n) => n.door), ...[...search.walls, ...search.rooms].flatMap((e) => (e.past?.through === "garage_door" ? [e.past.door] : []))]);
+      const beside = room
+        ? hosted.filter((h) => {
+            if (!isGarageDoor(h.opening) || ahead.has(h.opening.id)) return false;
+            const u = wallTangentAt(h.wall, h.opening.t);
+            const reach = h.wall.thickness / 2 + PARKING.laneStep;
+            return [1, -1].some((s) => pointInOutline({ x: h.center.x - u.y * reach * s, y: h.center.y + u.x * reach * s }, room.points));
+          })
+        : [];
+      const fixes = [...near, ...beside.map((h) => `garage door ${h.opening.id} is in wall ${h.wall.id}, not at either end of the car: turn the car or move the door`)];
+      issues.push({
+        severity: "error",
+        code: "car_no_lane",
+        message:
+          `${kindName(def)} ${room ? `in "${room.label}" ` : ""}cannot be driven in: straight out of either end it runs into ${ends}` +
+          (fixes.length > 0 ? `; ${fixes.join("; ")}.` : `, with no garage door across its line and no open side.`) +
+          ` It needs a straight lane ${width.toFixed(2)} m wide to a garage door or an open side, and the car's length and ${PARKING.end} m clear past it.`,
+        refs: [item.id, ...into, ...onInto.map((r) => r.id), ...search.near.map((n) => n.door), ...beside.map((h) => h.opening.id)],
+      });
+      continue;
+    }
+    // what stands in each lane, inside or on the drive past its exit: columns (those not already in
+    // the car's clearance, nor in the drive through the lane's own garage door, which is that
+    // door's issue) and furniture, other than a car parked in line on it
+    const blockers = search.lanes.map((lane) => {
+      const door = lane.exit.through === "garage_door" ? lane.exit.door : null;
+      const doorDrive = door ? hosted.find((h) => h.opening.id === door) : undefined;
+      const found = (strip: ORect) => {
+        const box = boxOf(rectCorners(strip));
+        const cols = columns.filter(
+          ({ column: c, box: cb }) =>
+            !inClearance.has(c.id) && !boxesApart(cb, box) && columnHitsRect(c, strip, 0.01) && !(doorDrive && columnHitsRect(c, columnKeepOut(doorDrive), 0.01)),
+        );
+        const things = placed.filter((p) => p.item.id !== item.id && !p.def.isRug && !boxesApart(p.box, box) && satRectRect(p.rect, strip, 0.01) && !inTandem(p, strip));
+        return { cols, things };
+      };
+      const inside = found(lane.rect);
+      const past = found(lane.runOut);
+      const seen = new Set([...inside.cols.map((c) => c.column.id), ...inside.things.map((p) => p.item.id)]);
+      return {
+        lane,
+        inside,
+        past: { cols: past.cols.filter((c) => !seen.has(c.column.id)), things: past.things.filter((p) => !seen.has(p.item.id)) },
+        count: inside.cols.length + inside.things.length + past.cols.length + past.things.length,
+      };
+    });
+    if (blockers.some((b) => b.count === 0)) continue;
+    const first = blockers.reduce((a, b) => (b.count < a.count ? b : a));
+    const exit = first.lane.exit.through === "garage_door" ? `garage door ${first.lane.exit.door}` : "its open side";
+    for (const [where, set] of [
+      [`to ${exit}`, first.inside],
+      [`on the drive past ${exit}`, first.past],
+    ] as const) {
+      for (const { column: c } of set.cols) {
+        issues.push({
+          severity: "error",
+          code: "column_blocks_lane",
+          message: `${columnWord(c)} stands in the drive-in lane of ${kindName(def)} (${width.toFixed(2)} m wide, ${where}): a car cannot be driven past it.`,
+          refs: [c.id, item.id],
+        });
+      }
+      for (const p of set.things) {
+        issues.push({
+          severity: "error",
+          code: "item_blocks_lane",
+          message: `${kindName(p.def)} stands in the drive-in lane of ${kindName(def)} (${width.toFixed(2)} m wide, ${where}).`,
+          refs: [p.item.id, item.id],
+        });
+      }
     }
   }
   return issues;
+};
+
+/**
+ * A garage door is the way from an enclosed garage out to a drive. One with no enclosed room on
+ * either side of it opens nothing (a door in a space already open has no use); one between two
+ * enclosed rooms, or one whose drive (GARAGE_DOOR.approach deep outside it, across its width) a
+ * wall stands in, has nowhere for a car to come from. Asked of a plan once it has rooms.
+ */
+export const garageDoorUse: Rule = ({ model: { rooms }, hosted, walls }) => {
+  if (rooms.length === 0) return [];
+  return hosted.flatMap((h): Issue[] => {
+    const { opening: o, wall, center } = h;
+    if (!isGarageDoor(o)) return [];
+    const u = wallTangentAt(wall, o.t);
+    const n = { x: -u.y, y: u.x };
+    const reach = wall.thickness / 2 + GARAGE_DOOR.approach / 2;
+    const sides = [1, -1].map((s) => {
+      const p = { x: center.x + n.x * reach * s, y: center.y + n.y * reach * s };
+      return { s, room: rooms.find((r) => pointInOutline(p, r.points)) };
+    });
+    const enclosed = sides.filter((x) => x.room && !isOpenRoom(x.room));
+    if (enclosed.length === 0) {
+      return [
+        {
+          severity: "warning",
+          code: "garage_door_no_garage",
+          message: `Garage door ${o.id} opens no garage: there is no enclosed room on either side of it${sides.some((x) => x.room) ? `, and "${sides.find((x) => x.room)!.room!.label}" is already open` : ""}. A garage door closes an enclosed garage off from the drive; put it in a garage's wall, or take it out.`,
+          refs: [o.id, ...sides.flatMap((x) => (x.room ? [x.room.id] : []))],
+        },
+      ];
+    }
+    if (enclosed.length === 2) {
+      return [
+        {
+          severity: "warning",
+          code: "garage_door_no_drive",
+          message: `Garage door ${o.id} opens from "${enclosed[0].room!.label}" into "${enclosed[1].room!.label}": a garage door leads from a garage out to a drive.`,
+          refs: [o.id, enclosed[0].room!.id, enclosed[1].room!.id],
+        },
+      ];
+    }
+    const out = sides.find((x) => x !== enclosed[0])!.s;
+    const drive: ORect = { ...h.clearance, cx: center.x + n.x * out * (wall.thickness / 2 + GARAGE_DOOR.approach / 2), cy: center.y + n.y * out * (wall.thickness / 2 + GARAGE_DOOR.approach / 2), hw: o.width / 2, hd: GARAGE_DOOR.approach / 2 };
+    const driveBox = boxOf(rectCorners(drive));
+    const across = walls.find((s) => s.wall.id !== wall.id && !boxesApart(s.box, driveBox) && wallHits(s, drive, 0.02));
+    return across
+      ? [
+          {
+            severity: "warning",
+            code: "garage_door_no_drive",
+            message: `Garage door ${o.id} faces wall ${across.wall.id}: the ${GARAGE_DOOR.approach} m in front of it, across its width, is where a car comes in.`,
+            refs: [o.id, across.wall.id],
+          },
+        ]
+      : [];
+  });
 };
 
 /** A garage door wider than its wall can hold with its jambs, or sized outside a garage door's range. */
@@ -1186,6 +1516,7 @@ export const RULES: readonly Rule[] = Object.freeze([
   columnCollisions,
   parkingClear,
   garageDoorFit,
+  garageDoorUse,
   slabUnsupported,
 ]);
 

@@ -57,7 +57,7 @@ export function PlanMenu({ handoff }: MenuSlotProps) {
     const r = dispatch({ type: "load_model", model: seedLoft() }, { actor: "human" });
     if (r.ok) notify({ body: "Sunset Loft demo loaded", undoable: true });
   };
-  // the free-shapes demo is its own chunk, fetched when it is chosen (model/demoCrescent.ts)
+  // the house demo is its own chunk, fetched when it is chosen (model/demoCrescent.ts)
   const loadCrescent = () => {
     import("../../model/demoCrescent").then(
       ({ seedCrescent }) => {
@@ -77,7 +77,7 @@ export function PlanMenu({ handoff }: MenuSlotProps) {
       <MenuItem label="Rename" onClick={rename} />
       <MenuDivider />
       <MenuItem label="Load Sunset Loft demo" description="Replaces this plan; Undo brings it back" onClick={loadDemo} />
-      <MenuItem label="Load Crescent House demo" description="Two storeys of curves and angles; replaces this plan, Undo brings it back" onClick={loadCrescent} />
+      <MenuItem label="Load Crescent House demo" description="A two-storey house with a garage, a curved bay and a bedroom on two columns; replaces this plan, Undo brings it back" onClick={loadCrescent} />
       <MenuItem
         label="Clear plan"
         variant="destructive"

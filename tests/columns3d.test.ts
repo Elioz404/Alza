@@ -311,7 +311,7 @@ describe("a column in the model", () => {
       expect(scene.entityOf(object.children[0])).toEqual({ type: "column", id: c.id, levelId: c.levelId });
       const box = new THREE.Box3().setFromObject(object);
       expect(box.max.y - box.min.y).toBeCloseTo(columnHeight(house, c)!, 6);
-      // the carport's columns carry the studio: they reach the underside of its slab
+      // the bay's columns carry the main bedroom: they reach the underside of its slab
       expect(columnHeight(house, c)).toBeCloseTo(levelsOf(house)[0].level.height - SLAB_THICKNESS, 9);
       const mark = markBox("column", c.id, house)!;
       expect([mark.cx, mark.cz, mark.w, mark.d, mark.y1]).toEqual([c.x, c.y, c.w, c.d, columnHeight(house, c)]);
@@ -359,9 +359,9 @@ describe("the slab over open ground", () => {
     const slab = scene.objects.find((o) => o.userData.entity === `slab:${CRESCENT_FIRST_LEVEL_ID}`)!;
     expect(slab).toBeDefined();
     // the down-facing faces at the slab's underside cover the overhang
-    const studio = house.rooms.find((r) => r.id === "f_room_studio")!;
-    const xs = studio.points.map((p) => p.x);
-    const ys = studio.points.map((p) => p.y);
+    const bedroom = house.rooms.find((r) => r.id === "f_room_master")!;
+    const xs = bedroom.points.map((p) => p.x);
+    const ys = bedroom.points.map((p) => p.y);
     const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
     const ray = new THREE.Raycaster();
     slab.parent!.updateMatrixWorld(true);
@@ -378,7 +378,7 @@ describe("the slab over open ground", () => {
       expect(hit.point.y).toBeCloseTo(elevation - SLAB_THICKNESS, 6);
       expect(hit.face!.normal.clone().transformDirection(hit.object.matrixWorld).y).toBeLessThan(-0.99);
     }
-    // from the east, at the slab's mid-depth: its edge, facing out, on the studio's east line
+    // from the east, at the slab's mid-depth: its edge, facing out, on the bedroom's east line
     ray.set(new THREE.Vector3(x1 + 5, elevation - SLAB_THICKNESS / 2, (y0 + y1) / 2), new THREE.Vector3(-1, 0, 0));
     const edge = ray.intersectObject(slab, true)[0];
     expect(edge).toBeDefined();
@@ -387,8 +387,8 @@ describe("the slab over open ground", () => {
   });
 
   it("is over an open room the carport is, with no pendant hanging in it and a concrete floor", () => {
-    const carport = house.rooms.find((r) => r.kind === "open")!;
-    expect(carport).toBeDefined();
+    const carport = house.rooms.find((r) => r.id === "g_room_carport")!;
+    expect(carport.kind).toBe("open");
     expect(carport.floor).toBe("concrete");
     const scene = new PlanScene();
     scene.update(house);
@@ -481,17 +481,20 @@ describe("a garage door", () => {
     scene.dispose();
   });
 
-  it("stands in the Crescent House's carport, opening under the studio", () => {
+  it("closes the Crescent House's garage off from the parking bay, its panels running back into the garage", () => {
     const house = seedCrescent();
     const scene = new PlanScene();
     scene.update(house);
     const leaf = scene.doors.find((l) => l.doorId === "g_garage_door")!;
     expect(leaf).toBeDefined();
     expect(leaf.hinge.userData.garage.inside).toBeDefined();
-    // the carport is south of its north wall: the door runs back over it
+    // the garage is north of its street wall and the open bay south of it: the door runs back over
+    // the enclosed garage, the chord's right walking the wall west
     const gd = house.openings.find((o) => o.id === "g_garage_door")!;
-    const carportWall = house.walls.find((x) => x.id === gd.wallId)!;
-    expect(garageInside(carportWall, gd, house.rooms)).toBe(1);
+    const front = house.walls.find((x) => x.id === gd.wallId)!;
+    expect(front.bx).toBeLessThan(front.ax);
+    expect(garageInside(front, gd, house.rooms)).toBe(1);
+    expect(garageInside(front, gd, house.rooms.filter((r) => r.label !== "Garage"))).toBe(-1);
     expect(gd.width).toBeGreaterThanOrEqual(GARAGE_DOOR.width.min);
     scene.dispose();
   });
@@ -561,8 +564,8 @@ describe("the car", () => {
     const plain = labelAnchor(carport);
     expect(pointInORect({ x: plain.x, y: plain.z }, car)).toBe(true);
     // a room with no car keeps its spot
-    const studio = house.rooms.find((r) => r.id === "f_room_studio")!;
-    expect(labelAnchor(studio, parkedIn(house, studio))).toEqual(labelAnchor(studio));
+    const bedroom = house.rooms.find((r) => r.id === "f_room_master")!;
+    expect(labelAnchor(bedroom, parkedIn(house, bedroom))).toEqual(labelAnchor(bedroom));
   });
 
   it("is something the walker walks round", () => {

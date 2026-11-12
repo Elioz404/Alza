@@ -261,7 +261,23 @@ export const DEFAULT_ITEM_COLOR = "#9a9186";
  * `end` to walk past its nose and its tail. A catalogue kind marked `parking` (the car) is judged
  * with it: it must fit its room with this much clear, and no column may stand in it.
  */
-export const PARKING = Object.freeze({ side: 0.6, end: 0.4 });
+export const PARKING = Object.freeze({
+  side: 0.6,
+  end: 0.4,
+  /**
+   * A parked car is driven in and out straight along its length: from one of its ends, a lane as
+   * wide as the car plus `laneSide` at each side (2.4 m for a 1.8 m car, which the narrowest
+   * garage door takes) must run clear to a garage door spanning it or to an open side of the space
+   * the car is in, with no wall, column or furniture in it, and run on past that exit, over the
+   * drive outside, for the car's length and `end` more, with nothing in the way there either. The
+   * lane is followed in `laneStep` metre steps from the car's end; one that has gone `laneReach`
+   * metres without meeting a wall is out on open ground, which bounds the search on a plan that
+   * spreads far.
+   */
+  laneSide: 0.3,
+  laneStep: 0.1,
+  laneReach: 30,
+});
 
 // ---------------------------------------------------------------------------- columns
 

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { actions, store } from "../src/model/store";
 import { dispatch } from "../src/model/commands";
 import { runTool, DESTRUCTIVE_TOOL_NAMES } from "../src/mcp/tools";
-import { checkModel, issuesOf } from "../src/model/issues";
+import { checkModel, driveInLanes, issuesOf } from "../src/model/issues";
 import { migratePlan } from "../src/model/planFormat";
 import { planRangeErrors } from "../src/model/planRanges";
 import { columnArea, columnFootprint, columnGrid, columnHeight, columnWalls, snapColumnPoint } from "../src/model/columns";
@@ -371,6 +371,230 @@ describe("the car", () => {
   });
 });
 
+describe("a car's drive-in lane", () => {
+  /**
+   * A 4.6 × 7.5 m garage (walls 0.2 thick), a car 1.7 m from its west wall, nose north; `door` its
+   * garage door's place on the north wall (or on `doorWall`), if any; and whatever stands outside.
+   */
+  const garage = (
+    opts: { door?: number; doorWall?: string; columns?: Column[]; items?: PlanModel["items"]; walls?: Wall[]; rooms?: PlanModel["rooms"] } = {},
+  ): PlanModel => ({
+    ...emptyModel(),
+    walls: [wallOn("w_n", G, 0, 0, 4.6, 0), wallOn("w_e", G, 4.6, 0, 4.6, 7.5), wallOn("w_s", G, 4.6, 7.5, 0, 7.5), wallOn("w_w", G, 0, 7.5, 0, 0), ...(opts.walls ?? [])],
+    openings: opts.door === undefined ? [] : [{ id: "gd", kind: "door", style: "garage", wallId: opts.doorWall ?? "w_n", t: opts.door, width: 2.4, sill: 0, height: 2.1 }],
+    rooms: [{ id: "garage", levelId: G, points: rectOutline(0.1, 0.1, 4.4, 7.3), label: "Garage", floor: "concrete" }, ...(opts.rooms ?? [])],
+    items: [{ id: "car", levelId: G, kind: "car", x: 1.7, y: 4.5, rotation: 0 }, ...(opts.items ?? [])],
+    columns: opts.columns ?? [],
+  });
+  /** What these tests are about: the lane, the parking and the garage door, not a test fence's loose ends or a piece out on the drive. */
+  const LANE_CODES = new Set(["car_no_lane", "column_blocks_lane", "item_blocks_lane", "column_blocks_parking", "column_blocks_door", "car_does_not_fit", "garage_door_no_drive", "garage_door_no_garage"]);
+  const laneIssues = (m: PlanModel) => checkModel(m).filter((i) => LANE_CODES.has(i.code));
+  /** On its line: the garage door centred on the car. */
+  const ON_LINE = 1.7 / 4.6;
+  const laneWidth = 1.8 + 2 * PARKING.laneSide;
+
+  it("is a straight lane from the car's end through a garage door that spans it", () => {
+    const m = garage({ door: ON_LINE });
+    expect(checkModel(m)).toEqual([]);
+    const lanes = driveInLanes(m).get("car")!;
+    expect(lanes).toHaveLength(1);
+    expect(lanes[0].exit).toEqual({ through: "garage_door", door: "gd" });
+    // from the car's nose (y 2.25) to the north wall
+    expect(lanes[0].length).toBeGreaterThan(2);
+    expect(lanes[0].length).toBeLessThan(2.25);
+    expect(2 * lanes[0].rect.hw).toBeCloseTo(laneWidth, 9);
+    // the narrowest garage door takes it
+    expect(laneWidth).toBeLessThanOrEqual(GARAGE_DOOR.width.min + 1e-9);
+  });
+
+  it("reports a car shut in: no garage door, or one off its line, naming the walls it would drive into", () => {
+    const shut = checkModel(garage()).filter((i) => i.code === "car_no_lane");
+    expect(shut).toHaveLength(1);
+    expect(shut[0].refs[0]).toBe("car");
+    expect(shut[0].refs.slice(1).sort()).toEqual(["w_n", "w_s"]);
+    expect(shut[0].message).toContain(`${laneWidth.toFixed(2)} m wide`);
+    // a door in the north wall, but 0.6 m east of the car's line: it does not take the lane
+    expect(codes(checkModel(garage({ door: 0.5 })))).toEqual(["car_no_lane"]);
+    expect(driveInLanes(garage({ door: 0.5 })).get("car")).toEqual([]);
+  });
+
+  it("reports furniture and a column standing in the lane, each once and only as that", () => {
+    // a side table between the car's nose clearance and the door's threshold
+    const table = { id: "table", levelId: G, kind: "side_table", x: 1.7, y: 1.2, rotation: 0 };
+    const withTable = checkModel(garage({ door: ON_LINE, items: [table] }));
+    expect(withTable.map((i) => [i.code, i.refs.join(" ")])).toEqual([["item_blocks_lane", "table car"]]);
+    // a column in the lane past the car's clearance, inside the door's drive: the door's issue
+    expect(codes(checkModel(garage({ door: ON_LINE, columns: [column("c", G, 1.7, 0.7)] })))).toEqual(["column_blocks_door"]);
+    // one in the lane, out of the door's drive and the car's clearance
+    expect(codes(checkModel(garage({ door: ON_LINE, columns: [column("c", G, 1.7, 1.5)] })))).toEqual(["column_blocks_lane"]);
+    // one in the car's clearance at its nose, in the lane too: reported as in the clearance only
+    expect(codes(checkModel(garage({ door: ON_LINE, columns: [column("c", G, 1.7, 2.1)] })))).toEqual(["column_blocks_parking"]);
+  });
+
+  it("runs out of an open space's open side, and a column there stands in it", () => {
+    const open = (columns: Column[] = []): PlanModel => ({
+      ...emptyModel(),
+      walls: [wallOn("w_back", G, 0, 0, 5, 0)],
+      rooms: [{ id: "bay", levelId: G, points: rectOutline(0.1, 0.1, 4.8, 9), label: "Carport", floor: OPEN_FLOOR, kind: "open" }],
+      items: [{ id: "car", levelId: G, kind: "car", x: 2.5, y: 3.5, rotation: 0 }],
+      columns,
+    });
+    // the back wall stands on its own: its loose ends are not what this is about
+    const checked = (m: PlanModel) => checkModel(m).filter((i) => i.code !== "wall_loose_end");
+    expect(checked(open())).toEqual([]);
+    expect(driveInLanes(open()).get("car")!.map((l) => l.exit)).toEqual([{ through: "open_side" }]);
+    // a column in the drive out to the open side, past the car's clearance
+    const blocked = checked(open([column("c", G, 2.5, 7.5)]));
+    expect(blocked.map((i) => [i.code, i.refs.join(" ")])).toEqual([["column_blocks_lane", "c car"]]);
+    expect(blocked[0].message).toContain("to its open side");
+    // the same column beside the lane is no matter
+    expect(checked(open([column("c", G, 4.4, 7.5)]))).toEqual([]);
+  });
+
+  it("runs on past its garage door over the drive outside, the car's length and more: a wall, column or piece there is in its way", () => {
+    const runOut = 4.5 + PARKING.end;
+    // a fence 1.5 m out across the drive: the car cannot come in, and the fence is named past the door
+    const fenced = laneIssues(garage({ door: ON_LINE, walls: [wallOn("fence", G, -1, -1.5, 5.6, -1.5)] }));
+    expect(fenced.map((i) => i.code)).toEqual(["car_no_lane"]);
+    expect(fenced[0].refs).toContain("fence");
+    expect(fenced[0].message).toContain("wall fence past garage door gd");
+    expect(fenced[0].message).not.toContain("not at either end");
+    // a column 2 m out on the car's line, on an open drive: past the door's own 1 m keep-out, but in the run-out
+    const drive = { id: "drive", levelId: G, points: rectOutline(-1, -7, 6.6, 6.9), label: "Drive", floor: OPEN_FLOOR, kind: "open" as const };
+    const post = laneIssues(garage({ door: ON_LINE, rooms: [drive], columns: [column("c", G, 1.7, -2)] }));
+    expect(post.map((i) => [i.code, i.refs.join(" ")])).toEqual([["column_blocks_lane", "c car"]]);
+    expect(post[0].message).toContain("on the drive past garage door gd");
+    // a side table out there likewise
+    const table = { id: "table", levelId: G, kind: "side_table", x: 1.7, y: -1.6, rotation: 0 };
+    expect(laneIssues(garage({ door: ON_LINE, rooms: [drive], items: [table] })).map((i) => [i.code, i.refs.join(" ")])).toEqual([["item_blocks_lane", "table car"]]);
+    // farther out than the run-out, or beside the lane, it is no matter
+    expect(laneIssues(garage({ door: ON_LINE, rooms: [drive], columns: [column("c", G, 1.7, -runOut - 0.6)] }))).toEqual([]);
+    expect(laneIssues(garage({ door: ON_LINE, rooms: [drive], columns: [column("c", G, 4.2, -2)] }))).toEqual([]);
+    const lane = driveInLanes(garage({ door: ON_LINE })).get("car")![0];
+    expect(2 * lane.runOut.hd).toBeCloseTo(runOut, 9);
+    expect(lane.runOut.hw).toBeCloseTo(lane.rect.hw, 9);
+  });
+
+  it("runs on past an open space's open side: a wall there shuts the car in, and so does an enclosed room with no wall between", () => {
+    const carport = (extra: Partial<PlanModel> = {}): PlanModel => ({
+      ...emptyModel(),
+      walls: [wallOn("w_back", G, 0, 0, 5, 0), ...(extra.walls ?? [])],
+      rooms: [{ id: "bay", levelId: G, points: rectOutline(0.1, 0.1, 4.8, 9), label: "Carport", floor: OPEN_FLOOR, kind: "open" }, ...(extra.rooms ?? [])],
+      items: [{ id: "car", levelId: G, kind: "car", x: 2.5, y: 3.5, rotation: 0 }],
+      columns: [],
+    });
+    expect(laneIssues(carport())).toEqual([]);
+    const gated = laneIssues(carport({ walls: [wallOn("gate", G, -1, 10.6, 6, 10.6)] }));
+    expect(gated.map((i) => i.code)).toEqual(["car_no_lane"]);
+    expect(gated[0].refs.slice(1).sort()).toEqual(["gate", "w_back"]);
+    expect(gated[0].message).toContain("wall gate past its open side");
+    // the carport runs straight on into a living room: that is no way out
+    const living = { id: "living", levelId: G, points: rectOutline(0.1, 9.1, 4.8, 4), label: "Living", floor: "oak" as const };
+    const into = laneIssues(carport({ rooms: [living] }));
+    expect(into.map((i) => i.code)).toEqual(["car_no_lane"]);
+    expect(into[0].refs).toContain("living");
+    expect(into[0].message).toContain(`"Living"`);
+    expect(into[0].message).toContain("with no wall between");
+  });
+
+  it("lets a car parked in line in front of another stand in its lane, a tandem, but not one parked across it", () => {
+    const carport = (second: { x: number; y: number; rotation: number }): PlanModel => ({
+      ...emptyModel(),
+      walls: [wallOn("w_back", G, 0, 0, 5, 0)],
+      rooms: [{ id: "bay", levelId: G, points: rectOutline(0.1, 0.1, 4.8, 9), label: "Carport", floor: OPEN_FLOOR, kind: "open" }],
+      items: [
+        { id: "car", levelId: G, kind: "car", x: 2.5, y: 3.5, rotation: 0 },
+        { id: "car2", levelId: G, kind: "car", ...second },
+      ],
+      columns: [],
+    });
+    const tandem = carport({ x: 2.5, y: 9, rotation: 180 });
+    expect(laneIssues(tandem)).toEqual([]);
+    expect(driveInLanes(tandem).get("car")!.map((l) => l.exit)).toEqual([{ through: "open_side" }]);
+    // the same car across the line, or beside it by half its width, is in the way
+    expect(laneIssues(carport({ x: 2.5, y: 9, rotation: 90 })).map((i) => [i.code, i.refs.join(" ")])).toEqual([["item_blocks_lane", "car2 car"]]);
+    expect(laneIssues(carport({ x: 3.4, y: 9.5, rotation: 0 })).map((i) => [i.code, i.refs.join(" ")])).toEqual([["item_blocks_lane", "car2 car"]]);
+  });
+
+  it("tells a car shut in what would let it out: a garage door ahead off its line or too narrow, or one in a wall beside it", () => {
+    // the narrowest garage door, 2 cm off the car's line
+    const off = laneIssues(garage({ door: ON_LINE + 0.02 / 4.6 }));
+    expect(off.map((i) => i.code)).toEqual(["car_no_lane"]);
+    expect(off[0].refs).toContain("gd");
+    expect(off[0].message).toContain("garage door gd in wall w_n is 0.02 m off the car's line: centre the car on it at (1.72, 4.50), or widen the door to 2.44 m");
+    expect(off[0].message).not.toContain("no garage door across its line");
+    // the door in the east wall, square to the car's line
+    const side = laneIssues(garage({ door: 0.5, doorWall: "w_e" }));
+    expect(side.map((i) => i.code)).toEqual(["car_no_lane"]);
+    expect(side[0].refs).toContain("gd");
+    expect(side[0].message).toContain("garage door gd is in wall w_e, not at either end of the car: turn the car or move the door");
+  });
+
+  it("stops looking at PARKING.laneReach: a car out on open ground on a plan that spreads far is out in the open", () => {
+    const far: PlanModel = {
+      ...emptyModel(),
+      walls: [wallOn("far_a", G, 990, 990, 995, 990), wallOn("far_b", G, -990, -990, -985, -990)],
+      items: [0, 1, 2, 3, 4].map((k) => ({ id: `car${k}`, levelId: G, kind: "car", x: 30 + 4 * k, y: 10, rotation: 0 })),
+      columns: [],
+    };
+    const lanes = driveInLanes(far);
+    expect(lanes.size).toBe(5);
+    for (const [id, ls] of lanes) {
+      expect(ls.map((l) => l.exit), id).toEqual([{ through: "open_side" }, { through: "open_side" }]);
+      for (const l of ls) expect(l.length, id).toBeLessThanOrEqual(PARKING.laneReach);
+    }
+    expect(laneIssues(far)).toEqual([]);
+  });
+
+  it("is not asked of a car that does not fit", () => {
+    const tight = { ...garage({ door: ON_LINE }), items: [{ id: "car", levelId: G, kind: "car", x: 1.2, y: 4.5, rotation: 0 }] };
+    expect(codes(checkModel(tight))).toEqual(["car_does_not_fit"]);
+  });
+});
+
+describe("a garage door's use", () => {
+  /** A garage on the ground, its garage door in the north wall; `outside` is what lies north of it. */
+  const plan = (outside: "nothing" | "room" | "wall" | "open"): PlanModel => ({
+    ...emptyModel(),
+    walls: [
+      wallOn("w_n", G, 0, 0, 4, 0),
+      wallOn("w_e", G, 4, 0, 4, 6),
+      wallOn("w_s", G, 4, 6, 0, 6),
+      wallOn("w_w", G, 0, 6, 0, 0),
+      ...(outside === "room" ? [wallOn("r_w", G, 0, 0, 0, -3), wallOn("r_n", G, 0, -3, 4, -3), wallOn("r_e", G, 4, -3, 4, 0)] : []),
+      ...(outside === "wall" ? [wallOn("fence", G, -1, -0.6, 5, -0.6)] : []),
+    ],
+    openings: [
+      { id: "gd", kind: "door", style: "garage", wallId: "w_n", t: 0.5, width: 2.5, sill: 0, height: 2.1 },
+      ...(outside === "room" ? [{ id: "d", kind: "door" as const, wallId: "r_w", t: 0.5, width: 0.9, sill: 0, height: 2.1, hinge: "a" as const, side: "right" as const }] : []),
+      { id: "side", kind: "door", wallId: "w_s", t: 0.5, width: 0.9, sill: 0, height: 2.1, hinge: "a", side: "right" },
+    ],
+    rooms: [
+      { id: "garage", levelId: G, points: rectOutline(0.1, 0.1, 3.8, 5.8), label: "Garage", floor: "concrete" },
+      ...(outside === "room" ? [{ id: "hall", levelId: G, points: rectOutline(0.1, -2.9, 3.8, 2.8), label: "Hall", floor: "tile" as const }] : []),
+    ],
+  });
+
+  it("leads from an enclosed garage out to a drive: nothing to say", () => {
+    expect(checkModel(plan("nothing"))).toEqual([]);
+  });
+
+  it("is reported where it opens no garage: in the wall of an open space, with no enclosed room either side", () => {
+    const m = plan("nothing");
+    const carport = { ...m, rooms: m.rooms.map((r) => ({ ...r, label: "Carport", kind: "open" as const })) };
+    const found = checkModel(carport).filter((i) => i.code === "garage_door_no_garage");
+    expect(found.map((i) => i.refs)).toEqual([["gd", "garage"]]);
+    expect(found[0].message).toContain('"Carport" is already open');
+  });
+
+  it("is reported where it leads into another room, or faces a wall a car cannot come through", () => {
+    expect(checkModel(plan("room")).map((i) => [i.code, i.refs.join(" ")])).toEqual([["garage_door_no_drive", "gd garage hall"]]);
+    // (the fence stands on its own: its loose ends are not what this is about)
+    const found = checkModel(plan("wall")).filter((i) => i.code !== "wall_loose_end");
+    expect(found.map((i) => [i.code, i.refs.join(" ")])).toEqual([["garage_door_no_drive", "gd fence"]]);
+  });
+});
+
 describe("the checker's structural rules", () => {
   it("reports the upper floor over open ground with nothing under it, where it is, and is satisfied by columns", () => {
     const bare = overhang();
@@ -624,56 +848,69 @@ describe("the column tools", () => {
   });
 });
 
-describe("Crescent House's carport", () => {
-  it("is an open space under the studio, with a car, a garage door and three columns, and no issues", () => {
+describe("Crescent House's porch and parking bay", () => {
+  it("is an open space under the main bedroom, in front of the enclosed garage, on two columns, with no issues", () => {
     const m = seedCrescent();
-    const carport = m.rooms.find((r) => r.label === "Carport")!;
-    expect(carport).toMatchObject({ kind: "open", floor: OPEN_FLOOR, levelId: G });
-    expect(m.openings.filter((o) => o.style === "garage")).toHaveLength(1);
-    expect(m.items.find((i) => i.kind === "car")?.levelId).toBe(G);
-    expect(m.columns).toHaveLength(3);
-    expect(m.rooms.some((r) => r.label === "Studio" && r.levelId === CRESCENT_FIRST_LEVEL_ID)).toBe(true);
+    const bay = m.rooms.find((r) => r.id === "g_room_carport")!;
+    expect(bay).toMatchObject({ kind: "open", floor: OPEN_FLOOR, levelId: G, label: "Porch & carport" });
+    const garage = m.rooms.find((r) => r.label === "Garage")!;
+    expect(garage.kind).toBeUndefined();
+    // one garage door, in the garage's street wall, opening onto the bay
+    const doors = m.openings.filter((o) => o.style === "garage");
+    expect(doors.map((o) => o.wallId)).toEqual(["g_front"]);
+    expect(m.items.filter((i) => i.kind === "car").map((i) => i.id).sort()).toEqual(["g_car", "g_car_bay"]);
+    expect(pointInOutline(m.items.find((i) => i.id === "g_car")!, garage.points)).toBe(true);
+    expect(pointInOutline(m.items.find((i) => i.id === "g_car_bay")!, bay.points)).toBe(true);
+    expect(m.columns.map((c) => c.id)).toEqual(["g_column_1", "g_column_2"]);
+    expect(m.rooms.some((r) => r.label === "Main bedroom" && r.levelId === CRESCENT_FIRST_LEVEL_ID)).toBe(true);
     expect(checkModel(m)).toEqual([]);
   });
 
-  it("stands every column on the carport's floor and under the studio's slab, flush with its edge", () => {
+  it("stands each column on the bay's floor, under the bedroom's slab, at its free front corners, flush with its walls", () => {
     const m = seedCrescent();
     const slab = slabRegion(m, CRESCENT_FIRST_LEVEL_ID);
     // the ground floor's rooms and its walls' footprints: what a column there can stand on
     const floors = slabOutline(levelSlice(m, G));
     for (const c of m.columns) {
-      // none of its section is off the floor (in the carport, or in the wall it is part of) or out from under the slab
+      // none of its section is off the floor or out from under the slab
       const section = [columnFootprint(c)];
       expect(piecesArea(regionPieces(section, floors)), `${c.id} on the floor`).toBeLessThan(1e-9);
       expect(piecesArea(regionPieces(section, slab.include)), `${c.id} under the slab`).toBeLessThan(1e-9);
     }
-    // their outer faces are the studio walls' outer faces over them, where the slab ends
-    const east = m.walls.find((w) => w.id === "f_studio_e")!;
-    for (const c of m.columns) expect(c.x + c.w / 2).toBeCloseTo(east.ax + east.thickness / 2, 9);
-    const north = m.walls.find((w) => w.id === "f_studio_n")!;
-    const south = m.walls.find((w) => w.id === "f_studio_s")!;
-    expect(Math.min(...m.columns.map((c) => c.y - c.d / 2))).toBeCloseTo(north.ay - north.thickness / 2, 9);
-    expect(Math.max(...m.columns.map((c) => c.y + c.d / 2))).toBeCloseTo(south.ay + south.thickness / 2, 9);
+    // their outer faces are the projecting walls' outer faces over them, where the slab ends
+    const front = m.walls.find((w) => w.id === "f_proj_s")!;
+    const west = m.walls.find((w) => w.id === "f_proj_w")!;
+    const east = m.walls.find((w) => w.id === "f_e")!;
+    for (const c of m.columns) expect(c.y + c.d / 2).toBeCloseTo(front.ay + front.thickness / 2, 9);
+    const [c1, c2] = m.columns;
+    expect(c1.x - c1.w / 2).toBeCloseTo(west.ax - west.thickness / 2, 9);
+    expect(c2.x + c2.w / 2).toBeCloseTo(east.ax + east.thickness / 2, 9);
   });
 
-  it("stands the studio on its columns: without them its floor is unsupported", () => {
+  it("stands the main bedroom on its two columns: without either, its floor is unsupported", () => {
     const m = seedCrescent();
     expect(unsupportedZones(m, CRESCENT_FIRST_LEVEL_ID)).toEqual([]);
-    const without = { ...m, columns: [] };
-    const zones = unsupportedZones(without, CRESCENT_FIRST_LEVEL_ID);
-    expect(zones.length).toBeGreaterThan(0);
-    expect(zones.every((z) => z.rooms.includes("f_room_studio"))).toBe(true);
+    for (const gone of m.columns) {
+      const without = { ...m, columns: m.columns.filter((c) => c !== gone) };
+      const zones = unsupportedZones(without, CRESCENT_FIRST_LEVEL_ID);
+      expect(zones.length, gone.id).toBeGreaterThan(0);
+      expect(zones.every((z) => z.rooms.includes("f_room_master")), gone.id).toBe(true);
+      // the zone is at the corner the column carried
+      expect(zones.some((z) => Math.abs(z.centre.x - gone.x) < 3 && Math.abs(z.centre.y - gone.y) < 3), gone.id).toBe(true);
+      const found = checkModel(without).filter((i) => i.code === "slab_unsupported");
+      expect(found.map((i) => i.refs), gone.id).toEqual([["f_room_master"]]);
+    }
   });
 
-  it("overhangs the open ground: the studio's slab over the carport, none over the enclosed rooms", () => {
+  it("overhangs the open ground: the main bedroom's slab over the bay, none over the enclosed rooms", () => {
     const m = seedCrescent();
     const over = overhangOf(m, CRESCENT_FIRST_LEVEL_ID);
     const area = piecesArea(regionPieces(over.include, over.exclude));
-    const studio = m.rooms.find((r) => r.id === "f_room_studio")!;
-    const studioArea = piecesArea(regionPieces([studio.points.map((p) => ({ x: p.x, y: p.y }))]));
-    // at least the studio's floor, at most it with the walls round it
-    expect(area).toBeGreaterThan(studioArea * 0.95);
-    expect(area).toBeLessThan(studioArea * 1.3);
+    const bedroom = m.rooms.find((r) => r.id === "f_room_master")!;
+    const bedroomArea = piecesArea(regionPieces([bedroom.points.map((p) => ({ x: p.x, y: p.y }))]));
+    // at least the bedroom's floor, at most it with the walls round it
+    expect(area).toBeGreaterThan(bedroomArea * 0.95);
+    expect(area).toBeLessThan(bedroomArea * 1.3);
     expect(overhangOf(m, G)).toEqual({ include: [], exclude: [] });
     const slab = slabRegion(m, CRESCENT_FIRST_LEVEL_ID);
     expect(slab.exclude.length).toBe(1); // the stairwell

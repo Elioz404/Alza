@@ -828,9 +828,12 @@ describe("IFC export of free shapes: the Crescent House", () => {
       };
       const [x0, y0] = world(pts[0]);
       const [x1, y1] = world(pts[pts.length - 1]);
-      expect([x0, y0, x1, y1].map((v) => Math.round(v * 1e6) / 1e6), w.id).toEqual([w.ax, w.ay, w.bx, w.by]);
-      const mid = wallPointAt(w, 0.5);
-      expect(pts.some((q) => Math.hypot(world(q)[0] - mid.x, world(q)[1] - mid.y) < 1e-6), w.id).toBe(true);
+      // (rounded, and + 0 so a -0 off the axis reads as the 0 the plan has)
+      expect([x0, y0, x1, y1].map((v) => Math.round(v * 1e6) / 1e6 + 0), w.id).toEqual([w.ax, w.ay, w.bx, w.by]);
+      // and every point of it is on the wall's own circle, the one through its ends and its middle
+      const arc = wallArc(w)!;
+      expect(Math.hypot(wallPointAt(w, 0.5).x - arc.center.x, wallPointAt(w, 0.5).y - arc.center.y), w.id).toBeCloseTo(arc.radius, 9);
+      for (const q of pts) expect(Math.hypot(world(q)[0] - arc.center.x, world(q)[1] - arc.center.y), w.id).toBeCloseTo(arc.radius, 6);
     }
   });
 
@@ -878,13 +881,14 @@ describe("IFC export of free shapes: the Crescent House", () => {
           expect(overlap(outlines[i], outlines[j]), `${get(c, walls[i], "Tag")} × ${get(c, walls[j], "Tag")}`).toBeLessThan(1e-6);
         }
     }
-    // the curved facade's two ends, and the 60° and 120° corners of the guest wing, are each filled
+    // the curved bay's two ends, the wing's re-entrant corner, the spine's T on the street wall and the projection's corner are each filled
+    // (angled corners: the 30, 45 and 60 degree test below)
     const W_ = house.walls;
     const end = (id: string, e: "a" | "b") => {
       const w = W_.find((x) => x.id === id)!;
       return e === "a" ? [w.ax, w.ay] : [w.bx, w.by];
     };
-    for (const [id, e] of [["g_facade", "a"], ["g_facade", "b"], ["g_wing_n", "a"], ["g_wing_s", "b"], ["g_wing_end", "a"]] as const) {
+    for (const [id, e] of [["g_facade", "a"], ["g_facade", "b"], ["g_hall_w", "b"], ["g_spine", "b"], ["f_proj_s", "b"]] as const) {
       const [x, y] = end(id, e);
       expect(all(c, "IFCWALL").filter((wall) => solidsOf(c, wall).some((sd) => within(sd.outline, x, y))).length, `${id}.${e}`).toBeGreaterThanOrEqual(1);
     }
@@ -1087,9 +1091,14 @@ describe("bows too slight to be arcs", () => {
   });
 });
 
-describe("IFC export of columns over open ground: the Crescent House's carport", () => {
+describe("IFC export of columns over open ground: the Crescent House's parking bay", () => {
   const house = seedCrescent();
   const c = exported(house);
+  // the bay's two columns stand free under the slab's corners; for a column in a wall, one stands
+  // in the living room's south wall, west of its window to the court
+  const post = { id: "g_post", levelId: GROUND_LEVEL_ID, shape: "square" as const, x: 1.2, y: 5.6, w: 0.3, d: 0.3, rotation: 0 };
+  const posted: PlanModel = { ...house, columns: [...house.columns, post] };
+  const cp = exported(posted);
   const ground = house.levels[0];
   /** a product's Body representation */
   const bodyOf = (check: IfcCheck, e: StepEntity): StepEntity =>
@@ -1128,9 +1137,10 @@ describe("IFC export of columns over open ground: the Crescent House's carport",
   });
 
   it("writes a wall a column stands in less the column: a CSG body, no two bodies overlapping, its footprint less the column's", () => {
-    const inWall = house.columns.find((col) => columnWalls(house.walls, col).length > 0)!;
-    expect(inWall).toBeDefined();
-    const [w] = columnWalls(house.walls, inWall);
+    const c = cp;
+    const inWall = posted.columns.find((col) => columnWalls(posted.walls, col).length > 0)!;
+    expect(inWall).toBe(post);
+    const [w] = columnWalls(posted.walls, inWall);
     const e = byTag(c, "IFCWALL", w.id);
     expect(get(c, bodyOf(c, e), "RepresentationType")).toBe("CSG");
     const [solid] = solidsOf(c, e);
@@ -1150,8 +1160,8 @@ describe("IFC export of columns over open ground: the Crescent House's carport",
     expect(shared).toBeGreaterThan(0);
     expect(q.GrossFootprintArea as number).toBeCloseTo(full - shared, 3);
     // the column takes the wall's whole thickness at its end: the body's run, side and volume are less it too
-    const [post] = wallPosts(w, [inWall], house);
-    const taken = (Math.min(post.t1, 1) - Math.max(post.t0, 0)) * wallLength(w);
+    const [wallPost] = wallPosts(w, [inWall], posted);
+    const taken = (Math.min(wallPost.t1, 1) - Math.max(wallPost.t0, 0)) * wallLength(w);
     expect(taken).toBeGreaterThan(0);
     const run = Math.max(...solid.outline.map((p) => p.x)) - Math.min(...solid.outline.map((p) => p.x));
     expect(q.Length as number).toBeCloseTo(run - taken, 6);
@@ -1161,8 +1171,8 @@ describe("IFC export of columns over open ground: the Crescent House's carport",
     expect(all(c, "IFCSHAPEREPRESENTATION").filter((rep) => get(c, rep, "RepresentationType") === "CSG")).toHaveLength(1);
   });
 
-  it("writes the carport as an outside space where a car parks, under the studio's floor", () => {
-    const carport = house.rooms.find((r) => r.kind === "open")!;
+  it("writes the parking bay as an outside space where a car parks, under the main bedroom's floor", () => {
+    const carport = house.rooms.find((r) => r.id === "g_room_carport")!;
     const space = (id: string) => all(c, "IFCSPACE").find((x) => get(c, x, "Name") === id)!;
     expect(get(c, space(carport.id), "PredefinedType")).toBe("PARKING");
     expect(propertiesOf(c, space(carport.id), "Pset_SpaceCommon")).toMatchObject({ IsExternal: true });
@@ -1171,7 +1181,11 @@ describe("IFC export of columns over open ground: the Crescent House's carport",
       expect(get(c, space(r.id), "PredefinedType"), r.id).toBe("SPACE");
       expect(propertiesOf(c, space(r.id), "Pset_SpaceCommon"), r.id).toMatchObject({ IsExternal: false });
     }
-    // over the middle of the carport: the first floor's slab, its underside the carport's ceiling
+    // the roof terrace is outside too, an external space with no car in it
+    const terrace = house.rooms.find((r) => r.label === "Roof terrace")!;
+    expect(get(c, space(terrace.id), "PredefinedType")).toBe("EXTERNAL");
+    expect(propertiesOf(c, space(terrace.id), "Pset_SpaceCommon")).toMatchObject({ IsExternal: true });
+    // over the middle of the bay: the first floor's slab, its underside the bay's ceiling
     const box = outlineBounds(carport.points);
     const [x, y] = [box.x + box.w / 2, box.y + box.h / 2];
     const elevation = elevationOf(house, CRESCENT_FIRST_LEVEL_ID);
@@ -1210,10 +1224,10 @@ describe("IFC export of columns over open ground: the Crescent House's carport",
   });
 
   it("cuts a column shorter than its wall only up to its top: the wall stays whole over it, its volume less the column's share up to there", () => {
-    const inWall = house.columns.find((col) => columnWalls(house.walls, col).length > 0)!;
-    const [w] = columnWalls(house.walls, inWall);
+    const inWall = posted.columns.find((col) => columnWalls(posted.walls, col).length > 0)!;
+    const [w] = columnWalls(posted.walls, inWall);
     const short = 1;
-    const plan: PlanModel = { ...house, columns: house.columns.map((col) => (col.id === inWall.id ? { ...col, height: short } : col)) };
+    const plan: PlanModel = { ...posted, columns: posted.columns.map((col) => (col.id === inWall.id ? { ...col, height: short } : col)) };
     const s = exported(plan);
     const e = byTag(s, "IFCWALL", w.id);
     const [solid] = solidsOf(s, e);
@@ -1235,13 +1249,13 @@ describe("IFC export of columns over open ground: the Crescent House's carport",
   });
 
   it("writes a column in an inside partition as inside, one in an outside wall or out in the open as outside", () => {
-    const partition = house.walls.find((w) => w.id === "f_x5")!;
+    const partition = house.walls.find((w) => w.id === "f_linen_e")!;
     const plan: PlanModel = {
       ...house,
       columns: [
         ...house.columns,
         // on the partition between two first-floor rooms, and free in the middle of one
-        { id: "in_partition", levelId: CRESCENT_FIRST_LEVEL_ID, shape: "square", x: partition.ax, y: (partition.ay + partition.by) / 2, w: 0.3, d: 0.3, rotation: 0 },
+        { id: "in_partition", levelId: CRESCENT_FIRST_LEVEL_ID, shape: "square", x: (partition.ax + partition.bx) / 2, y: (partition.ay + partition.by) / 2, w: 0.3, d: 0.3, rotation: 0 },
       ],
     };
     const room = house.rooms.find((r) => r.levelId === GROUND_LEVEL_ID && r.kind !== "open" && outlineAnchor(r.points).clearance > 0.6)!;
@@ -1252,9 +1266,10 @@ describe("IFC export of columns over open ground: the Crescent House's carport",
     expect(wallIsExternal(partition, plan.rooms.filter((r) => r.levelId === partition.levelId))).toBe(false);
     expect(external("in_partition")).toBe(false);
     expect(external("in_room")).toBe(false);
-    // the carport's, in its outside wall and out in the open
+    // the bay's, out in the open, and one in an outside wall
     for (const col of house.columns) expect(external(col.id), col.id).toBe(true);
     expect(columnIsExternal(house.columns[0], house.walls, house.rooms)).toBe(true);
+    expect(columnIsExternal(post, posted.walls, posted.rooms)).toBe(true);
   });
 
   it("writes a round column with a circle profile, and a rotated one turned as the plan turns it", () => {

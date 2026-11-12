@@ -321,15 +321,19 @@ export const climbWord = (rotation: number): string => CLIMB_WAYS[Math.round(hea
 export const columnSectionText = (c: Pick<Column, "shape" | "w" | "d">): string => (c.shape === "circle" ? `Ø ${metres(c.w)} m` : `${metres(c.w)} × ${metres(c.d)} m`);
 
 /**
- * Which way a garage door's panels rise into, from its vano's chord p0 → p1: the side of the wall
- * a room of its level is on (the garage, the carport), +1 along the chord's normal (shapes.ts
- * chordNormal) or -1. Probed `faceOff` (the wall's half thickness) plus half the door's height
- * `depth` in, where the raised panels lie; +1 when neither side is a room.
+ * Which way a garage door's panels rise into, from its vano's chord p0 → p1, +1 along the chord's
+ * normal (shapes.ts chordNormal) or -1: the side an enclosed room of its level is on (the garage),
+ * else the side any room is on (a carport), as the 3D view decides it (three/build.ts
+ * garageInside). Probed `faceOff` (the wall's half thickness) plus half the door's height `depth`
+ * in, where the raised panels lie; +1 when neither side is a room.
  */
-export function garageInside(p0: Pt, p1: Pt, faceOff: number, depth: number, rooms: readonly Pick<Room, "points">[]): 1 | -1 {
+export function garageInside(p0: Pt, p1: Pt, faceOff: number, depth: number, rooms: readonly Pick<Room, "points" | "kind">[]): 1 | -1 {
   const n = chordNormal(p0, p1);
   const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
   const reach = faceOff + depth / 2;
-  const inRoom = (sign: number) => rooms.some((r) => pointInOutline({ x: mid.x + n.x * reach * sign, y: mid.y + n.y * reach * sign }, r.points));
-  return inRoom(1) || !inRoom(-1) ? 1 : -1;
+  const at = (sign: number) => rooms.filter((r) => pointInOutline({ x: mid.x + n.x * reach * sign, y: mid.y + n.y * reach * sign }, r.points));
+  const [plus, minus] = [at(1), at(-1)];
+  const enclosed = (rs: readonly Pick<Room, "kind">[]) => rs.some((r) => r.kind !== "open");
+  if (enclosed(plus) !== enclosed(minus)) return enclosed(plus) ? 1 : -1;
+  return plus.length > 0 || minus.length === 0 ? 1 : -1;
 }

@@ -84,7 +84,7 @@ describe("columns on the plan", () => {
   it("are drawn in solid poché on their own level only, each a press target", async () => {
     await mount(Editor);
     const drawn = [...host.querySelectorAll("[data-column]")].map((g) => g.getAttribute("data-column"));
-    expect(drawn).toEqual(["g_column_1", "g_column_2", "g_column_3"]);
+    expect(drawn).toEqual(["g_column_1", "g_column_2"]);
     for (const g of host.querySelectorAll("[data-column]")) expect(g.querySelector(".pl-column")).not.toBeNull();
     // the poché is the walls' ink, with no cross in it (a cross marks a void on a plan)
     expect(/\.pl-column\s*\{([^}]*)\}/.exec(canvasCss)?.[1]).toContain("fill: var(--plan-column)");
@@ -106,40 +106,42 @@ describe("columns on the plan", () => {
 
   it("dimensions the columns' axes as a structural grid, once two of them differ", async () => {
     await mount(Editor);
-    // three columns in a line north to south: one chain, of the two bays between them
+    // two columns in a line west to east under the main bedroom's front: one chain, of the bay between them
     const axes = host.querySelector("[data-column-axes]")!;
-    expect([...axes.querySelectorAll(".pl-dim-text")].map((t) => t.textContent)).toEqual(["2.75", "2.75"]);
+    expect([...axes.querySelectorAll(".pl-dim-text")].map((t) => t.textContent)).toEqual(["5.40"]);
   });
 
   it("are selected with a press, moved by a drag as one step, nudged by the arrows and removed by Delete", async () => {
     await mount(Editor);
     const g = host.querySelector("[data-column='g_column_2']")!;
-    await pointerAt(g, "pointerdown", 16.15, -0.2);
+    await pointerAt(g, "pointerdown", 13.2, 19.5);
     expect(store.getState().editor.selectedColumnId).toBe("g_column_2");
     expect(selectionTitle(store.getState().editor, model())).toBe("Column selected");
     expect(host.querySelector("[data-column-pill]")?.textContent).toBe("0.30 × 0.30 m");
     // dragged off any axis: it goes to the grid; one undo step for the whole drag
     const undo = store.getState().undoStack.length;
-    await pointer("pointermove", 15.03, 0.52);
-    await pointer("pointermove", 15.02, 0.51);
-    await pointer("pointerup", 15.02, 0.51);
-    expect(column("g_column_2")).toMatchObject({ x: 15, y: 0.5 });
+    await pointer("pointermove", 11.03, 21.52);
+    await pointer("pointermove", 11.02, 21.51);
+    await pointer("pointerup", 11.02, 21.51);
+    expect(column("g_column_2")).toMatchObject({ x: 11, y: 21.5 });
     expect(store.getState().undoStack.length).toBe(undo + 1);
     await press("ArrowRight");
     await release("ArrowRight");
-    expect(column("g_column_2").x).toBeCloseTo(15 + SNAP, 9);
+    expect(column("g_column_2").x).toBeCloseTo(11 + SNAP, 9);
     await press("Delete");
-    expect(model().columns.map((c) => c.id)).toEqual(["g_column_1", "g_column_3"]);
+    expect(model().columns.map((c) => c.id)).toEqual(["g_column_1"]);
     expect(store.getState().editor.selectedColumnId).toBeNull();
   });
 
   it("a dragged column is pulled onto the other columns' axis, never its own", async () => {
     await mount(Editor);
-    await pointerAt(host.querySelector("[data-column='g_column_2']")!, "pointerdown", 16.15, -0.2);
-    await pointer("pointermove", 16.1, 0.9);
-    await pointer("pointerup", 16.1, 0.9);
-    // in line with columns 1 and 3 (x 16.15), y on the grid
-    expect(column("g_column_2")).toMatchObject({ x: 16.15, y: 0.9 });
+    await pointerAt(host.querySelector("[data-column='g_column_2']")!, "pointerdown", 13.2, 19.5);
+    // past its own axis (x 13.2) to column 1's (x 7.8): pulled onto column 1's, never back onto its own
+    await pointer("pointermove", 13.1, 21.1);
+    await pointer("pointermove", 7.9, 21.1);
+    await pointer("pointerup", 7.9, 21.1);
+    // in line with column 1 (x 7.8), y on the grid
+    expect(column("g_column_2")).toMatchObject({ x: 7.8, y: 21.1 });
   });
 });
 
@@ -162,29 +164,29 @@ describe("the column tool", () => {
   it("puts a column down where a click lands, pulled to a wall's corner, and stays in hand", async () => {
     await mount(Editor);
     await act(async () => setPlanTool("column"));
-    // within reach of the carport's north-west corner (12, -3)
-    await pointer("pointermove", 12.1, -2.9);
+    // within reach of the street facade's west corner (6, 14.6)
+    await pointer("pointermove", 6.1, 14.7);
     expect(host.querySelector(".pl-ghost-column")?.getAttribute("data-to")).toBe("corner");
-    await pointer("pointerdown", 12.1, -2.9);
+    await pointer("pointerdown", 6.1, 14.7);
     const added = model().columns.at(-1)!;
-    expect(added).toMatchObject({ x: 12, y: -3, levelId: GROUND_LEVEL_ID, shape: COLUMN.defaults.shape, w: COLUMN.defaults.size });
-    expect(model().columns).toHaveLength(4);
+    expect(added).toMatchObject({ x: 6, y: 14.6, levelId: GROUND_LEVEL_ID, shape: COLUMN.defaults.shape, w: COLUMN.defaults.size });
+    expect(model().columns).toHaveLength(3);
     expect(getPlanTool()).toBe("column");
     expect(store.getState().activity.at(-1)?.source).toBe("human");
   });
 
   it("onto a wall's axis, onto another column's axis, else the grid", async () => {
     const slice = levelSlice(model(), GROUND_LEVEL_ID);
-    // beside the carport's west wall (x 12), away from its ends
-    expect(snapColumnPoint({ x: 12.15, y: -1.43 }, slice)).toMatchObject({ x: 12, to: "wall", ref: "g_carport_w" });
-    // in the open carport, level with column 2 (y -0.2): its y is taken, x goes to the grid
-    const lined = snapColumnPoint({ x: 14.02, y: -0.1 }, slice);
-    expect(lined).toMatchObject({ to: "column", ref: "g_column_2" });
-    expect(lined.y).toBeCloseTo(-0.2, 9);
-    expect(lined.x).toBeCloseTo(14, 9);
+    // beside the east facade (x 13.2), away from its ends and the walls meeting it
+    expect(snapColumnPoint({ x: 13.35, y: 4.43 }, slice)).toMatchObject({ x: 13.2, to: "wall", ref: "g_e" });
+    // out on the drive past the bay, level with the columns (y 19.5): their y is taken, x goes to the grid
+    const lined = snapColumnPoint({ x: 10.02, y: 19.6 }, slice);
+    expect(lined).toMatchObject({ to: "column", ref: "g_column_1" });
+    expect(lined.y).toBeCloseTo(19.5, 9);
+    expect(lined.x).toBeCloseTo(10, 9);
     await mount(Editor);
     await act(async () => setPlanTool("column"));
-    await pointer("pointermove", 14.02, -0.1);
+    await pointer("pointermove", 10.02, 19.6);
     // the guide is drawn to the column it lined up with
     expect(host.querySelector(".pl-ghost-column[data-to='column'] .pl-snap-guide")).not.toBeNull();
   });
@@ -192,7 +194,7 @@ describe("the column tool", () => {
   it("is refused in the error tone where it would stand in another column", async () => {
     await mount(Editor);
     await act(async () => setPlanTool("column"));
-    await pointer("pointermove", 16.3, -0.2);
+    await pointer("pointermove", 13.3, 19.5);
     expect(host.querySelector(".pl-ghost-column")?.hasAttribute("data-refused")).toBe(true);
   });
 
@@ -217,7 +219,7 @@ describe("the column tool", () => {
     expect(hint.segments[0][0]).toMatch(new RegExp(`^Column at X ${aim.x.toFixed(2)} m, Y ${aim.y.toFixed(2)} m, `));
     await press("Enter");
     const added = model().columns.at(-1)!;
-    expect(model().columns).toHaveLength(4);
+    expect(model().columns).toHaveLength(3);
     expect(added.x).toBeCloseTo(aim.x, 3);
     expect(added.y).toBeCloseTo(aim.y, 3);
     // still in hand, cross where it was; Esc puts the tool and its cross away
@@ -234,25 +236,25 @@ describe("the column tool", () => {
       return hint.segments[0][0] as string;
     };
     const slice = levelSlice(m, GROUND_LEVEL_ID);
-    // near the carport's north-west corner: pulled onto a wall's end, both axes moved
-    const corner = columnAim({ x: 12.1, y: -2.9 }, slice);
+    // near the street facade's west corner: pulled onto a wall's end, both axes moved
+    const corner = columnAim({ x: 6.1, y: 14.7 }, slice);
     expect(corner.to).toBe("corner");
     const cornerWall = m.walls.find((w) => w.id === corner.ref)!;
-    expect(words(12.1, -2.9)).toBe(`Column at X ${corner.x.toFixed(2)} m, Y ${corner.y.toFixed(2)} m, on the end of Wall ${m.walls.indexOf(cornerWall) + 1}`);
-    // level with column 2, in the open: in line with it
-    expect(words(14.02, -0.1)).toBe("Column at X 14.00 m, Y -0.20 m, in line with Column 2");
+    expect(words(6.1, 14.7)).toBe(`Column at X ${corner.x.toFixed(2)} m, Y ${corner.y.toFixed(2)} m, on the end of Wall ${m.walls.indexOf(cornerWall) + 1}`);
+    // level with the columns, out on the drive: in line with the first of them
+    expect(words(10.02, 19.6)).toBe("Column at X 10.00 m, Y 19.50 m, in line with Column 1");
     // on column 2 itself: it would stand in it, said in words as well as drawn
-    const on = columnAim({ x: 16.2, y: -0.2 }, slice);
+    const on = columnAim({ x: 13.25, y: 19.5 }, slice);
     expect(on.overlaps).toBe("g_column_2");
-    expect(words(16.2, -0.2)).toMatch(/: it would overlap Column 2$/);
+    expect(words(13.25, 19.5)).toMatch(/: it would overlap Column 2$/);
   });
 
   it("crosses out a refused aim, so the refusal is not in its colour alone", async () => {
     await mount(Editor);
     await act(async () => setPlanTool("column"));
-    await pointer("pointermove", 16.3, -0.2);
+    await pointer("pointermove", 13.3, 19.5);
     expect(host.querySelector(".pl-ghost-column[data-refused] .pl-ghost-refused")).not.toBeNull();
-    await pointer("pointermove", 14, 1);
+    await pointer("pointermove", 10, 21);
     expect(host.querySelector(".pl-ghost-refused")).toBeNull();
   });
 
@@ -272,8 +274,8 @@ describe("the column tool", () => {
     expect(rows.some((r) => r.keys.includes("enter") && r.does === "With Add a column, put a column down at the cross")).toBe(true);
     const alone = { ...model(), walls: [], rooms: [], items: [], stairs: [], openings: [] };
     const b = planBounds(alone)!;
-    expect(b.minX).toBeCloseTo(16.15 - 0.15, 9);
-    expect(b.maxX).toBeCloseTo(16.15 + 0.15, 9);
+    expect(b.minX).toBeCloseTo(7.8 - 0.15, 9);
+    expect(b.maxX).toBeCloseTo(13.2 + 0.15, 9);
   });
 });
 
@@ -297,12 +299,15 @@ describe("open spaces, the garage door and the car", () => {
     expect(door.querySelector(".pl-swing")).toBeNull();
     expect(door.querySelector(".pl-leaf")).toBeNull();
     expect(door.querySelector(".pl-garage-panel")).not.toBeNull();
-    // the raised panels are on the carport's side (south of its north wall, y -3), as deep as the door is high
+    // the raised panels are in the garage (north of its street wall, y 14.6), not over the open bay
+    // in front of it, as deep as the door is high
     const d = door.querySelector(".pl-garage-overhead")!.getAttribute("d")!;
     const ys = [...d.matchAll(/[ML](-?[\d.e-]+) (-?[\d.e-]+)/g)].map((m) => Number(m[2]) / ZOOM.unit);
     const o = model().openings.find((x) => x.id === "g_garage_door")!;
-    expect(Math.min(...ys)).toBeCloseTo(-3 + 0.1, 6);
-    expect(Math.max(...ys)).toBeCloseTo(-3 + 0.1 + o.height, 6);
+    const front = model().walls.find((w) => w.id === o.wallId)!;
+    const face = front.ay - front.thickness / 2;
+    expect(Math.max(...ys)).toBeCloseTo(face, 6);
+    expect(Math.min(...ys)).toBeCloseTo(face - o.height, 6);
     expect(/\.pl-garage-overhead\s*\{([^}]*)\}/.exec(canvasCss)?.[1]).toContain("var(--dash-overhead)");
   });
 
@@ -312,6 +317,10 @@ describe("open spaces, the garage door and the car", () => {
     expect(garageInside({ x: 0, y: 0 }, { x: 4, y: 0 }, 0.1, 2.1, [room])).toBe(-1);
     expect(garageInside({ x: 4, y: 0 }, { x: 0, y: 0 }, 0.1, 2.1, [room])).toBe(1);
     expect(garageInside({ x: 0, y: 0 }, { x: 4, y: 0 }, 0.1, 2.1, [])).toBe(1);
+    // with an open carport on the other side, the enclosed garage is where they go, whichever way the wall is walked
+    const carport = { ...room, id: "c", label: "Carport", kind: "open" as const, points: [{ x: 0, y: -6 }, { x: 4, y: -6 }, { x: 4, y: 0 }, { x: 0, y: 0 }] };
+    expect(garageInside({ x: 0, y: 0 }, { x: 4, y: 0 }, 0.1, 2.1, [carport, room])).toBe(-1);
+    expect(garageInside({ x: 4, y: 0 }, { x: 0, y: 0 }, 0.1, 2.1, [carport, room])).toBe(1);
   });
 
   it("the car has a plan symbol of its own, and shows its parking clearance when selected", async () => {
@@ -331,15 +340,17 @@ describe("open spaces, the garage door and the car", () => {
 });
 
 describe("the slab of the level above, and what carries it", () => {
-  it("over the open carport, the studio's slab edge is drawn dashed: its open sides only, not where it meets the walls", async () => {
+  it("over the open bay, the main bedroom's slab edge is drawn dashed: its open sides only, not where it meets the walls", async () => {
     const d = overheadPath(model(), GROUND_LEVEL_ID, 1);
     const segments = [...d.matchAll(/M(-?[\d.e-]+) (-?[\d.e-]+)L(-?[\d.e-]+) (-?[\d.e-]+)/g)].map((m) => m.slice(1).map(Number));
     expect(segments.length).toBeGreaterThan(0);
-    // the studio's outer east face (16.3) and south face (2.7) are its edge, seen from the carport
-    expect(segments.some(([x1, , x2]) => Math.abs(x1 - 16.3) < 1e-6 && Math.abs(x2 - 16.3) < 1e-6)).toBe(true);
-    expect(segments.some(([, y1, , y2]) => Math.abs(y1 - 2.7) < 1e-6 && Math.abs(y2 - 2.7) < 1e-6)).toBe(true);
-    // nothing along the carport's west wall, which the slab runs on over
-    expect(segments.some(([x1, , x2]) => Math.abs(x1 - 12.1) < 1e-6 && Math.abs(x2 - 12.1) < 1e-6)).toBe(false);
+    // the bedroom's outer west (7.65), east (13.35) and south (19.65) faces are its edge, seen from the bay
+    const along = (axis: 0 | 1, v: number) => segments.some((sg) => Math.abs(sg[axis] - v) < 1e-6 && Math.abs(sg[axis + 2] - v) < 1e-6);
+    expect(along(0, 7.65)).toBe(true);
+    expect(along(0, 13.35)).toBe(true);
+    expect(along(1, 19.65)).toBe(true);
+    // nothing along the garage's street wall, which the slab runs on over
+    expect(along(1, 14.75)).toBe(false);
     // the top level has nothing over it
     expect(overheadPath(model(), CRESCENT_FIRST_LEVEL_ID, 1)).toBe("");
     await mount(Editor);
@@ -349,7 +360,7 @@ describe("the slab of the level above, and what carries it", () => {
 
   it("an upper floor with nothing near enough under it is hatched in the warning colour", async () => {
     expect(unsupportedPath(model(), CRESCENT_FIRST_LEVEL_ID, 1)).toBe("");
-    for (const id of ["g_column_1", "g_column_2", "g_column_3"]) dispatch({ type: "remove_column", id }, { actor: "human" });
+    for (const id of ["g_column_1", "g_column_2"]) dispatch({ type: "remove_column", id }, { actor: "human" });
     expect(unsupportedPath(model(), CRESCENT_FIRST_LEVEL_ID, 1)).not.toBe("");
     await mount(Editor);
     expect(host.querySelector(".pl-unsupported")).toBeNull();
@@ -364,8 +375,15 @@ describe("in Properties", () => {
     await mount(Inspector);
     expect(host.querySelector(".insp-head__title")?.textContent).toBe("Column 1");
     expect(host.textContent).toContain("Square column, 0.30 × 0.30 m");
-    // it stands in the end of the carport's north wall
+    // it stands free, under the main bedroom's corner over the bay
+    expect(host.textContent).toContain("Free-standing");
+    // a post set in the living room's south wall says which wall holds it
+    const post = dispatch({ type: "add_column", spec: { x: 1.2, y: 5.6, level: GROUND_LEVEL_ID } }, { actor: "human" });
+    expect(post.ok).toBe(true);
+    await act(async () => void pageActions.selectColumn(post.id as string));
     expect(host.textContent).toMatch(/In Wall \d+/);
+    await act(async () => void pageActions.selectColumn("g_column_1"));
+    expect(host.textContent).toContain("Free-standing");
     const rect = [...host.querySelectorAll('[role="radio"]')].find((b) => b.textContent === "Rectangle")!;
     await click(rect);
     expect(column("g_column_1").shape).toBe("rectangle");
@@ -393,10 +411,13 @@ describe("in Properties", () => {
   });
 
   it("a door opens as a hinged leaf or as a garage door, sized as one", async () => {
-    pageActions.selectWall("g_carport_n");
+    pageActions.selectWall("g_front");
     await mount(Inspector);
-    expect(host.textContent).toContain("Garage door, 2.60 m wide");
-    await click(buttonNamed(`Edit ${host.querySelector(".insp-opening__name")!.textContent}`));
+    expect(host.textContent).toContain("Garage door, 2.50 m wide");
+    // the street wall holds the front door and the WC's window too: the garage door is the one edited
+    const names = [...host.querySelectorAll(".insp-opening__name")].map((n) => n.textContent!);
+    const garageName = names.find((n) => buttonNamed(`Edit ${n}`)?.closest("li")?.textContent?.includes("Garage door"))!;
+    await click(buttonNamed(`Edit ${garageName}`));
     expect(host.textContent).toContain("A sectional door");
     // no hinge or swing side for a garage door
     expect(host.querySelector('[role="radiogroup"][aria-label="Hinged at"]')).toBeNull();
@@ -410,7 +431,7 @@ describe("in Properties", () => {
   });
 
   it("an opening's fields are named for it: none reads as the wall's own Height", async () => {
-    pageActions.selectWall("g_carport_n");
+    pageActions.selectWall("g_garage_n");
     await mount(Inspector);
     await click(buttonNamed(`Edit ${host.querySelector(".insp-opening__name")!.textContent}`));
     const nameOf = (input: Element): string => {
@@ -434,7 +455,7 @@ describe("in Properties", () => {
   it("the plan's list reaches the columns of the level shown", async () => {
     await mount(Inspector);
     const group = [...host.querySelectorAll(".insp-elements__group")].find((g) => g.querySelector(".insp-elements__title")?.textContent === "Columns")!;
-    expect(group.querySelector(".insp-elements__count")?.textContent).toBe("3");
+    expect(group.querySelector(".insp-elements__count")?.textContent).toBe("2");
     expect(activeLevelId(store.getState())).toBe(GROUND_LEVEL_ID);
   });
 });

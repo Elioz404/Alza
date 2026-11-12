@@ -2,7 +2,8 @@
  * The whole structure feature through the agent's tools alone, as an agent co-editing the plan
  * would use them: from a cleared plan, a workshop on the ground with a storey over it that
  * reaches out over an open carport, carried there by a grid of columns, a sectional garage door
- * and a car parked under the storey — checked to no issues. Then a column taken away (through
+ * from the workshop out onto the carport, and a car parked under the storey, driven in from the
+ * carport's open side — checked to no issues. Then a column taken away (through
  * the approval it waits for) leaves the storey's floor unsupported where it stood, and a plan
  * saved before columns existed still loads.
  */
@@ -47,8 +48,10 @@ async function buildByTools(): Promise<{ first: string; columns: string[] }> {
   const south = model().walls.find((w) => w.ay === 6.5 && w.by === 6.5)!;
   await tool("add_door", { wallId: south.id, t: 0.5 });
   await tool("add_room", { x: 0.1, y: 0.1, w: 5.8, h: 6.3, label: "Workshop" });
-  const north = String((await tool("add_wall", { ax: 6, ay: 0, bx: 11, by: 0 })).id);
-  await tool("add_door", { wallId: north, t: 0.5, style: "garage" });
+  await tool("add_wall", { ax: 6, ay: 0, bx: 11, by: 0 });
+  // the workshop is the garage: its sectional door opens east onto the carport, the drive in front of it
+  const east = model().walls.find((w) => w.ax === 6 && w.bx === 6)!;
+  await tool("add_door", { wallId: east.id, t: 0.5, style: "garage" });
   // the carport: open, to the outer faces of its columns
   const carport = await tool("add_room", { x: 6.1, y: 0.1, w: 5.05, h: 6.55, label: "Carport", open: true });
   // its columns, a line of three on its east edge, 3.25 m apart, the first standing in the wall's end
@@ -125,20 +128,26 @@ describe("an open carport under a storey, through the tools alone", () => {
     const saved = JSON.parse(JSON.stringify(model()));
     const back = migratePlan(saved);
     expect(back.ok && back.model).toEqual(model());
-    // a format-3 save of the Crescent House as it was before its carport and studio: no columns,
-    // no open rooms, no garage door, no car, as a file read from disk, untyped
+    // a format-3 save of the Crescent House's ground floor as it would have been before format 4:
+    // no columns, no open porch and parking bay, no garage door, no cars, and so no storey over the
+    // drive for columns to carry; as a file read from disk, untyped
     const crescent = seedCrescent();
     const { columns, ...old } = crescent;
     void columns;
-    const added = (id: string) => /^(g_carport|g_car$|g_garage|g_room_carport|f_studio|f_room_studio|f_door_studio|f_win_studio)/.test(id);
+    const ground = crescent.levels[0].id;
+    const added = (id: string) => /^(g_car|g_garage_door|g_room_carport|g_plant_porch)/.test(id);
+    const kept = <T extends { id: string; levelId: string }>(list: readonly T[]) => list.filter((x) => x.levelId === ground && !added(x.id));
+    const walls = kept(old.walls);
     const v3 = JSON.parse(
       JSON.stringify({
         ...old,
         version: 3,
-        walls: old.walls.filter((w) => !added(w.id)),
-        rooms: old.rooms.filter((r) => !added(r.id)),
-        openings: old.openings.filter((o) => !added(o.id) && !added(o.wallId)),
-        items: old.items.filter((i) => !added(i.id)),
+        levels: [crescent.levels[0]],
+        walls,
+        rooms: kept(old.rooms),
+        openings: old.openings.filter((o) => !added(o.id) && walls.some((w) => w.id === o.wallId)),
+        items: kept(old.items),
+        stairs: [],
       }),
     ) as unknown;
     const migrated = migratePlan(v3);

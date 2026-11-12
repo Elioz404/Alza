@@ -155,6 +155,12 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
   let bottomFloor = 0;
   /** the active level's floor, metres up */
   const activeFloor = () => elevationOf(model, activeId);
+  /**
+   * the walls and slabs of the levels shown: what can stand between the camera and a room's name.
+   * Taken again whenever the levels are applied, so a change of what is shown — walking shows
+   * every storey, orbiting the active one — never leaves the names tested against another set.
+   */
+  let occluders: THREE.Object3D[] = [];
   /** Show the levels the setting (and the camera) asks for. Returns whether any came or went. */
   const applyLevels = (): boolean => {
     const shown = shownLevels(model, activeId, upTo, mode === "walk");
@@ -165,6 +171,7 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     // the shown stack ends at the slab over its topmost storey: a stair there stops at it too
     const capped = setStoreyTop(top ? top.elevation + slabUnderside(top.level.height) : null);
     const changed = plan.setLevels(shownIds) || capped;
+    occluders = plan.occluders;
     if (changed) renderer.shadowMap.needsUpdate = true;
     return changed;
   };
@@ -177,8 +184,6 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
     for (const leaf of plan.doors) leaf.hinge.traverse((c) => c instanceof THREE.Mesh && doorMeshes.push(c));
   };
   collectDoorMeshes();
-  /** the walls and slabs shown: what can stand between the camera and a room's name */
-  let occluders = plan.occluders;
 
   // ---- the plan's marks and names ----
   let style: SceneStyle = options.style ?? SCENE_STYLE_DEFAULTS;
@@ -710,7 +715,6 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       world = walkWorld(next);
       placeFloor();
       collectDoorMeshes();
-      occluders = plan.occluders;
       remark();
       refit(); // and redraws the shadow map: the casters changed
       // a plan that replaced the one on screen (the demo loaded, a blank canvas drawn on) is
@@ -748,7 +752,6 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       activeId = next;
       placeFloor();
       applyCut();
-      occluders = plan.occluders;
       refit();
       // walking, the walker goes to the level asked for (unless it just walked there itself)
       if (mode === "walk" && walkerLevel() !== next) applyCamera("walk", true);
@@ -758,7 +761,6 @@ export function createViewport(mount: HTMLElement, initialModel: PlanModel, init
       if (next === upTo) return;
       upTo = next;
       applyCut();
-      occluders = plan.occluders;
       refit();
       invalidate();
     },
