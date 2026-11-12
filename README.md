@@ -2,6 +2,8 @@
 
 Alza is a floor-plan studio that a person and an agent edit together, on one live page.
 
+https://github.com/user-attachments/assets/1883751f-3a53-48e3-b503-9e50fbb1f9fb
+
 A floor plan is coordinates, not buttons, so an agent cannot use one by pretending to be a
 mouse. Alza does not ask it to. It publishes the plan itself as typed tools through
 **WebMCP** (`document.modelContext.registerTool`), on the same page a person is drawing on.
