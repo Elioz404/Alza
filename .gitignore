@@ -11,8 +11,7 @@ PLAN.md
 .netlify
 
 # ---- media -----------------------------------------------------------------
-# All media lives under shots/. Only the showcase is committed:
-#   shots/showcase/   README stills + preview loop   (tracked, ~8 MB)
+# All media lives under shots/. None of it is committed:
 #   shots/devpost/    2700x1800 originals for the submission form  (generated)
 #   shots/video/      the rendered film              (181 MB)
 # Regenerate the gallery with `npm run shots`.
@@ -28,6 +27,6 @@ DEVPOST-v2.txt
 
 # ---- the film ----------------------------------------------------------------
 # The HyperFrames project — brief, storyboard, script, compositions, footage,
-# narration and renders. The finished film is published to YouTube and its stills
-# are in shots/showcase/, so none of the authoring tree is carried here.
+# narration and renders. The finished film is published to YouTube, so none of the
+# authoring tree is carried here.
 videos/

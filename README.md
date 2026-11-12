@@ -1,623 +1,733 @@
-# Alza — Plans that rise to 3D
+# Alza
 
-A floor plan is coordinates, not buttons — which is why an agent cannot use one by
-pretending to be a mouse. So Alza does not make it try. It hands over the model itself: the
-full metric geometry, published as typed tools through **WebMCP**, on the same live page a
-person is drawing on.
+Alza is a floor-plan studio that a person and an agent edit together, on one live page.
 
-You draw walls, rooms, doors, windows and furniture in a precise 2D editor, or load a photo
-of a plan and trace over it. Your agent works that same model with the same tools — it
-checks its own work against a constraint engine, buys furniture from a second origin, and
-raises the result into a 3D model you can walk through. Built for the
-[WebMCP Challenge](https://webmcp.devpost.com/).
+A floor plan is coordinates, not buttons, so an agent cannot use one by pretending to be a
+mouse. Alza does not ask it to. It publishes the plan itself as typed tools through
+**WebMCP** (`document.modelContext.registerTool`), on the same page a person is drawing on.
+Both of them change one model, through one command path, with one undo history.
 
-Everything runs client side. No backend, no accounts, plans stay on your machine.
+You draw walls, rooms, doors, windows, stairs, columns and furniture in a metric 2D editor,
+or trace over a photo of a plan. The agent works the same model with the same actions: it
+checks its work against a constraint engine, places products from a partner shop on another
+origin, and raises the plan into a 3D model you can walk through. Several storeys, curved
+walls and free room outlines are all part of the model, and the whole plan exports as an
+IFC4 building model.
+
+Everything runs in the browser. There is no backend and no account, and the plan does not
+leave the machine. Built for the [WebMCP Challenge](https://webmcp.devpost.com/).
 
 ---
 
-## The two-minute film
+## Contents
 
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=RihMFcMstvI">
-    <img src="shots/showcase/00-video-poster.png" width="820" alt="Watch the Alza demo" />
-  </a>
-</p>
+- [Try it](#try-it)
+- [Why WebMCP](#why-webmcp)
+- [The agent's tools](#the-agents-tools)
+- [Approvals](#approvals)
+- [Two origins, one plan](#two-origins-one-plan)
+- [The shared session](#the-shared-session)
+- [The plan model](#the-plan-model)
+- [The constraint engine](#the-constraint-engine)
+- [The 3D view](#the-3d-view)
+- [IFC4 export](#ifc4-export)
+- [The Studio UI](#the-studio-ui)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [First load and deferred loading](#first-load-and-deferred-loading)
+- [Security model](#security-model)
+- [Develop, test and build](#develop-test-and-build)
+- [Project structure](#project-structure)
+- [Notes on the WebMCP spec](#notes-on-the-webmcp-spec)
+- [Limitations](#limitations)
+- [License](#license)
 
-<p align="center"><em>2 min 15 s. The agent gets a photo of a plan, asks for one real
-dimension, and draws the whole thing. After that it checks itself, buys a chair from another
-origin, gets a destructive call refused by a human, and walks the result.</em></p>
+## Try it
 
-I put the film together with [HyperFrames](https://hyperframes.heygen.com/) from a
-storyboard, a script and HTML compositions. That authoring tree is not carried here; the
-finished film is on YouTube and its stills are in [`shots/showcase/`](shots/showcase/).
+1. Open the studio: <https://alza-dev.pages.dev>.
+2. Use a browser with a WebMCP runtime. In Chrome 149 or later, enable
+   `chrome://flags/#enable-webmcp-testing` and restart (or launch Chromium with
+   `--enable-features=WebMCP`, as the end-to-end scripts do). The status in the top bar reads
+   **Agent tools on** once the runtime has taken the tools (46 at load).
+3. Ask the agent, for example:
+   - "Add a 3 x 2.5 m study next to the bedroom, with a door and a window."
+   - "Check the plan and fix any issues."
+   - "Add a second storey with a stair up from the hall."
+   - "Build the 3D and give me a walkthrough."
+4. Without a WebMCP runtime the app is still complete. **Activity > Developer tools** runs
+   every tool by hand, through the same wrapper the runtime uses, and every call is logged.
 
-What *is* here is the part you need to reproduce what the film shows:
-[`scripts/trace.mjs`](scripts/trace.mjs) holds the demo plan as data, and [`scripts/record6.mjs`](scripts/record6.mjs)
-drives the real app through the eight beats while ffmpeg captures the screen at 60 fps.
+### Trace a plan from an image
 
-## What it looks like
-
-The plan below was traced by the agent from a photo of a drawing it had never seen. Every
-coordinate came out of tool calls. Nothing was placed by hand.
-
-<p align="center">
-  <img src="shots/showcase/preview.gif" width="720" alt="The traced plan turning in 3D" />
-</p>
-
-<p align="center">
-  <img src="shots/showcase/01-3d-orbit-hero.png" width="820" alt="The traced plan raised into 3D" />
-</p>
-
-The proof in one image. The drawing underneath is the source photo; the dark geometry on top
-is what Alza built from it. The agent asked for a single real dimension, set the scale from
-that, and traced the rest.
-
-<p align="center">
-  <img src="shots/showcase/02-traced-over-the-drawing.png" width="820" alt="Alza's geometry laid over the original drawing" />
-</p>
-
-| | |
-|:--:|:--:|
-| <img src="shots/showcase/03-plan-2d.png" width="400" alt="The finished metric plan" /> | <img src="shots/showcase/04-tool-runner.png" width="400" alt="The 31 tools the page publishes" /> |
-| The finished plan: 12 walls, 14 openings, 10 rooms, 34 pieces, with live areas per room. | The tools, published by the page itself. No server and no key, just `document.modelContext.registerTool`. |
-| <img src="shots/showcase/05-cross-origin-supplier.png" width="400" alt="A second origin publishing its own tools" /> | <img src="shots/showcase/06-supplier-product-placed.png" width="400" alt="A partner product placed in the plan" /> |
-| A furniture shop on its own origin publishes its own tools and shares them with this page. | One instruction crosses that boundary, and a real product lands in the plan at its real size. |
-| <img src="shots/showcase/07-constraint-engine.png" width="400" alt="The constraint engine reporting errors in metres" /> | <img src="shots/showcase/08-agent-notes-on-ambiguity.png" width="400" alt="Notes the agent left about what it could not be sure of" /> |
-| It checks its own work: overlaps, wall crossings and blocked door swings, reported in metres. | When it cannot know something, it says so. Here it flags an ambiguous symbol and its scale assumption. |
-| <img src="shots/showcase/09-approval-gate.png" width="400" alt="A destructive call waiting for a human" /> | <img src="shots/showcase/10-approval-rejected-feed.png" width="400" alt="The refusal returned to the agent in words" /> |
-| The human keeps the veto: a destructive call parks on the page until a person decides. | The refusal comes back as words the agent can act on, not a silent failure. |
-| <img src="shots/showcase/11-agent-authored-pieces.png" width="400" alt="Furniture the agent modelled itself" /> | <img src="shots/showcase/15-3d-walk-eye-level.png" width="400" alt="Walking the plan at eye level" /> |
-| When the catalogue has no honest match, the agent models the piece itself: an L-shaped sofa, a corner shower, a compact bath, a fitted L wardrobe, a washing machine. | Then you walk it, at 1.6 m eye height, doors open, collision on. |
-
-More stills in [`shots/showcase/`](shots/showcase/).
-
-## Try it in 2 minutes
-
-1. Open the live app (link at the top of this repo).
-2. **In ChatGPT desktop:** open the URL in the in-app browser. WebMCP works out of the box.
-   **In Google Chrome 149+:** enable `chrome://flags/#enable-webmcp-testing` and restart.
-   The agent status in the top bar turns green: **Agent tools on** (46 tools registered).
-3. Ask your agent, for example:
-   - *"Add a 3 × 2.5 m study next to the bedroom, with a door and a window."*
-   - *"The sofa placement feels off. Check the plan and fix any issues."*
-   - *"Build the 3D and give me a walkthrough."*
-4. No WebMCP runtime? The app is still complete. Open **Activity → Developer tools** in the side
-   panel and run the exact same 47 tools manually; every call is logged in Activity.
-
-## Trace your own plan with the agent
-
-Have a floor-plan image (scan, photo, PDF export)? Let the agent rebuild it in 3D:
-
-1. Upload the image in **Properties → Blueprint underlay** (it appears on the 2D
-   canvas), and attach the same image in the chat so the agent can see it.
-2. Give the agent **one real dimension** from the plan, e.g. *"this wall is 4.6 m"*.
-   It calls `calibrate_underlay` with two points on the image and that distance, and the
-   blueprint is scaled to true meters.
-3. Ask: *"Trace this plan: walls, doors, windows, rooms, then furnish it and check for
-   issues."* The agent draws over the underlay with `add_wall` / `add_door` / `add_window`,
-   verifies with `measure` + `get_issues`, fixes what it got wrong, and finishes with
-   `build_3d`.
+1. Upload the image in **Properties > Blueprint underlay** (with nothing selected), and give
+   the same image to the agent in the conversation so it can see it.
+2. Give the agent one real dimension, such as "this wall is 4.6 m". It calls
+   `calibrate_underlay` with two points on the image and that distance, and the underlay is
+   scaled to true metres.
+3. Ask it to trace walls, openings and rooms, furnish the plan and check it. It draws with
+   `add_wall`, `add_door`, `add_window` and `add_room`, verifies with `measure` and
+   `get_issues`, and leaves notes about anything it could not be sure of.
 4. Correct anything by hand. You and the agent share the same model.
 
-## Why WebMCP is the point
+## Why WebMCP
 
-Canvas geometry is exactly where agent actuation falls over. You cannot click-and-drag a
-wall reliably, and there is no DOM to scrape. So Alza publishes the plan as **structured
-tools** via `document.modelContext.registerTool`, and those tools call the same store
-actions the UI buttons call. Human and agent end up co-editing one model on one live page.
+Canvas geometry is where agent actuation by clicking breaks down: you cannot drag a wall
+reliably, and there is no DOM to read. Alza publishes structured tools instead, and every tool
+that changes the plan dispatches the same commands the UI does (`src/model/commands.ts`).
 
 ```js
 document.modelContext.registerTool({
   name: "add_wall",
-  description: "Add a wall segment from (ax,ay) to (bx,by) in meters…",
-  inputSchema: { /* … */ },
-  execute: async (input) => { /* the same action the + Wall button uses */ },
+  title: "Add a wall",
+  description: "Add a wall segment from (ax,ay) to (bx,by) in meters...",
+  inputSchema: { /* derived from a zod schema */ },
+  execute: async (input) => { /* the same command the Draw walls tool dispatches */ },
 });
 ```
 
-## The 46 tools (+ 1 dynamic)
+Design points:
 
-| Group | Tools |
-|---|---|
-| **Read** (readOnly) | `get_model` · `get_issues` · `get_item_catalog` · `get_editor_state` · `measure` · `get_underlay` |
-| **Blueprint** | `calibrate_underlay`, scales the uploaded plan image to real meters from one known dimension |
-| **Structure** | `add_wall` · `edit_wall` · `remove_wall`; a wall may be curved: `curve` takes a bulge, a sagitta (how far its middle stands off its chord) or a point it passes, and `edit_wall` bends or straightens it |
-| **Openings** | `add_door` · `add_window` · `move_opening` · `remove_opening` · `set_door_swing` (hinge side + swing direction); `add_door` with `style: "garage"` adds a sectional overhead garage door (2.4-5.5 m wide, 2.0-2.5 m tall, no swing) |
-| **Rooms** | `add_room` · `update_room` · `remove_room`; a room is a rectangle (`x`, `y`, `w`, `h`), an outline of 3 to 100 `points` with `arcs` on any edge (by sagitta out of the room, or a point the arc passes), or `fit` (the outline the walls close off round a point, to their inner faces). An agent reshapes a room by giving `update_room` its whole outline. `open: true` makes it an open space (a carport, a porch) that needs no walls, floored in concrete unless told otherwise |
-| **Structure** | `add_column` (square, rectangular or round, 0.25-0.6 m; at a point, centred in a `room`, or a `grid` of rows × cols) · `update_column` · `remove_column` (needs approval); a column stands to the underside of the slab over its level unless given a height, and carries the floor above as a wall does |
-| **Furniture** | `place_item` · `move_item` · `remove_item` · `define_item_kind`, model a piece the catalogue lacks, from primitives |
-| **Levels & stairs** | `list_levels` · `add_level` · `update_level` (rename, floor-to-floor height — the walls that met the slab follow it unless `walls: "keep"` — or its place in the stack) · `remove_level` (needs approval) · `set_active_level` · `add_stair` (straight or L-shaped; risers and going derived from the storey height) · `update_stair` · `remove_stair` (needs approval) |
-| **Model & view** | `set_plan_name` · `clear_model` · `build_3d` · `set_camera` (orbit/top/walk) · `set_3d_style` (ink edges, dollhouse cutaway at a height) · `set_doors` (swing the leaves open/shut) |
-| **Export** | `export_ifc`, writes the whole plan as an IFC4 building model and downloads it for the human, who approves every export first, whatever the approval policy (a file on their machine is not something undo can take back); the agent gets the file's summary (schema, size, entities by type), not the file |
-| **Cross-origin** | `get_supplier_catalog` · `place_supplier_product`, read a **partner origin's** own WebMCP tools and drop its real products into the plan |
-| **Collaboration** | `leave_note` · `get_notes` |
-| **Shared session** | `get_presence`, what the person is doing right now: level, view, selection, what they are dragging, their pointer and the plan area on their screen (unless they switched sharing off), and the other tabs on the plan · `point_at`, a marker with a short message on a wall, room, piece or stair, in the plan and in 3D |
-| **Dynamic** | `extend_selected_wall`, published **only while the human has a wall selected** (registered/unregistered live, per the spec's `toolchange` cycle). The human points, the agent acts on exactly that wall. |
+- **One store, two users.** A vanilla zustand store serves the React UI and the tools, so
+  actions, validation and undo are the same for both.
+- **Validated input.** Each tool's arguments are a zod schema built from the ranges in
+  `src/model/limits.ts`. The published `inputSchema` is derived from it, and every call is
+  validated before anything else. Invalid input returns `ok: false` with the list of
+  problems, and nothing changes.
+- **Names or ids.** Arguments accept an exact id, or a name that matches exactly one entity
+  ("bedroom", "sofa"). An ambiguous name is refused with the candidates.
+- **Visible calls.** Every call, from the person or the agent, is logged in the Activity feed
+  with its source.
+- **Annotations.** Every tool has a `title`. `readOnlyHint` and `untrustedContentHint` are
+  set where they apply. Text that came from the partner origin travels in a separate
+  `untrusted` field and never inside a summary the page writes.
+- **Registration and retirement.** Tools are registered with
+  `registerTool(descriptor, { signal, exposedTo })` and retired by aborting that signal, which
+  is the spec's unregistration path and makes the runtime emit `toolchange`.
+
+## The agent's tools
+
+46 tools are registered at load (`TOOLS` in `src/mcp/tools.ts`, including the two from
+`src/mcp/presenceTools.ts`). One more, `extend_selected_wall`, is registered only while the
+person has a wall selected. "Approval" marks the 8 destructive tools, which wait for the person
+when the approval gate is on, and `export_ifc`, which always waits.
+
+| Tool | What it does | Approval |
+|---|---|---|
+| **Read** | | |
+| `get_model` | The whole plan, or one level of it, with each upper floor's supports | |
+| `get_issues` | Run the constraint engine on the plan or one level | |
+| `get_item_catalog` | The furniture catalogue: built-in kinds and the plan's own | |
+| `get_editor_state` | The person's view and camera mode, active level, selection and draw mode | |
+| `measure` | Distance between two points or entities | |
+| `get_underlay` | The underlay's placement, scale mapping and the tracing protocol | |
+| **Blueprint** | | |
+| `calibrate_underlay` | Scale the underlay to metres from one known dimension | |
+| **Walls** | | |
+| `add_wall` | Add a straight wall, or an arc (by bulge, sagitta or a point it passes) | |
+| `edit_wall` | Move its ends, change thickness or height, bend or straighten it | |
+| `remove_wall` | Remove a wall and its doors and windows | Yes |
+| **Openings** | | |
+| `add_door` | Add a swing door, or `style: "garage"` for a sectional garage door | |
+| `set_door_swing` | Change a door's hinge side and swing direction | |
+| `add_window` | Add a window | |
+| `move_opening` | Slide a door or window along its wall | |
+| `remove_opening` | Remove a door or window | Yes |
+| **Rooms** | | |
+| `add_room` | A rectangle, an outline of 3 to 100 points with arcs, or `fit` to the walls round a point; `open: true` for an open space | |
+| `update_room` | Reshape, move, resize, relabel, refit or change the floor finish | |
+| `remove_room` | Remove a room | Yes |
+| **Furniture** | | |
+| `place_item` | Place a catalogue piece | |
+| `define_item_kind` | Model a new kind from primitive parts when the catalogue has no match | |
+| `move_item` | Move or rotate a piece | |
+| `remove_item` | Remove a piece | Yes |
+| **Levels and stairs** | | |
+| `list_levels` | The storeys, their heights, elevations and contents | |
+| `add_level` | Add a storey | |
+| `update_level` | Rename, change the floor-to-floor height (walls that met the slab follow unless `walls: "keep"`), or move it in the stack | |
+| `remove_level` | Remove a storey and everything on it | Yes |
+| `set_active_level` | Switch the storey being worked on | |
+| `add_stair` | Add a straight or L-shaped stair; risers and going come from the storey height | |
+| `update_stair` | Move, turn, resize or reshape a stair | |
+| `remove_stair` | Remove a stair; its stairwell closes | Yes |
+| **Structure** | | |
+| `add_column` | A square, rectangular or round column at a point, centred in a room, or a grid | |
+| `update_column` | Move, turn, resize, reshape or set its height | |
+| `remove_column` | Remove a column | Yes |
+| **Plan and view** | | |
+| `set_plan_name` | Rename the plan | |
+| `clear_model` | Erase the whole plan | Yes |
+| `build_3d` | Switch to the 3D view and build the model | |
+| `set_camera` | Orbit, top or walk camera | |
+| `set_3d_style` | Ink edges on or off, and the cutaway and its height | |
+| `set_doors` | Open, shut or toggle every door in 3D | |
+| **Export** | | |
+| `export_ifc` | Write the plan as IFC4 and download it; the agent gets a summary, not the file | Always |
+| **Cross-origin** | | |
+| `get_supplier_catalog` | Read the partner shop's catalogue through its own WebMCP tools | |
+| `place_supplier_product` | Place a partner product at its real size | |
+| **Notes** | | |
+| `leave_note` | Leave a note on the plan | |
+| `get_notes` | Read the notes left by the person and by agents | |
+| **Shared session** | | |
+| `get_presence` | What the person is doing now: level, view, selection, what they are editing, pointer, visible area | |
+| `point_at` | Show the person a marker with a short message on an entity, in plan and 3D | |
+| **Dynamic** | | |
+| `extend_selected_wall` | Extend the wall the person selected; exists only while one is selected | |
 
 `get_model`, `get_issues`, `add_wall`, `edit_wall`, `add_room`, `update_room`, `place_item`,
-`move_item` and `place_supplier_product` also take an optional `level` (a level's id or its
-name, which no other level shares): without it they read or draw on the level the human is
-working on.
+`move_item`, `place_supplier_product`, `add_stair`, `update_stair`, `add_column` and
+`update_column` take an optional `level` (an id, or a name no other level shares). Without it
+they read or draw on the level the person is working on.
 
-A few design notes:
+## Approvals
 
-- One store, two users. A vanilla zustand store powers both the React UI and the WebMCP
-  tools, so actions, validation and undo history are identical for both.
-- Every tool call, human or agent, is logged to an on-page activity feed with source
-  badges. The spec asks that tools run visibly on the page; this is that.
-- `readOnlyHint` / `untrustedContentHint` annotations help the agent plan, and every tool
-  carries a `title` next to its `name`. MCP's `destructiveHint` rides along too — WebMCP
-  does not define it yet, so it is enforced page-side (see the spec notes below).
-- Tools are registered with `registerTool(descriptor, { signal, exposedTo })` and retired
-  by **aborting that signal**, which is the spec's unregistration path and what makes the
-  runtime emit `toolchange`.
-- `get_issues` runs a geometry constraint engine (below). Agents call it after editing
-  and fix their own mistakes, which is the self-repair loop.
-- Without a WebMCP runtime the app loses nothing. **Activity → Developer tools** runs the
-  same tools by hand.
+The WebMCP explainer lists per-call user confirmation as an open question. Alza answers it in
+the page (`src/mcp/registry.ts`, `executeWrapped`).
 
-## Two things WebMCP makes possible that I had not seen elsewhere
+- A tool annotated `destructiveHint` is first resolved against the model: every reference must
+  name exactly one entity. The call then becomes a request card on the plan, next to what it
+  would remove, with that target hatched, and the request is listed under **Waiting for you**
+  in Activity.
+- The agent's `execute()` stays pending until the person answers. **Esc** keeps the plan,
+  **Ctrl+Enter** confirms. A refusal comes back as a failure the agent can act on ("the human
+  declined ... ask them what to do instead").
+- Before it runs, the call is resolved again. If what it acts on changed or vanished while the
+  request waited, nothing is done and the agent is told why.
+- The `AbortSignal` WebMCP passes to `execute()` withdraws the request if the agent gives up.
+- At most 5 requests wait at once; past that a call is refused rather than queued.
+- The gate is a switch in **Properties** with nothing selected, on by default, and the policy
+  is stated in words under the queue in Activity. It also guards **Developer tools**, since
+  both paths use the same wrapper.
+- `export_ifc` carries the page's own `consentHint` and always waits for the person, whatever
+  the policy: a file written to their machine is not something undo can take back.
 
-### 1. The human approves what the agent destroys
+`destructiveHint` is in MCP's `ToolAnnotations` but not in WebMCP's, which defines only
+`readOnlyHint` and `untrustedContentHint`. Alza keeps it in its own descriptors and enforces it
+in the page, so the gate never depends on the browser passing it on.
 
-The explainer lists per-call user confirmation as an **open question** ("a way for a tool
-to prompt the user for confirmation"). Alza answers it on the page. A tool annotated
-`destructiveHint` does not run when the agent calls it; it becomes a **request card** on
-the plan, beside the thing it would remove (*"Your agent wants to clear the whole plan"*),
-with that target hatched in red and the request listed under **Waiting for you** in
-Activity. The agent's `execute()` stays pending until a human keeps the plan (Esc) or
-confirms (Ctrl+Enter). Reject returns a real
-failure the agent can act on ("the human declined … ask them what to do instead"), and the
-`AbortSignal` WebMCP passes to `execute()` releases the request if the agent gives up
-first.
+## Two origins, one plan
 
-The gate is a switch in **Properties** (with nothing selected), and the policy is stated in
-words under the queue in Activity, with a Change link to the same switch. It also guards
-**Developer tools**, because both paths run through the same wrapper.
-
-### 2. One agent, two origins, one plan
-
-**Nordika** is a separate website on its own origin (`partner/`). It knows nothing about
-Alza. It publishes its stock as its own WebMCP tools (`nordika_list_products`,
-`nordika_get_product`) and shares them with the studio using
+**Nordika** is a separate site on its own origin (`partner/`). It knows nothing about Alza. It
+publishes its stock as its own WebMCP tools, `nordika_list_products` and
+`nordika_get_product`, and shares them with the studio through
 `registerTool(descriptor, { exposedTo })`.
 
-Alza embeds it in an iframe carrying **`allow="tools"`** (the `tools` Permissions Policy),
-discovers those tools with **`getTools({ fromOrigins })`** and calls them with
-**`executeTool()`**. So an agent standing on one page composes two origins: it reads a
-supplier's real catalogue and lays those products into the plan at their true dimensions,
-where the constraint engine judges them like anything else. *"Furnish the living room with
-in-stock Nordika pieces under €400"* is a single instruction that crosses a security
-boundary with no server in the middle. The browser is the integration layer.
+The studio embeds it in an iframe with `allow="tools"` (the `tools` Permissions Policy),
+discovers those tools with `getTools({ fromOrigins })` and calls them with `executeTool()`. An
+agent on the studio page can read a supplier's real catalogue and place its products at their
+true dimensions, where the constraint engine judges them like anything else. No server sits in
+between.
 
-Where a runtime has no cross-origin support, the same two calls run over `postMessage`,
-and the UI says which transport was used.
+Where a runtime does not resolve cross-origin tools, the same two calls run over
+`postMessage`, and the result says which transport was used.
 
-## The constraint engine (`get_issues`)
+In production the studio is on Cloudflare Pages (`https://alza-dev.pages.dev`) and the partner
+on Netlify (`https://alza-dev.netlify.app`), named in `.env.production` as
+`VITE_STUDIO_ORIGIN` and `VITE_SUPPLIER_ORIGIN`. Locally they are two ports,
+`http://localhost:5199` and `http://localhost:5200` (`config/origins.js`); a different port is a
+different origin, which is all the exchange needs.
 
-Metric precision is the product. The checker validates:
+## The shared session
 
-- **Walls:** too short, loose ends (T-junctions count as connected), collinear overlaps
-  (total or partial), mid-span crossings.
-- **Openings:** vano fully inside its wall (creation-time clamping + detection), overlapping
-  openings, sill + height above wall height, and **a wall ending inside another wall's
-  opening**.
-- **Rooms:** floating, overlapping (by their real outlines), doorless, too small, and an
-  outline that crosses itself, has an edge under 5 cm or bends past a half circle.
-- **Curved walls:** an arc tighter than the wall's thickness allows, and an opening too wide
-  for the straight leaf or pane across its chord to stay inside the wall.
-- **Doors:** two doors whose leaves swing into each other.
-- **Furniture:** oriented-rectangle **SAT** against walls (leaning is legal, crossing is an
-  error), blocking door swing paths and window light (with a sill-height nuance),
-  item-vs-item collisions (rugs exempt), items outside every room.
-- **Storeys and stairs** (checked level by level, so walls on different floors are never
-  compared): a wall under a level above that stops short of its slab or runs up through it, a
-  stair with no level above, risers or goings out of range, the 2R + G comfort rule, headroom
-  under the slab, a wall in the stair or over its stairwell, a blocked landing at either end,
-  a stairwell outside every room, furniture on a stair or over a stairwell, overlapping stairs.
-- **Structure** (a sanity check, not engineering): an upper floor with neither a wall nor a
-  column under it within half of a 6 m span (the floor is sampled every 25 cm, coarser on a
-  floor too large for 40,000 samples, and each unsupported zone is reported with its bounds;
-  only walls and columns that reach the slab's underside carry it), a column under a level above
-  that stops short of its slab or runs up through it, a column with nothing under it on the level
-  below, a column off every room and wall, in a door's swing, a garage door's drive or a window,
-  on a stair, on another column or in furniture, a car without 0.6 m clear at its sides and
-  0.4 m at its ends (a column in it, a wall through it, past its garage's walls), and a garage
-  door too wide for its wall with its jambs. An open space is never asked for walls or a door.
+The person, the agent and every open tab of the studio work on one plan at the same time, and
+each sees the others.
 
-The bundled **Sunset Loft** demo is audited to **0 issues** and kept that way by a
-regression test, as is **Crescent House** (Plan menu), the free-shapes demo: two storeys with a
-curved facade on both, a wing turned off the house at an angle under a roof terrace, an
-L-shaped kitchen round a pantry, a stair, and a studio standing out on three columns over an
-open carport, with a car parked under it and a sectional garage door.
+- **The agent is seen at work.** While a tool call runs, a marker in the agent's colour moves to
+  what it touches, the entity is highlighted, and a label says what it is doing ("Agent ·
+  moving Sofa"), on the plan and over the 3D model. This follows from `dispatch()` and the tool
+  runner, not from each tool, so every tool is covered.
+- **The agent sees the person.** `get_presence` returns the person's level, view and camera,
+  selection, what they are editing, their pointer and what it is over, and the plan area on
+  their screen. `point_at` puts a marker with a short message (up to 160 characters, shown for
+  6 seconds) on a wall, door, window, room, piece or stair. The message is also announced
+  through a polite live region and kept in the feed.
+- **No edit under the person's hand.** While the person drags, nudges or types into something,
+  an agent's change to that same thing is refused with `conflict.code: "person_editing"`,
+  the entity ids and `retryAfterMs` (1200 ms). Nothing changes, and the page shows "Agent ·
+  waiting for you". The call is refused, not queued, so it never hangs.
+- **Privacy switch.** The presence indicator in the top bar switches off sharing the pointer
+  and view. The choice is kept per browser (`localStorage`, `alza.presence.sharing`) and every
+  open tab follows it. With sharing off, `get_presence` reports `sharing: false` and no
+  pointer, hover, viewport or look.
+- **Tabs of one browser.** Tabs of the same origin share one plan over a `BroadcastChannel`
+  (`alza-session`). A tab that opens later takes up the plan the others hold. A change travels
+  as entity writes stamped with a Lamport clock; the last writer wins per entity, so every tab
+  converges on the same plan whatever order writes arrive in. Undo stays local: it takes back
+  the tab's own changes, never another tab's. Each tab shows the others' pointers ("Tab 2",
+  and so on).
+- **Checked messages.** Every message is checked against a zod schema
+  (`src/session/messages.ts`). Anything malformed, foreign, or in another protocol version
+  (`SESSION.protocol`, currently 3) is ignored, so a tab running an older build does not
+  exchange changes until it is reloaded.
 
-## Storeys, stairs and the plan format
+There is no server: the session lives in the browser. `src/session/transport.ts` defines a
+small `Transport` interface (send, subscribe, close). A network relay between machines would be
+one more implementation of it; the messages, their checks and the merge would stay as they are.
 
-A plan is a stack of **levels**, listed from the ground up, each with its floor-to-floor
-height; every wall, room, piece and stair names the level it stands on, and where each floor
-stands follows from the heights below it. The 2D plan shows one level at a time over a ghost
-of the one below (PageUp / PageDown or the level switcher change it); the 3D view stacks the
-storeys on their slabs, opens a stairwell over every stair and lets the walker climb it. A
-stair stores only where it starts, which way it climbs, its width and shape; its risers,
-going, landing and clear zones are worked out from the storey height, the same way for the
-plan, the model, the walker and the checker.
+## The plan model
 
-Plans are saved in **format 4** (`version: 4`, `model/planFormat.ts`), where a room is its
-outline (`points`, each corner carrying the bulge of the edge it starts), a wall may carry a
-`bulge` and be an arc, the plan lists its `columns` (each on its level), a room may be `kind:
-"open"` and a door `style: "garage"`. Older plans load losslessly: a format-3 plan gets an
-empty list of columns, and its rooms stay enclosed and its doors swinging, as they were drawn; a
-format-2 room's rectangle becomes its four corners and every wall stays straight (no bulge), and
-a format-1 plan (one storey, no levels) first becomes a single "Ground floor" holding everything. A bow too slight to be an arc (its
-middle under 0.01 mm off its chord, the IFC export's precision) is stored straight. A plan from
-a newer format, or one that names a level it does not have, is refused and the current plan
-stays.
-Every plan has an `id` of its own, 128 random bits given when it is started (a demo loaded, a
-plan cleared); a plan saved without one is given one as it loads, and keeps it from then on.
+### Storeys and stairs
 
-## Export to CAD and BIM (IFC)
+A plan is a stack of up to 12 **levels**, listed from the ground up, each with a
+floor-to-floor height (2.2 to 10 m, 2.9 m by default) and a 0.2 m slab. Every wall, room,
+piece, stair and column names the level it stands on, and each floor's elevation follows from
+the heights below it.
 
-**Export → Building model (IFC)**, or the `export_ifc` tool, writes the whole plan, every level,
-as an **IFC4** file (ISO 10303-21 STEP, schema `IFC4`, view definition
-`DesignTransferView_V1.0`), so it opens in CAD and BIM tools as a building rather than a mesh.
-It is written from the plan, not from the 3D view, so it works from either view; nothing leaves
-the browser, and the writer is fetched the first time someone exports (a lazy chunk of about
-20 kB, 7.5 kB gzipped), never with the page.
+The 2D plan shows one level at a time over a ghost of the one below (PageUp and PageDown, or the
+level switcher). The 3D view stacks the storeys on their slabs, opens a stairwell over every
+stair, and lets the walker climb it.
+
+A stair stores only where it starts, which way it climbs, its width and shape (straight or L
+with a left or right turn). Its risers, going, landing, walking line and clear zones are worked
+out from the storey height (`src/model/stairs.ts`), the same way for the plan, the 3D model,
+the walker and the checker. The rules (`STAIR` in `src/model/limits.ts`):
+
+| Rule | Value |
+|---|---|
+| Clear width | 0.6 to 3 m (0.9 m by default) |
+| Riser height | 0.15 to 0.19 m |
+| Going | 0.25 to 0.34 m (may be set from 0.1 to 0.6 m when traced; the checker reports it) |
+| Comfort rule, 2R + G | 0.60 to 0.65 m, target 0.63 m |
+| Risers | 2 to 60 |
+| Headroom | 2.0 m above every tread |
+| Clear floor at each end | 0.8 m |
+
+By default a stair has the fewest risers that keep each under 0.19 m, and the going the comfort
+rule asks for.
+
+### Free shapes
+
+- **Rooms are outlines.** A room is a polygon of 3 to 100 corners, and any edge may be an arc.
+  The room tool draws a rectangle by dragging, or any outline corner by corner (click the first
+  corner, double-click or press Enter to close it). A selected room shows handles for its
+  corners and edges: drag a corner, double-click to remove it, drag an edge's middle to bend it,
+  or Shift-drag to add a corner. **Properties > Shape** does the same from the keyboard.
+- **Walls may be arcs.** A wall's bend is stored as its bulge (tan of a quarter of the included
+  angle, from -1 to 1, a half circle at most). Dragging a selected wall's middle bends it, and
+  dragging it back onto the straight line straightens it. A curved wall may not bend tighter
+  than a centreline radius of its thickness.
+- **Walls at any angle.** Each wall's footprint is mitred against the walls it meets at any
+  angle (`src/model/joints.ts`), for the plan's poché, the floors, the 3D view and the IFC
+  joints.
+- **Fit to walls.** `add_room` and `update_room` with `fit` take the outline the walls close
+  off round a point, to their inner faces (`src/model/enclose.ts`, loaded when first used).
+
+### Structure
+
+- **Columns** are square, rectangular or round, 0.25 to 0.6 m, at most 200 per plan. They are
+  placed at a point, centred in a room, or as a grid of up to 12 x 12 at 1 to 12 m spacing. A
+  column stands to the underside of the slab over its level unless given a height, and carries
+  the floor above as a wall does. The plan draws columns in solid poché like the walls they
+  stand in, snapped to wall corners, wall axes and other columns' axes.
+- **Open spaces.** `open: true` makes a room an open space, such as a carport or a porch under
+  a storey. It needs no walls or door, and is floored in concrete unless told otherwise.
+- **Garage doors.** `add_door` with `style: "garage"` adds a sectional overhead door, 2.4 to
+  5.5 m wide and 2.0 to 2.5 m tall, with no swing. The plan draws its panels and its raised
+  position dashed; the 3D view runs its sections along their track.
+- **A car.** The catalogue includes a mid-size car (1.8 x 4.5 x 1.5 m) as a reference object,
+  so you can see whether it fits its garage or carport. Selected, it shows its parking
+  clearance.
+
+### The catalogue
+
+33 built-in kinds (`src/model/catalog.ts`), plus up to 100 kinds a plan defines for itself with
+`define_item_kind` (up to 64 primitive parts each), plus partner products placed from Nordika.
+
+### Demos
+
+- **Sunset Loft**, the default plan, loads at start and from the Plan menu.
+- **Crescent House** (Plan menu), the free-shapes demo: two storeys with a curved facade, a
+  wing turned off the house at an angle under a roof terrace, an L-shaped kitchen round a
+  pantry, a stair, and a studio standing on three columns over an open carport, with a car
+  under it and a sectional garage door.
+
+Loading a demo replaces the current plan; Undo brings it back. Both are audited to 0 issues by
+regression tests (`tests/issues.test.ts`,
+`tests/rules.test.ts`, `tests/crescent.test.ts`).
+
+### Plan format and migration
+
+The plan format is version **4** (`PLAN_FORMAT_VERSION` in `src/model/limits.ts`; the shapes and
+migration are in `src/model/planFormat.ts`).
+
+| Format | Added |
+|---|---|
+| 1 | One storey: walls, openings, rectangular rooms, items |
+| 2 | Levels and stairs; every wall, room and item names its level |
+| 3 | Free shapes: a room is an outline (`points`, each corner with the bulge of the edge it starts); a wall may carry a `bulge` |
+| 4 | Structure: `columns` (each on its level), a room's `kind` (`"enclosed"` or `"open"`), a door's `style` (`"swing"` or `"garage"`) |
+
+Older plans load without loss:
+
+- A format-1 plan first becomes a single "Ground floor" holding everything.
+- A format-1 or format-2 room's rectangle becomes its four corners, and every wall stays
+  straight.
+- A plan before format 4 gets no columns, and its rooms stay enclosed and its doors swinging.
+- A bow too slight to be an arc (its middle under 0.01 mm off its chord, the IFC export's
+  precision) is stored straight.
+
+The shape is checked before anything is migrated: types and references, not ranges. A plan that
+breaks a range still loads and the checker reports it, so a drawing is never lost because one
+wall is too short. A plan from a newer format, or one that names a level it does not have, is
+refused and the current plan stays.
+
+Every plan has an `id` of 128 random bits, given when it is started (a demo loaded, a plan
+cleared); a plan saved without one gets one as it loads.
+
+## The constraint engine
+
+`get_issues` and the Issues tab run the checker in `src/model/issues.ts`, which reports 53 kinds
+of issue in metres. Agents call it after editing and fix what it finds. Rules are checked level
+by level, so walls on different floors are never compared.
+
+| Family | What it reports |
+|---|---|
+| Walls | Too short; a loose end (T-junctions count as connected); collinear overlap, total or partial; a mid-span crossing; an arc tighter than its thickness allows |
+| Openings | Not fully inside its wall; overlapping openings; sill plus height above the wall; a wall ending inside another wall's opening; an opening too wide for the straight leaf or pane across a curved wall's chord |
+| Doors | Two door leaves that swing into each other; a garage door out of size or too wide for its wall with its jambs |
+| Rooms | Floating; overlapping (by real outlines); no door; too small; an outline that crosses itself, has an edge under 5 cm, or is otherwise invalid. An open space is never asked for walls or a door |
+| Furniture | Oriented-rectangle (SAT) tests against walls (leaning is fine, crossing is an error); blocking a door swing or a window (with a sill-height nuance); piece against piece (rugs exempt); outside every room; on a stair or over a stairwell; in a column; an unknown kind |
+| Storeys | A wall under a level above that stops short of its slab or runs up through it |
+| Stairs | No level above; risers or going out of range; the 2R + G rule; headroom under the slab; a wall in the stair or over its stairwell; a blocked landing at either end; a stairwell outside every room; overlapping stairs |
+| Structure | An upper floor with no wall or column within half of a 6 m span (sampled every 25 cm, coarser on a floor that would need over 40,000 samples, each unsupported zone reported with its bounds); a column short of its slab or through it; a column with nothing under it on the level below; a column off every room and wall, in a door's swing, a garage door's drive or a window, on a stair, or on another column |
+| Parking | A car without 0.6 m clear at its sides and 0.4 m at its ends, or with a column in it, a wall through it, or past its garage's walls |
+
+The structural checks are a sanity check, not engineering: only walls and columns that reach the
+slab's underside carry it.
+
+## The 3D view
+
+The 3D view is built from the plan on demand (`src/three/`); the 2D editor's first load contains
+no three.js.
+
+- **Studio look.** A warm backdrop, a soft sun shadow (PCF), baked contact shading in place of
+  screen-space ambient occlusion, and Khronos PBR Neutral tone mapping so surfaces read in their
+  token colours. No post-processing. Frames are rendered on demand, not in a constant loop.
+- **Ink edges.** Outlines like the plan's, on by default (`set_3d_style` or **View**).
+- **Dollhouse cutaway.** Slices the walls at a height from 0.3 to 4 m (1.2 m by default, in
+  5 cm steps), with the cut drawn in poché, to look into the rooms.
+- **Labels.** Room names float over the model, kept off a parked car.
+- **Selection sync.** Clicking a wall, room or piece selects it as on the plan; a selection on
+  the plan is outlined in 3D, and a pending removal is hatched on the model. Delete and Ctrl+Z
+  work in 3D too.
+- **Camera modes.** Orbit (1), Top (2) and Walk (3), with eased camera moves that become instant
+  under reduced motion.
+- **Walk.** WASD or the arrow keys, drag to look, at a 1.6 m eye height, with collision against
+  walls, columns, furniture and the car. The walker climbs stairs between storeys. Click a door
+  to open or close it, or swing every door from the hint bar.
+- **Storeys.** Slabs between floors, open over each stairwell, with treads, risers, stringers,
+  handrails, landing and the stairwell's balustrade.
+- **Procedural furniture.** Every built-in kind is modelled to its catalogue box from soft
+  cushions, turned and lathed parts and cut plates, baked to one mesh per surface and shared
+  per kind. Pieces an agent defines are assembled from their parts on the same surfaces;
+  partner products are a tidy block-out.
+- **Materials.** A short list of named surfaces (oak, fabric, brushed metal, plaster, the floor
+  finishes and others) in colours from the design tokens, textured with procedural patterns
+  (wood grain, weave, planks, tiles) computed into textures at plan scale. No image files are
+  fetched.
+- **Exports from the view.** OBJ and a PNG snapshot (Export menu, in 3D).
+
+## IFC4 export
+
+**Export > Building model (IFC)**, or `export_ifc`, writes the whole plan, every level, as an
+IFC4 file (ISO 10303-21 STEP, schema `IFC4`, view definition `DesignTransferView_V1.0`), so it
+opens in CAD and BIM tools as a building rather than a mesh. It is written from the plan, so it
+works from either view. Nothing leaves the browser, and the writer (`src/export/ifc/`) is a
+chunk of about 35 kB (13 kB gzip) fetched the first time someone exports.
 
 | In the plan | In the IFC file |
 |---|---|
-| the plan | `IfcProject` (metres, radians; a 3D *Model* context with *Body* and *Axis*, a 2D *Plan* context with *FootPrint*) › `IfcSite` › `IfcBuilding`, named after the plan |
-| each level | `IfcBuildingStorey`, with its name and elevation, standing on one `IfcSlab` `FLOOR` of plaster: under its rooms and its walls to their joints (the outline the 3D view builds its slab from, so there is no gap under any wall at a floor line), opened by an `IfcOpeningElement` wherever a stair from below rises through it; `Qto_SlabBaseQuantities` |
-| a wall | `IfcWall` (`STANDARD`): an *Axis* (a line, or for a curved wall an `IfcIndexedPolyCurve` arc through its ends and middle) and a *Body* extruded from its outline (a rectangle, or its two faces as arcs concentric with the centreline), butt-jointed to the walls it meets at any angle, its ends cut along the face they meet, a curved face included (at a corner the wall whose id sorts first runs on to the other's outer face and the other stops at its inner face; a wall ending against another stops at its face; walls in line meet end to end), so no two bodies overlap; one `IfcMaterialLayerSetUsage` of plaster its thickness, `Pset_WallCommon.IsExternal` where the rooms tell (a room on one side only), `Qto_WallBaseQuantities` measured on the body |
-| a door / window | an `IfcOpeningElement` voiding its wall (on a curved wall, the stretch between two cuts square to the arc, placed on its chord's middle), reaching past every wall face it cuts (both sides, and the foot or top where it meets them), filled by an `IfcDoor` or `IfcWindow` with its overall width and height. A door's placement faces the side its leaf swings to (IFC opens a door towards its +Y) and its `OperationType` names the hinge side seen that way, so all four hinge/side combinations come out as the plan draws them |
-| a room | an `IfcSpace` under its storey (`LongName` = the room's name), its *FootPrint* and *Body* its real outline (an `IfcPolyline`, or an `IfcIndexedPolyCurve` of `IfcLineIndex` and `IfcArcIndex` segments where it has arcs), with `Pset_SpaceCommon` and `Qto_SpaceBaseQuantities`, and its floor finish as an `IfcCovering` `FLOORING` laid on the slab (4 cm, less any stairwell), covering the space (`IfcRelCoversSpaces`), in the finish's `IfcMaterial`, with `Qto_CoveringBaseQuantities` |
-| a stair | `IfcStair` (straight run or quarter turn) made of `IfcStairFlight`s with their risers, treads, riser height and going, and, for an L-shaped one, its landing as an `IfcSlab` `LANDING`; `Pset_StairCommon` |
-| a piece of furniture | `IfcFurniture` named from the catalogue, its kind in `ObjectType`, standing on the floor finish; a Nordika product carries its sku and vendor in `Alza_Product`, the plan's own property set (the `Pset_` and `Qto_` prefixes are buildingSMART's, for the sets IFC4 defines) |
+| The plan | `IfcProject` (metres, radians; a 3D Model context with Body and Axis, a 2D Plan context with FootPrint) > `IfcSite` > `IfcBuilding`, named after the plan |
+| A level | `IfcBuildingStorey` at its elevation, on one `IfcSlab` `FLOOR` under its rooms and walls, opened by an `IfcOpeningElement` where a stair from below rises through it |
+| A wall | `IfcWall` `STANDARD`: an Axis (a line, or an arc as `IfcIndexedPolyCurve`) and an extruded Body, butt-jointed to the walls it meets so no two bodies overlap; one plaster `IfcMaterialLayerSetUsage`; `Pset_WallCommon.IsExternal` where the rooms tell; `Qto_WallBaseQuantities` |
+| A door or window | An `IfcOpeningElement` voiding its wall (on a curved wall, the stretch between two radial cuts), filled by an `IfcDoor` or `IfcWindow`. A door's placement faces the way its leaf swings and its `OperationType` names the hinge side |
+| A garage door | `IfcDoor` with `OperationType` `USERDEFINED` and `UserDefinedOperationType` `SECTIONAL` (IFC4 has no sectional door type) |
+| A room | `IfcSpace` (`LongName` is the room's name), its FootPrint and Body its real outline, with `Pset_SpaceCommon` and `Qto_SpaceBaseQuantities`; its floor finish as an `IfcCovering` `FLOORING` (4 cm) on the slab, with `IfcRelCoversSpaces` |
+| An open space | `IfcSpace` `EXTERNAL` (`PARKING` where a car is parked in it), `IsExternal` true |
+| A column | `IfcColumn` `COLUMN`: a rectangle or circle profile extruded to its height, in concrete, with `Pset_ColumnCommon` (`LoadBearing` true) and `Qto_ColumnBaseQuantities`. A wall a column stands in is written less the column, as a CSG difference |
+| A stair | `IfcStair` of `IfcStairFlight`s with risers, treads, riser height and going; an L-stair's landing as an `IfcSlab` `LANDING`; `Pset_StairCommon` |
+| A piece of furniture | `IfcFurniture` named from the catalogue, its kind in `ObjectType`; a Nordika product carries its sku and vendor in `Alza_Product` |
 
-Every element stands in its storey (`IfcRelContainedInSpatialStructure`) and is placed relative
-to it. GlobalIds are derived from the plan's id together with each element's own, so exporting
-the same plan again gives every element the same GlobalId and a tool that re-imports it updates
-rather than duplicates, while two different plans never share one. Every name is written as a
-clean label of at most 255 characters (`IfcLabel` and `IfcIdentifier` are `STRING(255)`): control
-characters and invisible formatting characters (bidirectional overrides and isolates, zero-width
-spaces) are taken out of plan text, a partner's product names and loaded ids included, then
-encoded in STEP's `\X2\` form where they are not plain ASCII (*Habitación*, *Baño*). The file
-name is the plan's name made safe the same way, with the characters file systems reserve
-replaced and capped at the plan name's 120 characters; the OBJ and PNG exports share it.
+Every element is contained in its storey and placed relative to it. GlobalIds are derived from
+the plan's id and each element's own, so exporting the same plan again gives the same GlobalIds,
+and two plans never share one. Names are cleaned of control and invisible formatting characters,
+capped at 255 characters (`STRING(255)`), and encoded in STEP's `\X2\` form where not ASCII. A
+plan holding a number outside the editor's ranges is not exported: the menu and the tool name
+the values to fix, and no file is written.
 
-A plan that holds a number outside the range the editor keeps it to (a wall 0 m thick, a room
-3 km off: a plan loaded as data is checked for its shape, not its ranges) is not exported: the
-menu and `export_ifc` answer with the values to fix, and no file is written. The writer itself
-also refuses a length IFC requires to be positive that is not, and a label past 255 characters,
-rather than writing a file a reader would reject; reals too large for fixed notation are
-written in STEP's exponent form (`1.E22`).
-
-What is simplified: walls, slabs, openings and furniture are extruded solids (furniture is its
-catalogue footprint and height, not its 3D model); walls are butt-jointed by their bodies, not
-connected with `IfcRelConnectsPathElements`; the ground floor stands on a slab like the floors
-above it; a stair's flights are stacked solid treads, and the floor finish runs under a stair as
-it does in the 3D view; there is no site geometry, roof, ceiling or owner history (optional in
-IFC4); `LoadBearing` is never stated because the plan does not know it; and supplier prices are
-not in the file, because the plan does not keep them.
+**What is simplified.** Walls, slabs, openings and furniture are extruded solids (furniture is
+its catalogue box, not its 3D model). Walls are butt-jointed by their bodies, not connected with
+`IfcRelConnectsPathElements`. The ground floor stands on a slab like the floors above. A stair's
+flights are stacked solid treads. There is no site geometry, roof, ceiling or owner history. A
+wall's `LoadBearing` is never stated, because the plan does not know it. Supplier prices are not
+in the file.
 
 The tests read every exported file back with a STEP reader and an IFC4 checker written apart
-from the exporter (`tests/support/ifcCheck.ts`): syntax and escapes, every `#` reference and the
-kind of entity each may point to, the attribute count of every entity against IFC4 ADD2 TC1,
-required attributes, enumeration values, reals written as reals, positive lengths, labels within
-`STRING(255)`, property sets under buildingSMART's prefixes being standard ones, unique and valid
-GlobalIds, one storey per element, every opening voiding one element and every door or window
-filling one opening, and every placement chaining to its storey's. Beyond the checker, they
-rebuild the solids from the file and probe them: no two wall bodies overlap and every joint is
-filled once, the floor line under every wall is closed, every void passes the faces it cuts, and
-every door's placement and `OperationType` swing it and hang it as the plan does.
+from the exporter (`tests/support/ifcCheck.ts`): references and their entity types, attribute
+counts against IFC4 ADD2 TC1, required attributes, enumerations, labels, property-set prefixes,
+GlobalIds, containment, voids and fills, and placements. They also rebuild the solids and check
+that no two wall bodies overlap, every joint is filled once, the floor under every wall is
+closed, every void passes the faces it cuts, and every door swings and hangs as the plan draws
+it.
 
-## A shared session: the person, the agent and every tab on one plan
+## The Studio UI
 
-The person and the agent work the same plan at the same time, and each sees the other move.
+The interface is a quiet drafting studio: a top bar, a tool rail, the canvas, and a side panel
+with **Properties**, **Library**, **Issues** and **Notes** tabs over an **Activity** feed. It
+works as a drawer and as a bottom sheet on narrow screens, with larger touch targets on coarse
+pointers.
 
-- **The agent is seen at work.** While a tool call runs, a marker in the agent's colour glides to
-  what it touches, the entity gets a soft highlight, and a label says what it does ("Agent ·
-  moving Sofa"), on the plan and over the 3D model. Nothing in the tools does this: it follows
-  from `dispatch()` and the tool runner, so every tool, present and future, is seen. The activity
-  feed stays the record of what was done.
-- **The agent sees the person.** `get_presence` answers the person's level, view, selection, the
-  entity under their pointer, the plan area on their screen and whether they are dragging
-  something. The person can switch off sharing their pointer and view (the presence indicator
-  in the top bar, kept per browser and followed by every open tab at once). `point_at` lets the
-  agent show the person what it means; its message is also said through a polite live region
-  and kept in the activity feed.
-- **No edit under the hand.** While the person drags, nudges or types into something, an agent's
-  change to that same thing is refused with `conflict.code: "person_editing"` and
-  `retryAfterMs`: nothing changes, and the agent calls again once the hand lets go. Refused, not
-  queued, so a call never hangs on a hand that does not let go. Until then the page shows
-  "Agent · waiting for you". What a hand holds reaches the other tabs before the drag's first
-  frame does, so an agent in another tab is refused from that frame on.
-- **Tabs of one browser.** Two tabs with the studio open share one plan over a `BroadcastChannel`
-  (same origin only). A tab that opens later takes up the plan the others hold, once, keeping
-  whatever was changed in it before it joined. A change travels as entity writes stamped with a
-  Lamport clock; the last writer wins, per entity, so every tab ends on the same plan whatever
-  order the writes arrive in (past a plan's limits, such as its notes, the newest are kept the
-  same way everywhere). Another tab's change lands through `dispatch()` as one feed line
-  ("Another tab"), a whole drag as one. Undo stays local: it takes back the tab's own changes,
-  never another tab's, because each of its steps is rebased under the changes the other tabs
-  make. Every message is checked against a zod schema, and anything malformed or foreign is
-  ignored, and so is a message in another version of the format (`SESSION.protocol`, 2 since
-  rooms became outlines and walls arcs): a tab still running an older build does not exchange
-  changes with this one until it is reloaded. Each tab shows the others' pointers, named "Tab 2"
-  and so on, in colours that follow the light and dark themes.
+- **Design tokens.** Every colour, size, type step, radius, shadow, duration and layer is
+  written once in `src/ui/theme/tokens.ts`, in OKLCH. `tokenSheet.ts` renders them at build
+  time into a static stylesheet (`@layer alza-tokens`), so the strict CSP holds. The 2D editor
+  and the 3D view read the same values from script (`PLAN_HEX`, `src/ui/theme/sceneTokens.ts`). The chrome is
+  a cool graphite; the person's colour is a drafting cobalt and the agent's a verdigris, used
+  only as roles. A dark token set exists; the shipped page renders the light theme.
+- **Type.** IBM Plex Sans and IBM Plex Mono, with Barlow Semi Condensed, bundled as fonts.
+- **Native first-paint controls.** The panel's tabs, segmented controls (Plan/3D and others),
+  the approval switch, tooltips and shortcut chips are the studio's own components
+  (`src/ui/primitives/`), drawn on the tokens. Astryx supplies dialogs, menus, popovers,
+  notices and number fields, and arrives only when one of them is needed.
+- **The plan sheet.** Poché walls, dimension chains, plan symbols for furniture and stairs,
+  numbered revision marks for the agent's changes, live room areas, and a 5 cm snap.
+- **Reduced motion.** Movement driven from script drops to zero under
+  `prefers-reduced-motion`.
 
-There is no server: the session lives in the browser. `src/session/transport.ts` is the seam
-where a network relay could carry the same messages between machines.
+## Keyboard shortcuts
 
-## Architecture
+The full sheet opens with **?** (`src/ui/shell/shortcuts.ts`). The main keys:
 
-```
-src/
-  model/    types.ts · geometry.ts (snap, SAT, segment math) · issues.ts (checker rules)
-            catalog.ts (33 built-in kinds, the car among them, + the plan's own kinds) · resolve.ts (id/name lookup)
-            columns.ts (a column's section, height, the walls it is part of, placing snaps, grids)
-            supports.ts (what carries an upper floor: the span check and its unsupported zones)
-            store.ts (shared actions, undo, activity) · commands.ts (dispatch: the one change path)
-            assets.ts (underlay images, kept while the plan or its undo history names them)
-            sceneBus.ts · seed.ts · demoCrescent.ts (the free-shapes demo; loaded when chosen)
-            provenance.ts (what each change touched; its revision number)
-            levels.ts (storeys: elevations, what stands on each, stairwells, level names)
-            stairs.ts (a stair's whole shape — risers, treads, landing, walking line, clear
-            zones, headroom, the guard round its stairwell — from the little the plan stores)
-            planFormat.ts (the save format, version 3, and the migration of format-1 and -2 plans)
-            shapes.ts (arcs by their bulge and outlines with arc edges: length, point and
-            tangent at t, where curves meet, winding, self-crossing, the label's anchor)
-            enclose.ts (a room fitted to the walls round a point; loaded when asked for)
-            joints.ts (a wall's footprint mitred against the walls it meets at any angle, for the
-            plan's poché, the floors and the 3D view, and the IFC export's butt joints) · floors.ts (what a storey's slab covers, for the 3D view
-            and IFC alike) · region.ts (flat regions with holes, cut into trapezoids)
-            text.ts (plan text made a clean name) · planRanges.ts (every number held to its range,
-            for what writes a plan out) · ids.ts (entity ids, and a plan's own random id)
-            presence.ts (who is on the plan and where: never saved, never in undo)
-            touch.ts (what a command touches) · places.ts (where an entity is, by id)
-  export/   download.ts (every export's file name and download) · ifcExport.ts (the IFC export's
-            one path, menu and tool alike; fetches the writer on first use)
-            ifc/ (loaded on demand) step.ts (ISO 10303-21 encoding) · guid.ts (stable GlobalIds)
-            entities.ts (the IFC4 entities written, attributes in schema order) · model.ts (the
-            plan mapped to them) · config.ts · index.ts
-  editor/   Editor.tsx — SVG drawing sheet: poché walls, chained walls (Shift keeps them
-            straight, ends snap to ends), rooms, doors (D) and windows (N) placed on a wall,
-            plan symbols for furniture, dimension chains, numbered revision marks for the
-            agent's changes, 5 cm snap, arrow-key nudge, pan (H, Space-drag) and zoom (+, -,
-            Shift+1 fits) · canvasState.ts (the view and the editor's own tools)
-            drawing.ts · symbols.tsx · stairSymbol.ts (a stair's plan symbol: treads and
-            edges below the cut, hidden past it, the break line, UP/DN, the stairwell's guard)
-            StairDrawing.tsx (that symbol drawn; loaded after the first paint)
-            roomDraft.ts (the room tool's outline, corner by corner, from the pointer or the
-            keyboard's cross) · ShapeHandles.tsx (corner and edge handles, bending a wall) and
-            WallPoche.tsx (each wall's mitred footprint; a parapet below the cut in outline),
-            both loaded after the first paint · columns (P) in solid poché like the walls they
-            stand in, with no cross (a cross marks a void), snapped to wall corners, wall axes
-            and other columns' axes, by pointer or by the arrows and Enter · ColumnShape.tsx ·
-            ColumnMarks.tsx (outline, section pill, the tool's aim, the columns' axes dimensioned
-            as a structural grid) and SlabMarks.tsx (the level above's slab edge dashed over open
-            ground; an upper floor nothing carries hatched), loaded after the first paint · an
-            open space hatched lighter, a garage door's panels with its raised position dashed
-            (no swing), the car's top view with its parking clearance when selected
-  three/    (loaded on demand: the 2D editor's first chunk has no three.js)
-            build.ts (extrusion with real openings, resolved joints, floors) · wallSolids.ts
-            (walls extruded from their footprints, cut square to the arc at their openings)
-            triangulate.ts (ear clipping for shaped floors and caps)
-            furniture.ts (every built-in kind modelled to its catalogue box from soft cushions, turned
-            and lathed parts and cut plates, baked to one mesh per surface and shared per kind;
-            agent parts on the same surfaces; a tidy block-out for imported products)
-            furnitureShapes.ts (soft and chamfered boxes, lathes, plates, merge) · furnitureStyle.ts
-            planScene.ts (per-entity reconciliation of the plan) · materials.ts (shared materials, disposal)
-            surfaces.ts (named surfaces from the tokens; procedural wood, weave, plank and tile
-            patterns at plan scale; contact shadows)
-            viewport.ts (one renderer per mount: orbit/top/walk + WASD, click-to-place, OBJ/PNG export)
-            frames.ts (render on demand) · walk.ts (collision, where Walk sets you down) · Scene3D.tsx
-            transitions.ts (eased camera moves; instant under reduced motion) · marks.ts (the
-            selection and pending removals drawn on the model) · labels.ts (room names over the
-            model) · edges.ts (ink edges) · screenLines.ts (marks a set width on screen)
-            cutaway.ts (dollhouse cut, poché, the top of the storeys shown) · thumbnails.ts · config.ts
-            stairs.ts (treads, risers, stringers, handrails, landing, the stairwell's balustrade)
-            slabs.ts (the floors between storeys, open over each stairwell, built over
-            model/floors.ts's outline) · levelView.ts (which storeys the view shows)
-            overlays/ (the camera switch, View settings, hint bar, and the loading and failure states)
-  session/  (loaded once the page is idle) runtime.ts (joining, sending and merging changes,
-            presence) · replica.ts (the plan as last-writer-wins registers, Lamport clocks)
-            messages.ts (every message's zod schema) · transport.ts (BroadcastChannel, in-page,
-            and the seam for a network relay)
-  mcp/      registry.ts (registration + uniform logging) · tools.ts (46 + 1 dynamic) · presenceTools.ts (get_presence, point_at; their answers load on first use)
-            bootstrap.ts (runtime detection, dynamic tool lifecycle, toolchange)
-  ui/       App · theme/ (design tokens, Astryx theme, fonts) · primitives/ (buttons, fields, icons)
-            shell/ (top bar, tool rail, canvas, side panel: Properties/Library/Issues/Notes + Activity)
-            one folder per surface: inspector · library (catalogue and Nordika) · issues · notes
-            activity (feed with linked names, Developer tools) · approvals (request card, queue,
-            policy) · canvas (zoom, hint bar, legend, the level switcher) · firstRun
-            inspector/LevelsSection.tsx and StairInspector.tsx (storeys and stairs in Properties)
-            inspector/RoomShape.tsx (a room's corners and edge bends, from the keyboard)
-            SupplierBridge (the partner frame the postMessage transport uses) · useAppStore · useGesture
-            useThumbnails
-tests/      domain: geometry, checker (incl. seed = 0 issues regression), rules, catalog,
-            resolve, store, invariants, commands (dispatch, gestures, undo), assets, checkerCost
-            storeys: levels (format and migration, level and stair commands, stair geometry and
-            rules, the tools), levels3d (stairs, slabs, storeys shown, walking between floors),
-            levelsPlan (the plan level by level, the stair symbol and tool, the level controls)
-            3D: planScene (reconciliation, GPU memory), surfaces, furniture (fit, budgets, shared
-            geometry), scene3dIntegration (furniture inked, picked and outlined in the scene),
-            sceneStyle (selection, marks,
-            cutaway, edges, names, camera moves), frames, scene3d, thumbnails · editorKeys
-            agent surface: tools, validation, approval gate, trust, untrusted partner text,
-            supplier, transport, discovery, underlay · session (the agent seen from its calls, the
-            hand's hold, get_presence and point_at, hostile messages, tabs converging) and
-            sessionUi (the indicator, the plan's session layer) · page: derived (what the UI reads off the tools),
-            theme, shell, panels, canvas, provenance, activityApprovals, firstRun, lazyView,
-            deferred (what loads after the first paint)
-            build and config: layering, config, sites, headers, production, serve-local, purge,
-            budgets (each site's first-load size, and the 3D view's lazy chunks)
-scripts/
-  e2e-full.mjs  Playwright: drives the real app in Chromium with --enable-features=WebMCP,
-              by mouse and keyboard: drawing, selection from "On the plan", shortcuts, every
-              tool, the approval card (buttons, Ctrl+Enter, Esc), the 3D view (camera modes,
-              the cutaway's slider, a wall selected by a click on the model, a pending removal
-              hatched on it), the drawer and bottom-sheet layouts, the shared session (the
-              agent's marker, get_presence, an edit held for the hand, two tabs of one browser
-              syncing and seeing each other's pointer), structure (an open carport under a
-              storey built by the tools alone, its columns placed by the plan's tool, the
-              soffit seen from under it, a format-3 plan loaded); asserts zero console
-              errors — 296 checks (2 skip on Chrome builds
-              without navigator.modelContextTesting, 3 when the partner origin does not
-              answer; with either one there, a failure is a FAIL, never a skip)
-  trace.mjs   the demo plan as data: walls, openings, rooms, furniture, and the kinds the
-              agent defines for itself. Shared by the video and the screenshot gallery.
-  record6.mjs records the film's eight beats as real 60 fps screen capture (ffmpeg ddagrab;
-              ffmpeg from PATH, or ALZA_FFMPEG_PATH)
-  shots.mjs   rebuilds the screenshot gallery from trace.mjs
-  browser.mjs   starts Chromium for the three scripts above (see below)
-  studio.mjs    finds the interface for them by role and accessible name, not by class
-  serve-local.mjs  serves dist-local/studio and dist-local/partner on two origins with the
-              production headers, for local demos (headers from config/headers.js, the
-              module the build writes each site's _headers from)
-  build-local.mjs  a production build aimed at those two local origins, into dist-local/
-  paths.mjs   resolves dist/, shots/ and plan-source.jpeg from the repo root, not the cwd
-```
+| Key | Does |
+|---|---|
+| V | Select |
+| H | Pan (Space-drag pans with any tool) |
+| W | Draw walls (hold Shift to keep them straight) |
+| R | Draw a room |
+| D | Add a door |
+| N | Add a window |
+| S | Add a stair |
+| P | Add a column |
+| F | Place furniture (opens the Library) |
+| 1 / 2 / 3 | Orbit / Top / Walk, in 3D |
+| W A S D, arrows | Walk, in Walk view |
+| ? | Show the shortcut sheet |
+| Esc | Back to Select, or clear the selection; while drawing a room, drop the outline |
+| Enter | Close a room's outline; place a stair, column or piece at the cross or view centre |
+| Backspace | Take back the last corner of a room's outline |
+| C | With Draw a room, put a corner down at the cross |
+| Arrows | Nudge the selection 5 cm (25 cm with Shift); move the room or column cross |
+| Delete / Backspace | Remove the selected wall, room, item, stair or column |
+| Ctrl+Z | Undo |
+| + / - | Zoom in / out |
+| Shift+1 | Fit the plan |
+| PageUp / PageDown | The level above / below (in 3D too) |
+| Ctrl+Enter / Esc | On an approval card: confirm / keep the plan |
 
-The Playwright scripts run against `npm run dev` (and `npm run partner` for the cross-origin
-checks), or `npm run build:local -- --test-hook` then `npm run serve:local`. They launch
-Playwright's own Chromium (`npx playwright install chromium`). When that exact build is not
-installed, set `ALZA_CHROMIUM_PATH` to any Chromium or Chrome executable already on the
-machine and every script launches that instead; nothing is downloaded. A headless-shell build
-is enough for `npm run e2e` and `npm run shots`; `record6.mjs` opens a real window and needs a
-full Chromium or Chrome.
+Shortcuts stand aside while you type in a field, inside a dialog, menu or popover, and for
+chords the editor or the browser own.
 
-```
-ALZA_CHROMIUM_PATH=/path/to/chrome npm run e2e
-```
+## First load and deferred loading
 
-Stack: Vite 7 · React 19 · TypeScript (strict) · zustand · Three.js (neutral tone mapping,
-PCF soft shadows, baked contact shading, no post-processing) · SVG 2D · Astryx (dialogs, menus, popovers, toasts, number inputs) ·
-native tabs, segmented controls, switches and tooltips on the same tokens · vitest ·
-Playwright. Deploys as a fully static site.
+First paint needs only the shell, the plan and the plan's Properties. Everything else loads after
+it (`src/ui/deferred.tsx`): the other tabs, the selection inspectors, Activity's details and
+Developer tools, the menus, notices, the first-run state, the approval card, the dialogs, the
+plan's handles and marks, and the session runtime. They are fetched once the browser is idle,
+so the first click finds its code already there. three.js and the 3D code arrive only with the
+3D view, the IFC writer only with the first export.
 
-First load, measured on `npm run build:local`: the studio's first-load script (its entry
-chunk and the small transport chunk it shares with the partner) is 468 KB minified (152 KB
-gzip), and its stylesheet 111 KB (19 KB gzip). First paint needs only the shell, the plan and
-the plan's Properties; the other tabs, the selection inspectors, Activity's details and
-Developer tools, the plan and Export menus, notices, the first-run state, the approval card
-and the two dialogs are chunks of their own, fetched once the browser is idle after the first
-paint (`src/ui/deferred.tsx`), so the first click on any of them finds its code already here.
-three.js still arrives only with the 3D view. Of what the first load holds, about 180 KB is
-React DOM, 110 KB zod (the model's and the tools' schemas), and the rest the studio's own
-code. The controls the first paint draws (the panel's tabs, the Plan/3D switch and the other
-segmented controls, the approval switch, tooltips and shortcut chips) are the studio's own,
-drawn on the design tokens, so Astryx's runtime arrives only with the dialogs, menus,
-popovers, notices and number fields that need it: with it on the first load the script was
-925 KB (301 KB gzip) and the stylesheet 210 KB, so about 457 KB of script (149 KB gzip) left
-the first load, spread over several deferred chunks (the largest, `astryx-*.js`, is 230 KB).
-The build fails if any Astryx module, or a package only Astryx uses, reaches a site's first
-load (`config/firstLoad.js`), naming the modules and the chain of static imports, from the
-entry point to the file that imported them, that brought them in. It drops every Astryx
-style rule no chunk can use, and keeps in the render-blocking stylesheet only Astryx's reset,
-theme and tokens: its component rules, with the keyframes and registered properties only
-they use (about 113 KB, 18 KB gzip), are a stylesheet of their own that Vite links when the
-first chunk needing it is fetched, with each rule in an ordered sub-layer so the cascade is exactly what it was (`config/purgeAtomicCss.js`). It also
-fails when a site's first load goes over its budget in `config/budgets.js`: what the site
-shipped, plus 2% (script and stylesheet, minified and gzip). The 3D view's lazy chunks have
-budgets of their own, set the same way: three.js (518 KB, 130 KB gzip) and the studio's own
-3D code, the view, the scene, the furniture and the thumbnails, whatever chunks they are split
-into (110 KB, 42 KB gzip).
+Sizes are held by budgets in `config/budgets.js`: each is what the site shipped when last set,
+plus a 2% margin, and the build fails over it, naming the chunk and its size.
 
-## What building this taught me about the spec
+| What | Shipped (minified / gzip) |
+|---|---|
+| Studio first-load script | 599.6 kB / 196.5 kB |
+| Studio first-load stylesheet | 115.3 kB / 19.5 kB |
+| Partner script | 9.0 kB / 4.2 kB |
+| Partner stylesheet | 4.8 kB / 1.4 kB |
+| three.js (lazy) | 517.9 kB / 130.1 kB |
+| Studio 3D code (lazy) | 144.5 kB / 55.3 kB |
 
-Four of the explainer's [open questions](https://github.com/webmachinelearning/webmcp#open-questions)
-turned up as real problems while building. What I did about each, in case it is useful.
+The build also fails if any Astryx module, or a package only Astryx uses, reaches a site's first
+load (`config/firstLoad.js`), naming the chain of static imports that brought it in. Unused
+Astryx style rules are dropped, and only its reset, theme and tokens stay in the render-blocking
+stylesheet; its component rules are a stylesheet of their own, linked with the first chunk that
+needs them, in ordered sub-layers so the cascade is unchanged (`config/purgeAtomicCss.js`).
 
-**User prompting and elicitation ([#165](https://github.com/webmachinelearning/webmcp/issues/165), [#50](https://github.com/webmachinelearning/webmcp/issues/50)).** Needed on day one: a tool that clears
-someone's plan cannot just run because a model called it. The answer here lives entirely in the
-page — the approval gate above. It works, but every site has to build its own, and the
-confirmation UI is only as trustworthy as the page drawing it, which is the argument for the
-browser mediating it instead.
+## Security model
 
-Related, and worth flagging: `destructiveHint` is in
-[MCP's `ToolAnnotations`](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
-but not in [WebMCP's](https://webmachinelearning.github.io/webmcp/), which defines only
-`readOnlyHint` and `untrustedContentHint`. Alza keeps it in its own descriptors and enforces it
-page-side in `mcp/registry.ts`, so nothing depends on the browser propagating it. But if the
-browser is ever going to mediate confirmation, it needs some way to know which tools are
-destructive.
+- **Headers.** Both sites' headers come from `config/headers.js`: a strict CSP (`script-src
+  'self'`, `connect-src 'self'`), `Permissions-Policy` for `tools`, HSTS,
+  `Cross-Origin-Opener-Policy: same-origin`, `nosniff` and a referrer policy. The studio may
+  frame only the partner (`frame-src`) and is framable only by itself; the partner frames
+  nothing and is framable only by the studio. The studio delegates `tools` to the partner
+  origin and nobody else.
+- **Every path.** The build writes one directory per site (`dist/studio`, `dist/partner`), each
+  with a `_headers` file whose policy sits on every path, so no answer a host gives (a page, its
+  single-page fallback, a directory index, an error page) leaves without it. `serve:local`
+  sends the same sets.
+- **Origins are configuration.** `.env.production` names both origins as bare `https://`
+  origins, and `npm run build` fails if either is missing or malformed. In a development build
+  `?supplier=` may override the partner; a production build ignores it, and the partner trusts
+  only the studio origin it was built for. Origins are compared after URL parsing, never by
+  prefix, and an opaque origin matches nothing.
+- **Untrusted text.** Partner text never enters a summary the page writes; it travels in a
+  separate `untrusted` field, flagged with `untrustedContentHint`. Plan text written out (IFC,
+  file names) is cleaned of control and invisible formatting characters.
+- **Test hook.** Playwright drives the page through `window.__alza`, which only development
+  builds carry. A production build has it only with `VITE_ALZA_TEST_HOOK=1`
+  (`npm run build:local -- --test-hook`), which the build refuses for any origin that is not
+  loopback, and such a build goes to `dist-local/`, never to the `dist/` the deploy scripts
+  publish.
 
-**Multimodal input and output ([#41](https://github.com/webmachinelearning/webmcp/issues/41), [#86](https://github.com/webmachinelearning/webmcp/issues/86), [#81](https://github.com/webmachinelearning/webmcp/issues/81)).** The gap I felt hardest. Tracing
-needs the agent to *see* a drawing, and a tool result is text — so a page holding an image
-cannot hand it over. Worse, the page's copy is not the agent's copy: the uploader re-encodes to
-≤1600 px. So `get_underlay` returns no pixels at all. It tells the agent the image has to
-arrive through both channels — uploaded on the page so the app knows the scale, pasted into the
-conversation so the model can read it — and it returns a mapping that only works in fractions
-(`u = x_px / image_width`, then `world_x = rect.x + u * rect.w`). Fractions survive a resize;
-pixel coordinates do not.
-
-**Skills integration ([#161](https://github.com/webmachinelearning/webmcp/issues/161)).** I wrote one before I knew the issue existed. Tracing a plan is
-a procedure, not a tool call: establish scale, read the drawing, lay the walls, cut the openings,
-check the result, annotate whatever was ambiguous. It ships as `TRACING_PROTOCOL`, embedded in
-the tool descriptions because that is the only place a page can put it today. It spends
-description budget on every tool that references it, and there is no way to say "this is a
-procedure" rather than "this is a tool".
-
-**Testing.** `navigator.modelContextTesting` is the difference between guessing and knowing —
-the E2E battery drives real tool execution through it. It only exists in Chrome dev and canary
-builds, so 2 of the 115 checks skip on a stable build.
-
-**One thing that simply worked:** unregistering by aborting the registration signal.
-`extend_selected_wall` appears when a human selects a wall and disappears when they deselect it,
-and every runtime I tested tracked the change with no special handling on my side.
-
-**One runtime gap, not a spec gap:** cross-origin discovery. `exposedTo` plus
-`getTools({ fromOrigins })` is correct per the spec, but neither ChatGPT's in-app browser nor
-Codex resolves `fromOrigins` today — they register the page's own tools and stop there. The
-`postMessage` transport behind the same interface is why the Supplier panel still works in those
-clients; the activity feed says which transport actually ran.
-
-## Develop
+## Develop, test and build
 
 ```bash
 npm install
-npm run dev        # the studio            → http://localhost:5199
-npm run partner    # the partner origin    → http://localhost:5200   (second terminal)
-                   # both ports live in config/origins.js
-npm run typecheck  # tsc -b over the app, the tests and vite.config.ts
-npm run lint       # ESLint (typescript-eslint + react-hooks)
-npm test           # unit tests (vitest, happy-dom)
-npm run build      # production build — dist/studio and dist/partner, one directory per host
-npm run e2e        # 189-check Playwright battery (run both servers first)
-npm run build:local  # production build aimed at the two local origins below, into dist-local/
+npm run dev          # the studio          -> http://localhost:5199
+npm run partner      # the partner origin  -> http://localhost:5200 (second terminal)
+npm run typecheck    # tsc -b over the app, the tests and vite.config.ts
+npm run lint         # ESLint (typescript-eslint + react-hooks)
+npm test             # unit tests (vitest, happy-dom)
+npm run build        # production build: dist/studio and dist/partner
+npm run e2e          # Playwright battery (run both dev servers first)
+npm run build:local  # production build for the two local origins, into dist-local/
 npm run serve:local  # serve dist-local/ on two origins with the production headers
-npm run shots      # rebuild the screenshot gallery (against the dev servers, or serve:local
-                   # over `npm run build:local -- --test-hook`)
+npm run shots        # screenshot set into shots/devpost/ (not tracked)
+npm run deploy:studio   # build, then Cloudflare Pages (wrangler)
+npm run deploy:partner  # build, then Netlify
 ```
 
-The partner catalogue is a separate origin on purpose; that is the whole point of the
-cross-origin tool exchange. A different port is a different origin, so `localhost:5200` is
-all you need locally. In production, `dist/studio` and `dist/partner` go to two hosts
-(`npm run deploy:studio`, `npm run deploy:partner`, which rebuild first) and you name both
-origins in `.env.production` (`VITE_STUDIO_ORIGIN`, `VITE_SUPPLIER_ORIGIN`): bare `https://`
-origins, no path. `npm run build` fails if either is missing or malformed, rather than
-shipping headers that name nobody. In a development build `?supplier=https://…` overrides the
-partner for debugging; a production build ignores it, and the partner likewise trusts only the
-studio origin it was built for. Without a reachable partner, everything else in the app still
-works.
+**Unit tests.** 1542 tests in 65 files (`npx vitest run`). They cover the geometry, the checker
+and its rules, the commands and undo, levels and stairs, free shapes and joints, columns and
+supports, the 3D scene and furniture, the IFC export, the tools and their validation, the
+approval gate, untrusted partner text, the session (convergence, hostile messages, the
+person-editing rule), the UI shell and panels, and the build: headers, sites, budgets, first
+load and CSS purge.
 
-Both sites' security headers (CSP, `Permissions-Policy: tools`, HSTS, COOP) come from
-`config/headers.js`. The build writes each site's set to the `_headers` of its own directory,
-on every path, so no answer a host gives (a page, its single-page-app fallback, a directory
-index, an error page) leaves without its page's policy, and `serve:local` sends the same sets.
+**End-to-end.** `scripts/e2e-full.mjs` drives the real app in Chromium with WebMCP enabled, by
+mouse and keyboard: drawing, selection, shortcuts, every tool, the approval card, the 3D view
+(camera modes, cutaway, picking, a pending removal hatched on the model), the drawer and
+bottom-sheet layouts, the shared session (the agent's marker, `get_presence`, an edit held for
+the person, two tabs syncing), and structure (a carport under a storey built by the tools, a
+format-3 plan loaded). It asserts zero console errors. It runs about 300 checks (296 at the time of writing): 2 skip on builds
+without `navigator.modelContextTesting` and 3 when the partner origin does not answer; with
+either present, a failure is a failure, never a skip.
 
-The Playwright scripts drive the page through `window.__alza`, which only development builds
-carry. A production build has it only when built with `VITE_ALZA_TEST_HOOK=1`
-(`npm run build:local -- --test-hook` does that). The build refuses the switch for any
-origin that is not loopback, and a build for loopback origins goes to `dist-local/`, never to
-the `dist/` the deploy scripts publish.
+The Playwright scripts run against `npm run dev` (and `npm run partner`), or against
+`npm run build:local -- --test-hook` followed by `npm run serve:local`. They launch Playwright's
+Chromium (`npx playwright install chromium`); set `ALZA_CHROMIUM_PATH` to use any Chromium or
+Chrome already installed instead.
 
-Every tool's arguments are a zod schema built from the ranges in `src/model/limits.ts`; the
-published `inputSchema` is derived from it, and each call is validated against it before
-the approval gate. Invalid input comes back as `ok: false` with the list of problems, and
-nothing changes.
+**CI.** `.github/workflows/ci.yml` runs `npm ci`, typecheck, lint, unit tests, `npx vite build`
+and `npm audit --audit-level=high` on every push and pull request.
+
+Stack: Vite 7, React 19, TypeScript (strict), zustand, zod, Three.js, SVG for the plan, Astryx
+for dialogs, menus, popovers, notices and number fields, vitest and Playwright. Both sites
+deploy as static files.
+
+## Project structure
+
+```
+config/          build configuration shared by Vite, the scripts and the tests
+                 origins.js (both origins, dev ports) · sites.js (one output dir per site)
+                 headers.js (CSP and the rest) · budgets.js (size budgets)
+                 firstLoad.js (no Astryx on the first load) · purgeAtomicCss.js · flags.js
+partner/         the Nordika partner site: its page, its WebMCP tools, the postMessage protocol
+public/          favicon and app icon
+scripts/         e2e-full.mjs (Playwright battery) · browser.mjs · studio.mjs (finds the UI by
+                 role and name) · build-local.mjs · serve-local.mjs · partner-dev.mjs
+                 trace.mjs (a traced demo plan as data) · shots.mjs · record6.mjs · paths.mjs
+                 static-server.mjs · test-hook.mjs (finds window.__alza)
+src/
+  main.tsx       boot: seed the plan, mount the shell, register the tools
+  model/         the domain, free of React and the DOM
+                 types · limits (every range) · store (actions, undo, approvals) · commands
+                 (dispatch, the one change path) · issues (the checker) · geometry · shapes
+                 (arcs and outlines) · joints (mitred footprints) · enclose (fit to walls)
+                 levels · stairs · stairGuard · floors (slab outlines) · region · columns
+                 columnCuts · supports (span check) · catalog · planFormat (format 4 and
+                 migration) · planRanges · resolve (id or name lookup) · presence · presenceShows · touch
+                 places · provenance · assets (underlay images) · text · ids · seed
+                 demoCrescent · sceneBus · schemas
+  mcp/           tools.ts (the tools) · presenceTools.ts · presenceAnswers.ts · registry.ts
+                 (validation, resolution, approval gate, logging) · bootstrap.ts (runtime
+                 detection, the dynamic tool) · supplier.ts (cross-origin catalogue)
+  session/       runtime.ts (join, send, merge) · replica.ts (last-writer-wins, Lamport
+                 clocks) · messages.ts (zod schemas) · transport.ts (BroadcastChannel, in-page,
+                 the relay seam)
+  editor/        Editor.tsx (the SVG plan) · canvasState · drawing · symbols · roomDraft
+                 ShapeHandles · WallPoche · StairDrawing · stairSymbol · ColumnShape
+                 ColumnMarks · SlabMarks · PlanPresence · selectionKeys
+  three/         Scene3D · viewport (renderer, cameras, picking, OBJ/PNG) · build · wallSolids
+                 triangulate · planScene (per-entity reconciliation) · slabs · stairs
+                 furniture · furnitureShapes · furnitureStyle · surfaces · materials · edges
+                 screenLines · cutaway · labels · marks · levelView · transitions · walk
+                 frames · thumbnails · config · overlays/
+  export/        download.ts · ifcExport.ts · ifc/ (step, guid, entities, model, config, index)
+  ui/            App · shell/ (top bar, rail, canvas region, side panel, menus, shortcuts)
+                 theme/ (tokens, token sheet, sceneTokens, fonts) · primitives/ (buttons, fields, tabs,
+                 segmented, switch, tips, icons) · inspector/ · library/ · issues/ · notes/
+                 activity/ · approvals/ · canvas/ · session/ · firstRun/ · deferred.tsx
+                 LazyLayer · LazyView · SupplierBridge · keys · underlay
+tests/           vitest suites, one per area, and support/ (an independent IFC4 checker)
+.github/         CI workflow
+```
+
+## Notes on the WebMCP spec
+
+Several of the explainer's
+[open questions](https://github.com/webmachinelearning/webmcp#open-questions) came up as real
+problems while building this.
+
+**User confirmation** ([#165](https://github.com/webmachinelearning/webmcp/issues/165),
+[#50](https://github.com/webmachinelearning/webmcp/issues/50)). A tool that clears a plan cannot
+just run because it was called. The answer here is the page's approval gate. It works, but every
+site must build its own, and the confirmation is only as trustworthy as the page drawing it. If
+the browser is to mediate confirmation, it needs a way to know which tools are destructive, and
+`destructiveHint` is not in WebMCP's annotations today.
+
+**Multimodal input** ([#41](https://github.com/webmachinelearning/webmcp/issues/41),
+[#86](https://github.com/webmachinelearning/webmcp/issues/86),
+[#81](https://github.com/webmachinelearning/webmcp/issues/81)). Tracing needs the agent to see a
+drawing, and a tool result is text. The page's copy is also not the agent's copy: the uploader
+re-encodes to at most 1600 px. So `get_underlay` returns no pixels. It says the image must arrive
+through both channels, and it returns a mapping in fractions of the image
+(`u = x_px / image_width`, then `world_x = rect.x + u * rect.w`), which survives a resize.
+
+**Skills** ([#161](https://github.com/webmachinelearning/webmcp/issues/161)). Tracing a plan is
+a procedure, not a call: establish scale, read the drawing, lay walls, cut openings, check,
+annotate what was ambiguous. It ships as `TRACING_PROTOCOL`, embedded in tool descriptions,
+because that is the only place a page can put it today.
+
+**Testing.** `navigator.modelContextTesting` lets the end-to-end battery drive real tool
+execution. It exists only in some Chrome builds, so 2 of the checks skip elsewhere.
+
+**What worked as written.** Unregistering by aborting the registration signal:
+`extend_selected_wall` appears when a wall is selected and disappears when it is not, and the
+runtimes tested tracked it with no special handling.
+
+**A runtime gap, not a spec gap.** Cross-origin discovery with `exposedTo` and
+`getTools({ fromOrigins })` is correct per the spec, but not every runtime resolves
+`fromOrigins` yet. The `postMessage` transport behind the same interface keeps the partner
+catalogue working there, and the feed says which transport ran.
+
+## Limitations
+
+- **No saving yet.** There is no save or open of a plan file, and nothing is stored between
+  visits: a reload starts from the Sunset Loft demo, unless another open tab holds the plan.
+  Exports (IFC, OBJ, PNG) are one-way.
+- **No redo.** Ctrl+Z undoes; there is no redo command.
+- **One browser only.** The shared session joins tabs of one browser on one origin. Working
+  across machines needs a network relay behind `transport.ts`, plus accounts or invitations,
+  none of which exist.
+- **No IFC import.** The export is one-way, and simplified as described above (no roof, ceiling,
+  site geometry or wall connectivity relationships).
+- **Structure is a sanity check.** The span and support rules are not structural engineering.
+  There are no beams, roofs or foundations.
+- **Light theme only.** A dark token set is defined, but the page ships in light mode.
+- **Runtime support varies.** WebMCP is behind a flag in Chrome, `navigator.modelContextTesting`
+  exists only in some builds, and cross-origin discovery depends on the runtime.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT. See [LICENSE](./LICENSE).
